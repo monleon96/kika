@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from mcnpy.input.parse_input import read_mcnp  # Fix import path
 from mcnpy.mctal.parse_mctal import read_mctal
 from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL
@@ -24,65 +24,56 @@ class SensitivityData:
     :ivar tally_name: Name of the tally
     :type tally_name: str
     :ivar data: Nested dictionary containing sensitivity coefficients organized by energy and reaction number
-    :type data: Dict[Union[float,str], Dict[int, Coefficients]]
+    :type data: Dict[str, Dict[int, Coefficients]]
+    :ivar lethargy: List of lethargy intervals between perturbation energies
+    :type lethargy: List[float]
+    :ivar energies: List of energy values used as keys in the data dictionary
+    :type energies: List[str]
+    :ivar reactions: Sorted list of unique reaction numbers found in the data
+    :type reactions: List[int]
+    :ivar nuclide: Nuclide symbol for the ZAID
+    :type nuclide: str
     """
     tally_id: int
     pert_energies: list[float]
     zaid: int
     label: str
     tally_name: str = None
-    data: Dict[Union[float,str], Dict[int, 'Coefficients']] = None
-
-    @property
-    def lethargy(self):
-        """Calculate lethargy intervals between perturbation energies.
-
-        :returns: List of lethargy intervals
-        :rtype: List[float]
-        """
-        return [np.log(self.pert_energies[i+1]/self.pert_energies[i]) for i in range(len(self.pert_energies)-1)]
-        
-    @property
-    def energies(self):
-        """Get the list of energy values used as keys in the data dictionary.
-        
-        :returns: List of energy values or labels
-        :rtype: List[Union[float, str]]
-        """
-        return list(self.data.keys()) if self.data else []
+    data: Dict[str, Dict[int, 'Coefficients']] = None
+    lethargy: List[float] = field(init=False, repr=False)
+    energies: List[str] = field(init=False, repr=False)
+    reactions: List[int] = field(init=False, repr=False)
+    nuclide: str = field(init=False, repr=False)
     
-    @property
-    def reactions(self):
-        """Get a sorted list of unique reaction numbers found in the data.
+    def __post_init__(self):
+        """Compute attributes once after initialization"""
+        # Calculate lethargy intervals
+        self.lethargy = [np.log(self.pert_energies[i+1]/self.pert_energies[i]) 
+                         for i in range(len(self.pert_energies)-1)]
         
-        :returns: List of unique reaction numbers across all energies
-        :rtype: List[int]
-        """
+        # Get energy keys
+        self.energies = list(self.data.keys()) if self.data else []
+        
+        # Get unique reaction numbers
         if not self.data:
-            return []
-        # Collect all reaction numbers from all energy entries
-        all_reactions = set()
-        for energy_data in self.data.values():
-            all_reactions.update(energy_data.keys())
-        return sorted(list(all_reactions))
-    
-    @property
-    def nuclide(self):
-        """Get the nuclide symbol for the ZAID used in the sensitivity calculation.
+            self.reactions = []
+        else:
+            all_reactions = set()
+            for energy_data in self.data.values():
+                all_reactions.update(energy_data.keys())
+            self.reactions = sorted(list(all_reactions))
         
-        :returns: Nuclide symbol
-        :rtype: str
-        """
+        # Get nuclide symbol
         z = self.zaid // 1000
         a = self.zaid % 1000
-        return f"{ATOMIC_NUMBER_TO_SYMBOL[z]}-{a}"
+        self.nuclide = f"{ATOMIC_NUMBER_TO_SYMBOL[z]}-{a}"
 
-    def plot(self, energy: Union[float, str, List[float], List[str]] = None, 
+    def plot(self, energy: Union[str, List[str]] = None, 
              reactions: Union[List[int], int] = None, xlim: tuple = None):
         """Plot sensitivity coefficients for specified energies and reactions.
 
-        :param energy: Energy value(s) to plot. If None, plots all energies
-        :type energy: Union[float, str, List[float], List[str]], optional
+        :param energy: Energy string(s) to plot. If None, plots all energies
+        :type energy: Union[str, List[str]], optional
         :param reactions: Reaction number(s) to plot. If None, plots all reactions
         :type reactions: Union[List[int], int], optional
         :param xlim: Optional x-axis limits as (min, max)
@@ -128,8 +119,20 @@ class SensitivityData:
                 else:
                     axes = [axes]
             
+            # Modify title display based on energy string format
+            if e == "integral":
+                title_text = "Integral Result"
+            else:
+                # Parse the energy range from the string format
+                try:
+                    lower, upper = e.split('_')
+                    title_text = f"Energy Range: {lower} - {upper} MeV"
+                except ValueError:
+                    # Fallback if energy doesn't follow expected format
+                    title_text = f"Energy = {e}"
+            
             # Raise the figure title position to avoid overlap with subplot titles
-            fig.suptitle(f"Energy = {e} MeV", y=1.01)
+            fig.suptitle(title_text, y=1.01)
             
             for i, rxn in enumerate(reactions):
                 ax = axes[i]
@@ -149,15 +152,15 @@ class SensitivityData:
 
     @classmethod
     def plot_comparison(cls, sens_list: List['SensitivityData'], 
-                      energy: Union[float, str, List[float], List[str]] = None, 
+                      energy: Union[str, List[str]] = None, 
                       reactions: Union[List[int], int] = None, 
                       xlim: tuple = None):
         """Plot comparison of multiple sensitivity datasets.
 
         :param sens_list: List of sensitivity datasets to compare
         :type sens_list: List[SensitivityData]
-        :param energy: Energy value(s) to plot. If None, uses first dataset's energies
-        :type energy: Union[float, str, List[float], List[str]], optional
+        :param energy: Energy string(s) to plot. If None, uses first dataset's energies
+        :type energy: Union[str, List[str]], optional
         :param reactions: Reaction number(s) to plot. If None, uses reactions from first dataset
         :type reactions: Union[List[int], int], optional
         :param xlim: Optional x-axis limits as (min, max)
@@ -196,8 +199,20 @@ class SensitivityData:
                 else:
                     axes = [axes]
             
+            # Modify title display based on energy string format
+            if e == "integral":
+                title_text = "Integral Result"
+            else:
+                # Parse the energy range from the string format
+                try:
+                    lower, upper = e.split('_')
+                    title_text = f"Energy Range: {lower} - {upper} MeV"
+                except ValueError:
+                    # Fallback if energy doesn't follow expected format
+                    title_text = f"Energy = {e}"
+            
             # Raise the figure title position to avoid overlap with subplot titles
-            fig.suptitle(f"Energy = {e} MeV", y=1.01)
+            fig.suptitle(title_text, y=1.01)
             
             for i, rxn in enumerate(reactions):
                 ax = axes[i]
@@ -241,7 +256,9 @@ class SensitivityData:
         """Export sensitivity data as a pandas DataFrame for plotting.
 
         :returns: DataFrame with the following columns:
-            - det_energy: Detector energy bin value or 'integral' for integral results
+            - det_energy: Detector energy range string (e.g., "0.00e+00_1.00e-01") or 'integral'
+            - energy_lower: Lower energy boundary parsed from det_energy string (None for 'integral')
+            - energy_upper: Upper energy boundary parsed from det_energy string (None for 'integral')
             - reaction: Reaction number (MT)
             - e_lower: Lower boundary of perturbation energy bin
             - e_upper: Upper boundary of perturbation energy bin
@@ -254,6 +271,16 @@ class SensitivityData:
         data_records = []
 
         for det_energy, rxn_dict in self.data.items():
+            # Parse energy bounds from energy string if not "integral"
+            energy_lower = None
+            energy_upper = None
+            if det_energy != "integral":
+                try:
+                    energy_lower, energy_upper = map(float, det_energy.split('_'))
+                except ValueError:
+                    # Handle case where energy string doesn't match expected format
+                    pass
+            
             for rxn, coef in rxn_dict.items():
                 energies = coef.pert_energies
                 # Calculate values per lethargy
@@ -266,6 +293,8 @@ class SensitivityData:
                 for i in range(len(energies) - 1):
                     data_records.append({
                         'det_energy': det_energy,
+                        'energy_lower': energy_lower,
+                        'energy_upper': energy_upper,
                         'reaction': rxn,
                         'e_lower': energies[i],
                         'e_upper': energies[i+1],
@@ -276,27 +305,14 @@ class SensitivityData:
                     })
 
         return pd.DataFrame(data_records)
-
-    @classmethod
-    def to_sdf(cls, sens_list: List['SensitivityData'], output_path: str,
-               group_inelastic: bool = True):
-        """Export multiple sensitivity datasets to a single SDF file.
-
-        :param sens_list: List of sensitivity datasets to export
-        :type sens_list: List[SensitivityData]
-        :param output_path: Path to write the SDF file
-        :type output_path: str
-        :param group_inelastic: Flag to group inelastic reactions (51-91) into MT 4
-        :type group_inelastic: bool, optional
-        """
         
 
 @dataclass
 class Coefficients:
     """Container for sensitivity coefficients for a specific energy and reaction.
 
-    :ivar energy: Energy value or label
-    :type energy: Union[float, str]
+    :ivar energy: Energy range string in format "lower_upper" (e.g., "0.00e+00_1.00e-01")
+    :type energy: str
     :ivar reaction: Reaction number
     :type reaction: int
     :ivar pert_energies: Perturbation energy boundaries
@@ -305,12 +321,18 @@ class Coefficients:
     :type values: List[float]
     :ivar errors: Relative errors for the Taylor coefficients
     :type errors: List[float]
+    :ivar r0: Unperturbed tally result
+    :type r0: float
+    :ivar e0: Unperturbed tally error
+    :type e0: float
     """
-    energy: Union[float, str]
+    energy: str
     reaction: int
     pert_energies: list[float]
     values: list[float]
     errors: list[float]
+    r0: float = None 
+    e0: float = None 
 
     @property
     def lethargy(self):
@@ -411,6 +433,15 @@ def compute_senstivity(input_path: str, mctal_path: str, tally: int, zaid: int, 
 
     for i in range(len(energy)):            # Loop over detector energies
         energy_data = {}
+        # Calculate energy boundaries for the energy string
+        if i == 0:
+            lower_bound = 0.0
+        else:
+            lower_bound = energy[i-1]
+        upper_bound = energy[i]
+        # Format energy as string in the required format
+        energy_str = f"{lower_bound:.2e}_{upper_bound:.2e}"
+        
         for rxn in reactions:               # Loop over unique reaction
             sensCoef = np.zeros(len(group_dict[rxn]))
             sensErr = np.zeros(len(group_dict[rxn]))
@@ -421,31 +452,38 @@ def compute_senstivity(input_path: str, mctal_path: str, tally: int, zaid: int, 
                 sensErr[j] = np.sqrt(e0[i]**2 + e1**2)
             
             energy_data[rxn] = Coefficients(
-                energy=energy[i],
+                energy=energy_str,
                 reaction=rxn,
                 pert_energies=pert_energies,
                 values=sensCoef,
-                errors=sensErr
+                errors=sensErr,
+                r0=float(r0[i]),  
+                e0=float(e0[i])   
             )
         
-        sens_result.data[energy[i]] = energy_data
+        sens_result.data[energy_str] = energy_data
 
     if mctal.tally[tally].integral_result is not None:
         integral_data = {}
+        integral_r0 = mctal.tally[tally].integral_result
+        integral_e0 = mctal.tally[tally].integral_error
+        
         for rxn in reactions:
             sensCoef_int = np.zeros(len(group_dict[rxn]))
             sensErr_int = np.zeros(len(group_dict[rxn]))
             for j, pert in enumerate(group_dict[rxn]):
                 c1_int = mctal.tally[tally].pert_data[pert].integral_result
                 e1_int = mctal.tally[tally].pert_data[pert].integral_error
-                sensCoef_int[j] = c1_int / mctal.tally[tally].integral_result
-                sensErr_int[j] = np.sqrt(mctal.tally[tally].integral_error**2 + e1_int**2)
+                sensCoef_int[j] = c1_int / integral_r0
+                sensErr_int[j] = np.sqrt(integral_e0**2 + e1_int**2)
             integral_data[rxn] = Coefficients(
-                energy=mctal.tally[tally].integral_result,
+                energy="integral",
                 reaction=rxn,
                 pert_energies=pert_energies,
                 values=sensCoef_int,
-                errors=sensErr_int
+                errors=sensErr_int,
+                r0=integral_r0,  
+                e0=integral_e0   
             )
         sens_result.data["integral"] = integral_data
     

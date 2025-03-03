@@ -1,5 +1,6 @@
 import pytest
-import src
+import mcnpy
+from mcnpy.mctal.parse_mctal import read_mctal
 
 def test_mctal_parsing():
     
@@ -7,7 +8,7 @@ def test_mctal_parsing():
 
     try:
         # Parse file (set pert=False to avoid TallyPert parsing)
-        mctal = src.read_mctal(filename, tally_ids=[4,14], tfc=True, pert=False)
+        mctal = read_mctal(filename, tally_ids=[4,14], tfc=True, pert=False)
 
         # --- Test #sym:MCTAL variables ---
         # Header values
@@ -72,7 +73,7 @@ def test_mctal_pert_parsing():
 
     try:
         # Parse file (set pert=False to avoid TallyPert parsing)
-        mctal = src.read_mctal(filename, tally_ids=[4], tfc=True, pert=True)
+        mctal = read_mctal(filename, tally_ids=[4], tfc=True, pert=True)
 
         # --- Test #sym:MCTAL variables ---
         # Header values

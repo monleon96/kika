@@ -1,5 +1,5 @@
 import pytest
-from src.input.parse_input import read_mcnp, read_PERT
+from mcnpy.input.parse_input import read_mcnp, _read_PERT
 
 
 def test_input_parsing_single_card(tmp_path):
@@ -43,7 +43,7 @@ def test_input_parsing_multiline_card(tmp_path):
 def test_PERT_parsing_valid():
     # Test direct parsing of a valid PERT card.
     lines = ["PERT3:p CELL=4,5 MAT=7 RHO=0.88 METHOD=3 RXN=103 ERG=1.0 11.0"]
-    pert_obj, new_index = read_PERT(lines, 0)
+    pert_obj, new_index = _read_PERT(lines, 0)
     assert pert_obj is not None
     assert pert_obj.id == 3
     assert pert_obj.particle == "p"
@@ -58,13 +58,13 @@ def test_PERT_parsing_valid():
 def test_PERT_parsing_invalid_header():
     # Test that a card with an invalid header returns None.
     lines = ["XYZ3:p CELL=4,5 MAT=7 RHO=0.88 METHOD=3 RXN=103 ERG=1.0 11.0"]
-    pert_obj, new_index = read_PERT(lines, 0)
+    pert_obj, new_index = _read_PERT(lines, 0)
     assert pert_obj is None
 
 def test_PERT_parsing_incomplete_erg():
     # Test a card with incomplete ERG values so that energy is set to None.
     lines = ["PERT4:a CELL=1 MAT=5 RHO=1.0 METHOD=1 RXN=100 ERG=5.0"]
-    pert_obj, new_index = read_PERT(lines, 0)
+    pert_obj, new_index = _read_PERT(lines, 0)
     assert pert_obj is not None
     # Energy should be None because only one value is provided.
     assert pert_obj.energy is None
