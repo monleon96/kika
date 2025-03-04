@@ -17,40 +17,34 @@ class SDFReactionData:
     :type sensitivity: List[float]
     :ivar error: List of relative errors
     :type error: List[float]
+    :ivar nuclide: Nuclide symbol (calculated from ZAID)
+    :type nuclide: str
+    :ivar reaction_name: Reaction name (calculated from MT)
+    :type reaction_name: str
     """
     zaid: int
     mt: int
     sensitivity: List[float]
     error: List[float]
+    nuclide: str = field(init=False)
+    reaction_name: str = field(init=False)
     
-    @property
-    def nuclide(self) -> str:
-        """Get the nuclide symbol.
-        
-        :returns: Nuclide symbol
-        :rtype: str
-        :raises KeyError: If the atomic number is not found in ATOMIC_NUMBER_TO_SYMBOL
-        """
+    def __post_init__(self):
+        """Calculate and store nuclide symbol and reaction name after initialization."""
+        # Calculate nuclide symbol
         z = self.zaid // 1000
         a = self.zaid % 1000
         
         if z not in ATOMIC_NUMBER_TO_SYMBOL:
             raise KeyError(f"Atomic number {z} not found in ATOMIC_NUMBER_TO_SYMBOL dictionary")
             
-        return f"{ATOMIC_NUMBER_TO_SYMBOL[z]}-{a}"
-    
-    @property
-    def reaction_name(self) -> str:
-        """Get the reaction name.
+        self.nuclide = f"{ATOMIC_NUMBER_TO_SYMBOL[z]}-{a}"
         
-        :returns: Reaction name
-        :rtype: str
-        :raises KeyError: If the MT number is not found in MT_TO_REACTION
-        """
+        # Calculate reaction name
         if self.mt not in MT_TO_REACTION:
             raise KeyError(f"MT number {self.mt} not found in MT_TO_REACTION dictionary")
             
-        return MT_TO_REACTION[self.mt]
+        self.reaction_name = MT_TO_REACTION[self.mt]
 
 
 @dataclass
