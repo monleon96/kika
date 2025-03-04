@@ -147,10 +147,12 @@ class SDFData:
             e0_value = 0.0 if self.e0 is None else self.e0
             file.write(f"  {r0_value:.6E} +/-   {e0_value:.6E}\n")
             
-            # Write energy grid data
+            # Write energy grid data - reversed to be in descending order
             file.write("energy boundaries:\n")
             energy_lines = ""
-            for idx, energy in enumerate(self.pert_energies):
+            # Create reversed list of energies for writing in descending order
+            descending_energies = list(reversed(self.pert_energies))
+            for idx, energy in enumerate(descending_energies):
                 if idx > 0 and idx % 5 == 0:
                     energy_lines += "\n"
                 energy_lines += f"{energy: >14.6E}"
@@ -189,15 +191,19 @@ class SDFData:
             
         block += f"{total_sens: >14.6E}{total_err: >14.6E}  0.000000E+00  0.000000E+00  0.000000E+00\n"
         
-        # Write sensitivity coefficients with 5 per line
-        for idx, sens in enumerate(reaction.sensitivity):
+        # Reverse sensitivity and error arrays to match the descending energy order
+        reversed_sensitivity = list(reversed(reaction.sensitivity))
+        reversed_error = list(reversed(reaction.error))
+        
+        # Write sensitivity coefficients with 5 per line (in reversed order)
+        for idx, sens in enumerate(reversed_sensitivity):
             if idx > 0 and idx % 5 == 0:
                 block += "\n"
             block += f"{sens: >14.6E}"
         block += "\n"
         
-        # Write standard deviations with 5 per line
-        for idx, err in enumerate(reaction.error):
+        # Write standard deviations with 5 per line (in reversed order)
+        for idx, err in enumerate(reversed_error):
             if idx > 0 and idx % 5 == 0:
                 block += "\n"
             block += f"{err: >14.6E}"
