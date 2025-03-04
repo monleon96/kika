@@ -1,7 +1,7 @@
-from .sensitivity import compute_senstivity, SensitivityData
+from .sensitivity import compute_sensitivity, SensitivityData
 from .sdf import SDFData, create_sdf_data
 
 __all__ = [
-    'compute_senstivity', 'SensitivityData',
+    'compute_sensitivity', 'SensitivityData',
     'SDFData', 'create_sdf_data'
 ]

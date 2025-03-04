@@ -133,6 +133,9 @@ class SDFData:
         ngroups = len(self.pert_energies) - 1
         nprofiles = len(self.data)
         
+        # Sort the data by ZAID and then by MT number
+        sorted_data = sorted(self.data, key=lambda x: (x.zaid, x.mt))
+        
         with open(filepath, 'w') as file:
             # Write header
             file.write(f"{self.title} MCNP to SCALE sdf {ngroups}gr\n")
@@ -155,9 +158,10 @@ class SDFData:
             file.write(energy_lines)
             
             # Write sensitivity coefficient and standard deviations data for each reaction
-            for reaction in self.data:
+            # using the sorted data
+            for reaction in sorted_data:
                 file.write(self._format_reaction_data(reaction))
-    
+
     def _format_reaction_data(self, reaction: SDFReactionData) -> str:
         """
         Format a single SDFReactionData block to match the legacy file structure.
@@ -176,11 +180,12 @@ class SDFData:
         block += "      0      0\n"
         block += "  0.000000E+00  0.000000E+00      0      0\n"
         
-        # Calculate total sensitivity and error - fixed implementation
+        # Calculate total sensitivity and error - proper error propagation
         total_sens = sum(reaction.sensitivity)
-        # When summing errors, we should typically use quadrature (root sum of squares)
-        # But since we're following the original code pattern, we'll keep using sum
-        total_err = sum(reaction.error) 
+        
+        # Convert relative errors to absolute errors, square them, sum them, and take the square root
+        absolute_errors = [sens * err for sens, err in zip(reaction.sensitivity, reaction.error)]
+        total_err = (sum(err**2 for err in absolute_errors))**0.5
             
         block += f"{total_sens: >14.6E}{total_err: >14.6E}  0.000000E+00  0.000000E+00  0.000000E+00\n"
         
@@ -259,10 +264,21 @@ class SDFData:
             for react in inelastic_reactions:
                 for i in range(n_groups):
                     summed_sensitivity[i] += react.sensitivity[i]
-                    summed_error_squared[i] += react.error[i] ** 2 
+                    # Convert relative error to absolute error (multiply by sensitivity), then square
+                    absolute_error = react.sensitivity[i] * react.error[i]
+                    summed_error_squared[i] += absolute_error ** 2 
             
-            # Take square root of summed squared errors for proper error propagation
-            summed_error = [error_squared ** 0.5 for error_squared in summed_error_squared]
+            # Take square root of summed squared errors and convert back to relative errors
+            summed_error = []
+            for i in range(n_groups):
+                absolute_error = summed_error_squared[i] ** 0.5
+                # Convert back to relative error (divide by sensitivity)
+                # Handle potential division by zero
+                if summed_sensitivity[i] != 0:
+                    relative_error = absolute_error / abs(summed_sensitivity[i])
+                else:
+                    relative_error = 0.0
+                summed_error.append(relative_error)
             
             # Create or update MT 4 reaction
             if mt4_exists:
@@ -386,6 +402,19 @@ def create_sdf_data(
         # Process each reaction
         for mt in reactions_to_process:
             coef_data = sd.data[energy][mt]
+            
+            # Check if all sensitivity coefficients are zero
+            if all(value == 0.0 for value in coef_data.values):
+                # Calculate the nuclide symbol for more informative message
+                z = sd.zaid // 1000
+                a = sd.zaid % 1000
+                symbol = ATOMIC_NUMBER_TO_SYMBOL.get(z, f"unknown_{z}")
+                nuclide = f"{symbol}-{a}"
+                
+                # Print message that reaction was skipped
+                reaction_name = MT_TO_REACTION.get(mt, f"Unknown(MT={mt})")
+                print(f"Skipping {nuclide} {reaction_name} (MT={mt}): All sensitivity coefficients are zero")
+                continue
             
             # Create SDFReactionData object
             reaction_data = SDFReactionData(

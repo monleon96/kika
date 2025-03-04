@@ -395,7 +395,7 @@ class Coefficients:
         return ax
     
 
-def compute_senstivity(input_path: str, mctal_path: str, tally: int, zaid: int, label: str) -> SensitivityData:
+def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int, label: str) -> SensitivityData:
     """Compute sensitivity coefficients from MCNP input and output files.
 
     :param input_path: Path to MCNP input file containing the PERT cards
@@ -421,15 +421,9 @@ def compute_senstivity(input_path: str, mctal_path: str, tally: int, zaid: int, 
     energy = mctal.tally[tally].energies 
     r0 = np.array(mctal.tally[tally].results)
     e0 = np.array(mctal.tally[tally].errors)
-       
-    sens_result = SensitivityData(
-        tally_id=tally,
-        pert_energies=pert_energies,
-        tally_name=mctal.tally[tally].name,
-        zaid=zaid,
-        label=label,
-        data={}
-    )
+    
+    # Prepare all the data first before creating the SensitivityData object
+    full_data = {}
 
     for i in range(len(energy)):            # Loop over detector energies
         energy_data = {}
@@ -461,7 +455,7 @@ def compute_senstivity(input_path: str, mctal_path: str, tally: int, zaid: int, 
                 e0=float(e0[i])   
             )
         
-        sens_result.data[energy_str] = energy_data
+        full_data[energy_str] = energy_data
 
     if mctal.tally[tally].integral_result is not None:
         integral_data = {}
@@ -485,6 +479,14 @@ def compute_senstivity(input_path: str, mctal_path: str, tally: int, zaid: int, 
                 r0=integral_r0,  
                 e0=integral_e0   
             )
-        sens_result.data["integral"] = integral_data
+        full_data["integral"] = integral_data
     
-    return sens_result
+    # Create SensitivityData object after all data is prepared
+    return SensitivityData(
+        tally_id=tally,
+        pert_energies=pert_energies,
+        tally_name=mctal.tally[tally].name,
+        zaid=zaid,
+        label=label,
+        data=full_data  # Pass the fully populated data dictionary
+    )
