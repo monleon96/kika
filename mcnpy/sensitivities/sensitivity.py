@@ -150,108 +150,6 @@ class SensitivityData:
             plt.tight_layout()
             plt.show()
 
-    @classmethod
-    def plot_comparison(cls, sens_list: List['SensitivityData'], 
-                      energy: Union[str, List[str]] = None, 
-                      reactions: Union[List[int], int] = None, 
-                      xlim: tuple = None):
-        """Plot comparison of multiple sensitivity datasets.
-
-        :param sens_list: List of sensitivity datasets to compare
-        :type sens_list: List[SensitivityData]
-        :param energy: Energy string(s) to plot. If None, uses first dataset's energies
-        :type energy: Union[str, List[str]], optional
-        :param reactions: Reaction number(s) to plot. If None, uses reactions from first dataset
-        :type reactions: Union[List[int], int], optional
-        :param xlim: Optional x-axis limits as (min, max)
-        :type xlim: tuple, optional
-        """
-        # If no energy specified, use all energies
-        if energy is None:
-            energy = list(sens_list[0].data.keys())
-        elif not isinstance(energy, list):
-            energy = [energy]
-        
-        # Ensure reactions is always a list
-        if reactions is None:
-            sample_energy = energy[0]
-            reactions = list(sens_list[0].data[sample_energy].keys())
-        elif not isinstance(reactions, list):
-            reactions = [reactions]
-
-        colors_list = plt.rcParams['axes.prop_cycle'].by_key()['color']
-
-        # Create a separate figure for each energy
-        for e in energy:
-            n = len(reactions)
-            
-            # Use a single Axes if only one reaction
-            if n == 1:
-                fig, ax = plt.subplots(figsize=(5, 4))
-                axes = [ax]
-            else:
-                cols = 3
-                rows = math.ceil(n / cols)
-                fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
-                # Ensure axes is a flat list of Axes objects
-                if hasattr(axes, "flatten"):
-                    axes = list(axes.flatten())
-                else:
-                    axes = [axes]
-            
-            # Modify title display based on energy string format
-            if e == "integral":
-                title_text = "Integral Result"
-            else:
-                # Parse the energy range from the string format
-                try:
-                    lower, upper = e.split('_')
-                    title_text = f"Energy Range: {lower} - {upper} MeV"
-                except ValueError:
-                    # Fallback if energy doesn't follow expected format
-                    title_text = f"Energy = {e}"
-            
-            # Raise the figure title position to avoid overlap with subplot titles
-            fig.suptitle(title_text, y=1.01)
-            
-            for i, rxn in enumerate(reactions):
-                ax = axes[i]
-                has_data = False
-                
-                for idx, sens in enumerate(sens_list):
-                    if e in sens.data and rxn in sens.data[e]:
-                        has_data = True
-                        coef = sens.data[e][rxn]
-                        color = colors_list[idx % len(colors_list)]
-                        lp = np.array(coef.values_per_lethargy)
-                        leth = np.array(coef.lethargy)
-                        error_bars = np.array(coef.values) * np.array(coef.errors) / leth
-                        x = np.array(coef.pert_energies)
-                        y = np.append(lp, lp[-1])
-                        ax.step(x, y, where='post', color=color, linewidth=2, label=sens.label)
-                        x_mid = (x[:-1] + x[1:]) / 2.0
-                        ax.errorbar(x_mid, lp, yerr=np.abs(error_bars), fmt=' ', 
-                                  elinewidth=1.5, ecolor=color, capsize=2.5)
-                
-                if not has_data:
-                    ax.text(0.5, 0.5, f"Reaction {rxn} not found", ha='center', va='center')
-                    ax.axis('off')
-                else:
-                    ax.grid(True, alpha=0.3)
-                    ax.set_title(f"MT = {rxn}")
-                    ax.set_xlabel("Energy (MeV)")
-                    ax.set_ylabel("Sensitivity per lethargy")
-                    if xlim is not None:
-                        ax.set_xlim(xlim)
-                    ax.legend()
-
-            # Hide any extra subplots
-            for j in range(n, len(axes)):
-                axes[j].axis('off')
-            
-            plt.tight_layout()
-            plt.show()
-
     def to_dataframe(self) -> pd.DataFrame:
         """Export sensitivity data as a pandas DataFrame for plotting.
 
@@ -306,6 +204,108 @@ class SensitivityData:
 
         return pd.DataFrame(data_records)
         
+
+def plot_sens_comparison(sens_list: List[SensitivityData], 
+                  energy: Union[str, List[str]] = None, 
+                  reactions: Union[List[int], int] = None, 
+                  xlim: tuple = None):
+    """Plot comparison of multiple sensitivity datasets.
+
+    :param sens_list: List of sensitivity datasets to compare
+    :type sens_list: List[SensitivityData]
+    :param energy: Energy string(s) to plot. If None, uses first dataset's energies
+    :type energy: Union[str, List[str]], optional
+    :param reactions: Reaction number(s) to plot. If None, uses reactions from first dataset
+    :type reactions: Union[List[int], int], optional
+    :param xlim: Optional x-axis limits as (min, max)
+    :type xlim: tuple, optional
+    """
+    # If no energy specified, use all energies
+    if energy is None:
+        energy = list(sens_list[0].data.keys())
+    elif not isinstance(energy, list):
+        energy = [energy]
+    
+    # Ensure reactions is always a list
+    if reactions is None:
+        sample_energy = energy[0]
+        reactions = list(sens_list[0].data[sample_energy].keys())
+    elif not isinstance(reactions, list):
+        reactions = [reactions]
+
+    colors_list = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+    # Create a separate figure for each energy
+    for e in energy:
+        n = len(reactions)
+        
+        # Use a single Axes if only one reaction
+        if n == 1:
+            fig, ax = plt.subplots(figsize=(5, 4))
+            axes = [ax]
+        else:
+            cols = 3
+            rows = math.ceil(n / cols)
+            fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
+            # Ensure axes is a flat list of Axes objects
+            if hasattr(axes, "flatten"):
+                axes = list(axes.flatten())
+            else:
+                axes = [axes]
+        
+        # Modify title display based on energy string format
+        if e == "integral":
+            title_text = "Integral Result"
+        else:
+            # Parse the energy range from the string format
+            try:
+                lower, upper = e.split('_')
+                title_text = f"Energy Range: {lower} - {upper} MeV"
+            except ValueError:
+                # Fallback if energy doesn't follow expected format
+                title_text = f"Energy = {e}"
+        
+        # Raise the figure title position to avoid overlap with subplot titles
+        fig.suptitle(title_text, y=1.01)
+        
+        for i, rxn in enumerate(reactions):
+            ax = axes[i]
+            has_data = False
+            
+            for idx, sens in enumerate(sens_list):
+                if e in sens.data and rxn in sens.data[e]:
+                    has_data = True
+                    coef = sens.data[e][rxn]
+                    color = colors_list[idx % len(colors_list)]
+                    lp = np.array(coef.values_per_lethargy)
+                    leth = np.array(coef.lethargy)
+                    error_bars = np.array(coef.values) * np.array(coef.errors) / leth
+                    x = np.array(coef.pert_energies)
+                    y = np.append(lp, lp[-1])
+                    ax.step(x, y, where='post', color=color, linewidth=2, label=sens.label)
+                    x_mid = (x[:-1] + x[1:]) / 2.0
+                    ax.errorbar(x_mid, lp, yerr=np.abs(error_bars), fmt=' ', 
+                              elinewidth=1.5, ecolor=color, capsize=2.5)
+            
+            if not has_data:
+                ax.text(0.5, 0.5, f"Reaction {rxn} not found", ha='center', va='center')
+                ax.axis('off')
+            else:
+                ax.grid(True, alpha=0.3)
+                ax.set_title(f"MT = {rxn}")
+                ax.set_xlabel("Energy (MeV)")
+                ax.set_ylabel("Sensitivity per lethargy")
+                if xlim is not None:
+                    ax.set_xlim(xlim)
+                ax.legend()
+
+        # Hide any extra subplots
+        for j in range(n, len(axes)):
+            axes[j].axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+
 
 @dataclass
 class Coefficients:

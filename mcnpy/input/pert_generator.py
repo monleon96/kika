@@ -1,6 +1,11 @@
 import sys
 from mcnpy._grids import ENERGY_GRIDS
 
+
+def perturb_material(inputfile, material_number, nuclide):
+    return None
+
+
 def generate_PERTcards(cell, rho, reactions, energies, mat=None, order=2, errors=False, output_path=None):
     """Generates PERT cards for MCNP input files.
 
