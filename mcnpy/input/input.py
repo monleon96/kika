@@ -142,14 +142,17 @@ class Mat:
 
     :ivar id: Material identifier number
     :type id: int
-    :ivar library: Optional default cross-section library for this material
-    :type library: Optional[str]
+    :ivar nlib: Optional default neutron cross-section library for this material
+    :type nlib: Optional[str]
+    :ivar plib: Optional default photon cross-section library for this material
+    :type plib: Optional[str]
     :ivar components: Dictionary mapping ZAID to component information
-                     {zaid: {'fraction': float, 'library': str}}
+                     {zaid: {'fraction': float, 'nlib': str, 'plib': str}}
     :type components: Dict[int, Dict]
     """
     id: int
-    library: Optional[str] = None
+    nlib: Optional[str] = None
+    plib: Optional[str] = None
     components: Dict[int, Dict] = field(default_factory=dict)
     
     def add_component(self, zaid: int, fraction: float, library: Optional[str] = None) -> None:
@@ -163,11 +166,32 @@ class Mat:
                        overrides material's default if specified
         :type library: Optional[str]
         """
-        self.components[zaid] = {
-            'fraction': float(fraction),
-            'library': library,
-            'nuclide': self._get_nuclide_symbol(zaid)
-        }
+        nlib = None
+        plib = None
+        
+        if library:
+            # Determine library type by examining the last character
+            if library.endswith('c'):
+                nlib = library
+            elif library.endswith('p'):
+                plib = library
+        
+        # Check if component already exists
+        if zaid in self.components:
+            # Update existing component with new library information
+            # Keep the existing fraction
+            if nlib:
+                self.components[zaid]['nlib'] = nlib
+            if plib:
+                self.components[zaid]['plib'] = plib
+        else:
+            # Create new component
+            self.components[zaid] = {
+                'fraction': float(fraction),
+                'nlib': nlib,
+                'plib': plib,
+                'nuclide': self._get_nuclide_symbol(zaid)
+            }
     
     def _get_nuclide_symbol(self, zaid: int) -> Optional[str]:
         """Get nuclide symbol based on atomic number.
@@ -181,18 +205,21 @@ class Mat:
         atomic_number = zaid // 1000
         return ATOMIC_NUMBER_TO_SYMBOL.get(atomic_number)
     
-    def get_effective_library(self, zaid: int) -> Optional[str]:
+    def get_effective_library(self, zaid: int, lib_type: str = 'nlib') -> Optional[str]:
         """Get effective library for a component, considering inheritance.
         
         :param zaid: The ZAID number of the component
         :type zaid: int
+        :param lib_type: Library type ('nlib' or 'plib')
+        :type lib_type: str
         :returns: Component's library if specified, otherwise material's default
         :rtype: Optional[str]
         """
         if zaid not in self.components:
-            return self.library
+            return getattr(self, lib_type, None)
         
-        return self.components[zaid]['library'] or self.library
+        comp_lib = self.components[zaid].get(lib_type)
+        return comp_lib if comp_lib else getattr(self, lib_type, None)
     
     def _format_fraction(self, fraction: float) -> str:
         """Format atomic fraction in scientific notation with 6 decimal digits.
@@ -210,16 +237,37 @@ class Mat:
         :returns: Formatted string representation of the material
         :rtype: str
         """
-        result = [f"m{self.id}" + (f" lib={self.library}" if self.library else "")]
+        result = [f"m{self.id}"]
         
+        # Add material-level libraries if specified
+        lib_parts = []
+        if self.nlib:
+            lib_parts.append(f"nlib={self.nlib}")
+        if self.plib:
+            lib_parts.append(f"plib={self.plib}")
+        
+        if lib_parts:
+            result[0] += " " + " ".join(lib_parts)
+        
+        # Process each component
         for zaid, comp in self.components.items():
-            lib_str = ""
-            # Use component-specific library if available, otherwise don't specify
-            # (material-level library inheritance is handled when processing)
-            if comp['library']:
-                lib_str = f".{comp['library']}"
+            # Handle neutron library if specified
+            if comp['nlib']:
+                lib_str = f".{comp['nlib']}"
+                result.append(f"    {zaid}{lib_str} {self._format_fraction(comp['fraction'])}")
+            elif self.nlib:
+                # Use default neutron library at material level - no need to specify at component
+                result.append(f"    {zaid} {self._format_fraction(comp['fraction'])}")
             
-            result.append(f"    {zaid}{lib_str} {self._format_fraction(comp['fraction'])}")
+            # Handle photon library if specified (add a separate entry)
+            if comp['plib']:
+                lib_str = f".{comp['plib']}"
+                result.append(f"    {zaid}{lib_str} {self._format_fraction(comp['fraction'])}")
+            elif self.plib and not comp['nlib']:
+                # If we didn't add an entry for neutron library and there's a default photon library,
+                # we need to add an entry for photon library
+                # Skip this if we already added an entry for neutron to avoid duplication
+                result.append(f"    {zaid} {self._format_fraction(comp['fraction'])}")
         
         return "\n".join(result)
 

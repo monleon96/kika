@@ -105,11 +105,27 @@ def _read_material(lines, start_index):
     material_id = int(match.group(1))
     material_obj = Mat(id=material_id)
     
-    # Process default library if specified on the first line
-    if "lib=" in line:
-        lib_match = re.search(r'([a-z])lib=(\S+)', line)
+    # Process default libraries if specified on the first line
+    if "nlib=" in line:
+        nlib_match = re.search(r'nlib=(\S+)', line)
+        if nlib_match:
+            material_obj.nlib = nlib_match.group(1)
+    
+    if "plib=" in line:
+        plib_match = re.search(r'plib=(\S+)', line)
+        if plib_match:
+            material_obj.plib = plib_match.group(1)
+    
+    # Legacy support for old 'lib=' format
+    elif "lib=" in line:
+        lib_match = re.search(r'lib=(\S+)', line)
         if lib_match:
-            material_obj.library = lib_match.group(2)
+            lib_value = lib_match.group(1)
+            # Determine library type by examining the last character
+            if lib_value.endswith('c'):
+                material_obj.nlib = lib_value
+            elif lib_value.endswith('p'):
+                material_obj.plib = lib_value
     
     # Move to the next line to start parsing nuclides
     i += 1
