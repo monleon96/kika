@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, Tuple
-from .._constants import ATOMIC_NUMBER_TO_SYMBOL
+from .._constants import ATOMIC_NUMBER_TO_SYMBOL, ATOMIC_MASS
 
 @dataclass
 class Input:
@@ -111,28 +111,30 @@ class Materials:
     mat: Dict[int, 'Mat'] = field(default_factory=dict)
 
 @dataclass
-class Component:
-    """Represents a single nuclide component within a material.
+class Nuclide:
+    """Represents a nuclide component in an MCNP material.
     
     :ivar zaid: Nuclide ZAID number
     :type zaid: int
-    :ivar fraction: Atomic fraction of the nuclide in the material
+    :ivar fraction: Atomic or weight fraction of the nuclide
     :type fraction: float
-    :ivar library: Specific cross-section library for this nuclide
-    :type library: Optional[str]
+    :ivar nlib: Optional specific neutron cross-section library for this nuclide
+    :type nlib: Optional[str]
+    :ivar plib: Optional specific photon cross-section library for this nuclide
+    :type plib: Optional[str]
     """
     zaid: int
     fraction: float
-    library: Optional[str] = None
+    nlib: Optional[str] = None
+    plib: Optional[str] = None
     
     @property
-    def nuclide(self) -> Optional[str]:
-        """Get nuclide symbol based on atomic number.
+    def element(self) -> Optional[str]:
+        """Get the chemical symbol of the nuclide.
         
-        :returns: Chemical symbol of element or None if not found
+        :returns: Chemical symbol of the element or None if not found
         :rtype: Optional[str]
         """
-        # Extract atomic number from ZAID (first 2-3 digits)
         atomic_number = self.zaid // 1000
         return ATOMIC_NUMBER_TO_SYMBOL.get(atomic_number)
 
@@ -146,17 +148,16 @@ class Mat:
     :type nlib: Optional[str]
     :ivar plib: Optional default photon cross-section library for this material
     :type plib: Optional[str]
-    :ivar components: Dictionary mapping ZAID to component information
-                     {zaid: {'fraction': float, 'nlib': str, 'plib': str}}
-    :type components: Dict[int, Dict]
+    :ivar nuclides: Dictionary mapping ZAID to Nuclide objects
+    :type nuclides: Dict[int, Nuclide]
     """
     id: int
     nlib: Optional[str] = None
     plib: Optional[str] = None
-    components: Dict[int, Dict] = field(default_factory=dict)
+    nuclides: Dict[int, 'Nuclide'] = field(default_factory=dict)
     
-    def add_component(self, zaid: int, fraction: float, library: Optional[str] = None) -> None:
-        """Add a nuclide component to this material.
+    def add_nuclide(self, zaid: int, fraction: float, library: Optional[str] = None) -> None:
+        """Add a nuclide to this material.
         
         :param zaid: Nuclide ZAID number
         :type zaid: int
@@ -176,23 +177,23 @@ class Mat:
             elif library.endswith('p'):
                 plib = library
         
-        # Check if component already exists
-        if zaid in self.components:
-            # Update existing component with new library information
+        # Check if nuclide already exists
+        if zaid in self.nuclides:
+            # Update existing nuclide with new library information
             # Keep the existing fraction
             if nlib:
-                self.components[zaid]['nlib'] = nlib
+                self.nuclides[zaid].nlib = nlib
             if plib:
-                self.components[zaid]['plib'] = plib
+                self.nuclides[zaid].plib = plib
         else:
-            # Create new component
-            self.components[zaid] = {
-                'fraction': float(fraction),
-                'nlib': nlib,
-                'plib': plib,
-                'nuclide': self._get_nuclide_symbol(zaid)
-            }
-    
+            # Create new nuclide
+            self.nuclides[zaid] = Nuclide(
+                zaid=zaid,
+                fraction=float(fraction),
+                nlib=nlib,
+                plib=plib
+            )
+
     def _get_nuclide_symbol(self, zaid: int) -> Optional[str]:
         """Get nuclide symbol based on atomic number.
         
@@ -206,20 +207,112 @@ class Mat:
         return ATOMIC_NUMBER_TO_SYMBOL.get(atomic_number)
     
     def get_effective_library(self, zaid: int, lib_type: str = 'nlib') -> Optional[str]:
-        """Get effective library for a component, considering inheritance.
+        """Get effective library for a nuclide, considering inheritance.
         
-        :param zaid: The ZAID number of the component
+        :param zaid: The ZAID number of the nuclide
         :type zaid: int
         :param lib_type: Library type ('nlib' or 'plib')
         :type lib_type: str
-        :returns: Component's library if specified, otherwise material's default
+        :returns: Nuclide's library if specified, otherwise material's default
         :rtype: Optional[str]
         """
-        if zaid not in self.components:
+        if zaid not in self.nuclides:
             return getattr(self, lib_type, None)
         
-        comp_lib = self.components[zaid].get(lib_type)
-        return comp_lib if comp_lib else getattr(self, lib_type, None)
+        nuclide_lib = getattr(self.nuclides[zaid], lib_type, None)
+        return nuclide_lib if nuclide_lib else getattr(self, lib_type, None)
+    
+    def to_weight_fraction(self) -> 'Mat':
+        """Convert atomic fractions to weight fractions.
+        
+        In MCNP, weight fractions are represented as negative values.
+        This method does nothing if fractions are already weight fractions.
+        
+        :returns: Self reference for method chaining
+        :rtype: Mat
+        """
+        # Check if already using weight fractions (negative values)
+        if any(nuclide.fraction < 0 for nuclide in self.nuclides.values()):
+            return self  # Already using weight fractions
+            
+        # Calculate total mass
+        mass_sum = 0.0
+        for zaid, nuclide in self.nuclides.items():
+            atomic_number = zaid // 1000
+            mass_number = zaid % 1000
+            
+            # Construct the isotope key
+            isotope_key = atomic_number * 1000 + mass_number
+            
+            # Get atomic mass from constants or use a default approximation
+            atomic_mass = ATOMIC_MASS.get(isotope_key)
+            if atomic_mass is None:
+                # Fallback to approximate mass if exact isotope not found
+                atomic_mass = float(mass_number)
+                
+            # Calculate mass contribution
+            mass_sum += nuclide.fraction * atomic_mass
+            
+        # Convert to weight fractions (negative values)
+        for zaid, nuclide in self.nuclides.items():
+            atomic_number = zaid // 1000
+            mass_number = zaid % 1000
+            
+            isotope_key = atomic_number * 1000 + mass_number
+            atomic_mass = ATOMIC_MASS.get(isotope_key, float(mass_number))
+            
+            # Convert atomic fraction to weight fraction
+            weight_fraction = nuclide.fraction * atomic_mass / mass_sum
+            
+            # Store as negative value (MCNP convention for weight fractions)
+            nuclide.fraction = -weight_fraction
+            
+        return self
+    
+    def to_atomic_fraction(self) -> 'Mat':
+        """Convert weight fractions to atomic fractions.
+        
+        In MCNP, weight fractions are represented as negative values.
+        This method does nothing if fractions are already atomic fractions.
+        
+        :returns: Self reference for method chaining
+        :rtype: Mat
+        """
+        # Check if already using atomic fractions (positive values)
+        if all(nuclide.fraction > 0 for nuclide in self.nuclides.values()):
+            return self  # Already using atomic fractions
+            
+        # First step: convert all fractions to their absolute values
+        for nuclide in self.nuclides.values():
+            nuclide.fraction = abs(nuclide.fraction)
+            
+        # Calculate sum of (weight_fraction / atomic_mass)
+        atomic_sum = 0.0
+        for zaid, nuclide in self.nuclides.items():
+            atomic_number = zaid // 1000
+            mass_number = zaid % 1000
+            
+            isotope_key = atomic_number * 1000 + mass_number
+            atomic_mass = ATOMIC_MASS.get(isotope_key, float(mass_number))
+            
+            # Add contribution to atomic sum
+            atomic_sum += nuclide.fraction / atomic_mass
+            
+        # Convert to atomic fractions (positive values)
+        for zaid, nuclide in self.nuclides.items():
+            atomic_number = zaid // 1000
+            mass_number = zaid % 1000
+            
+            isotope_key = atomic_number * 1000 + mass_number
+            atomic_mass = ATOMIC_MASS.get(isotope_key, float(mass_number))
+            
+            # Convert weight fraction to atomic fraction
+            atomic_fraction = (nuclide.fraction / atomic_mass) / atomic_sum
+            
+            # Store as positive value (MCNP convention for atomic fractions)
+            nuclide.fraction = atomic_fraction
+            
+        return self
     
     def _format_fraction(self, fraction: float) -> str:
         """Format atomic fraction in scientific notation with 6 decimal digits.
@@ -249,25 +342,53 @@ class Mat:
         if lib_parts:
             result[0] += " " + " ".join(lib_parts)
         
-        # Process each component
-        for zaid, comp in self.components.items():
-            # Handle neutron library if specified
-            if comp['nlib']:
-                lib_str = f".{comp['nlib']}"
-                result.append(f"    {zaid}{lib_str} {self._format_fraction(comp['fraction'])}")
-            elif self.nlib:
-                # Use default neutron library at material level - no need to specify at component
-                result.append(f"    {zaid} {self._format_fraction(comp['fraction'])}")
+        # Process each nuclide
+        for zaid, nuclide in self.nuclides.items():
+            nuclide_added = False
             
-            # Handle photon library if specified (add a separate entry)
-            if comp['plib']:
-                lib_str = f".{comp['plib']}"
-                result.append(f"    {zaid}{lib_str} {self._format_fraction(comp['fraction'])}")
-            elif self.plib and not comp['nlib']:
-                # If we didn't add an entry for neutron library and there's a default photon library,
-                # we need to add an entry for photon library
-                # Skip this if we already added an entry for neutron to avoid duplication
-                result.append(f"    {zaid} {self._format_fraction(comp['fraction'])}")
+            # Handle neutron library if specified at nuclide level
+            if nuclide.nlib:
+                lib_str = f".{nuclide.nlib}"
+                result.append(f"    {zaid}{lib_str} {self._format_fraction(nuclide.fraction)}")
+                nuclide_added = True
+            
+            # Handle photon library if specified at nuclide level
+            if nuclide.plib:
+                lib_str = f".{nuclide.plib}"
+                result.append(f"    {zaid}{lib_str} {self._format_fraction(nuclide.fraction)}")
+                nuclide_added = True
+            
+            # If no nuclide-level libraries were specified, add the nuclide once
+            # It will use material-level libraries if defined
+            if not nuclide_added:
+                result.append(f"    {zaid} {self._format_fraction(nuclide.fraction)}")
         
         return "\n".join(result)
+    
+    def copy(self, new_id: int) -> 'Mat':
+        """Create an exact copy of this material with a new ID.
+        
+        All properties including the nuclides dictionary are copied.
+        
+        :param new_id: ID for the new material
+        :type new_id: int
+        :returns: New Mat instance with identical properties but different ID
+        :rtype: Mat
+        """
+        new_material = Mat(
+            id=new_id,
+            nlib=self.nlib,
+            plib=self.plib
+        )
+        
+        # Deep copy all nuclides
+        for zaid, nuclide in self.nuclides.items():
+            new_material.nuclides[zaid] = Nuclide(
+                zaid=nuclide.zaid,
+                fraction=nuclide.fraction,
+                nlib=nuclide.nlib,
+                plib=nuclide.plib
+            )
+            
+        return new_material
 

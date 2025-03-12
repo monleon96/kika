@@ -1,10 +1,11 @@
 import sys
 import os
 from mcnpy._grids import ENERGY_GRIDS
-from .parse_input import read_mcnp
+from .parse_input import read_mcnp, _read_material
+from mcnpy._constants import MCNPY_HEADER, MCNPY_FOOTER, ATOMIC_MASS, N_AVOGADRO
 
 
-def perturb_material(inputfile, material_number, nuclide):
+def perturb_material(inputfile, material_number, density, nuclide, output_path=None, pert_mat_id=None):
     """Creates a perturbed material with 100% increase in the specified nuclide's fraction.
     
     Reads an MCNP input file, finds the specified material, and creates a new perturbed
@@ -12,15 +13,25 @@ def perturb_material(inputfile, material_number, nuclide):
     is added to the input file right after the original material definition and saved to
     a new file.
     
+    The function can handle materials defined with either atomic or weight fractions.
+    The perturbed material will always be written in normalized atomic fractions, 
+    regardless of how the original material was defined.
+    
     :param inputfile: Path to the MCNP input file
     :type inputfile: str
     :param material_number: Material ID number to be perturbed
     :type material_number: int
+    :param density: Density of the original material. If positive, interpreted as atoms/barn-cm,
+                   if negative, interpreted as g/cm³ (absolute value is used)
+    :type density: float
     :param nuclide: ZAID of the nuclide to be perturbed
     :type nuclide: int
+    :param output_path: Optional path where to save the modified file. If None, rewrites original file
+    :type output_path: Optional[str]
+    :param pert_mat_id: Optional ID for the perturbed material. If None, uses material_number*100 + 1
+    :type pert_mat_id: Optional[int]
     
-    :returns: Path to the new file with the perturbed material
-    :rtype: str
+    :returns: None
     
     :raises ValueError: If the material or nuclide is not found in the input file
     """
@@ -34,39 +45,85 @@ def perturb_material(inputfile, material_number, nuclide):
     original_material = input_data.materials.mat[material_number]
     
     # Check if the nuclide exists in the material
-    if nuclide not in original_material.components:
+    if nuclide not in original_material.nuclides:
         raise ValueError(f"Nuclide {nuclide} not found in material {material_number}")
     
-    # Create a new material ID (original ID + 01)
-    new_material_id = material_number * 100 + 1
+    # Create a new material ID (original ID + 01 or user specified)
+    new_material_id = pert_mat_id if pert_mat_id is not None else material_number * 100 + 1
     
-    # Create a copy of the original material with the new ID
-    perturbed_material = input_data.materials.mat[material_number].__class__(
-        id=new_material_id,
-        nlib=original_material.nlib,
-        plib=original_material.plib
-    )
+    # Create a copy of the original material with the new ID using the copy method
+    perturbed_material = original_material.copy(new_material_id)
     
-    # Copy all components to the new material
-    for zaid, component in original_material.components.items():
-        perturbed_material.add_component(
-            zaid=zaid, 
-            fraction=component['fraction'],
-            library=component.get('nlib')
-        )
+    # Calculate the sum of all fractions in the original material
+    total_fraction = sum(nuclide.fraction for nuclide in original_material.nuclides.values())
     
-    # Calculate the sum of all fractions to check if normalization is needed
-    total_fraction = sum(comp['fraction'] for comp in original_material.components.values())
+    # Normalize the perturbed material composition to start with a normalized composition
+    if abs(total_fraction - 1.0) > 1e-6:  # Check if normalization is needed
+        normalization_factor = 1.0 / total_fraction
+        for zaid in perturbed_material.nuclides:
+            perturbed_material.nuclides[zaid].fraction *= normalization_factor
     
-    # Apply 100% perturbation to the specified nuclide
-    perturbed_material.components[nuclide]['fraction'] *= 2.0
+    # Now apply 100% perturbation to the specified nuclide (after normalization)
+    perturbed_material.nuclides[nuclide].fraction *= 2.0
     
-    # Renormalize the composition to maintain the same total fraction
-    new_total = sum(comp['fraction'] for comp in perturbed_material.components.values())
-    normalization_factor = total_fraction / new_total
+    # Calculate the sum of all fractions after perturbation
+    new_total = sum(nuclide.fraction for nuclide in perturbed_material.nuclides.values())
     
-    for zaid in perturbed_material.components:
-        perturbed_material.components[zaid]['fraction'] *= normalization_factor
+    # Determine if density is in atoms/barn-cm or g/cm³
+    is_atomic_density = density >= 0
+    abs_density = abs(density)
+    
+    # Calculate average atomic mass for the material
+    avg_atomic_mass = 0.0
+    for zaid, nuclide_obj in original_material.nuclides.items():
+        fraction = nuclide_obj.fraction / total_fraction  # Normalize to get proper weighting
+        if zaid in ATOMIC_MASS:
+            atomic_mass = ATOMIC_MASS[zaid]
+        else:
+            # Approximate mass if not found in the dictionary
+            atomic_number = zaid // 1000
+            mass_number = zaid % 1000
+            atomic_mass = float(mass_number)
+            print(f"WARNING: Atomic mass not found for nuclide {zaid}. Using mass number {mass_number} as an approximation.")
+        
+        avg_atomic_mass += fraction * atomic_mass
+    
+    # Convert between atomic density and mass density
+    if is_atomic_density:
+        # Input is atoms/barn-cm
+        atomic_density = abs_density
+        # Convert to g/cm³: (atoms/barn-cm) * avg_atomic_mass / N_AVOGADRO * 1e24
+        # 1e24 factor: 1 barn = 1e-24 cm²
+        mass_density = atomic_density * avg_atomic_mass / N_AVOGADRO * 1e24
+    else:
+        # Input is g/cm³
+        mass_density = abs_density
+        # Convert to atoms/barn-cm: (g/cm³) * N_AVOGADRO / avg_atomic_mass * 1e-24
+        atomic_density = mass_density * N_AVOGADRO / avg_atomic_mass * 1e-24
+    
+    # Calculate new densities after perturbation
+    new_atomic_density = atomic_density * new_total
+    
+    # Recalculate average atomic mass for perturbed material
+    new_avg_atomic_mass = 0.0
+    for zaid, nuclide_obj in perturbed_material.nuclides.items():
+        fraction = nuclide_obj.fraction  # Already normalized
+        if zaid in ATOMIC_MASS:
+            atomic_mass = ATOMIC_MASS[zaid]
+        else:
+            atomic_number = zaid // 1000
+            mass_number = zaid % 1000
+            atomic_mass = float(mass_number)
+        
+        new_avg_atomic_mass += fraction * atomic_mass
+    
+    # Calculate new mass density
+    new_mass_density = new_atomic_density * new_avg_atomic_mass / N_AVOGADRO * 1e24
+    
+    # Re-normalize the perturbed material to maintain sum = 1.0
+    renormalization_factor = 1.0 / new_total
+    for zaid in perturbed_material.nuclides:
+        perturbed_material.nuclides[zaid].fraction *= renormalization_factor
     
     # Read the original input file content
     with open(inputfile, 'r') as f:
@@ -78,75 +135,82 @@ def perturb_material(inputfile, material_number, nuclide):
         if line.strip().startswith(f"m{material_number} ") or line.strip() == f"m{material_number}":
             original_position = i
             break
-    
+
     if original_position == -1:
         raise ValueError(f"Could not locate material {material_number} in input file")
+
+    # Use _read_material to determine the end of the material block
+    _, next_position = _read_material(lines, original_position)
     
-    # Skip to the end of the original material definition
-    next_position = original_position + 1
-    while next_position < len(lines):
-        line = lines[next_position].strip()
-        # Skip empty or comment lines
-        if not line or line.startswith("c") or line.startswith("C"):
-            next_position += 1
-            continue
-            
-        # If the line doesn't start with a space and isn't part of this material definition, we've reached the end
-        if not line[0].isspace() and not (line.startswith(str(material_number)) and len(line) > len(str(material_number)) and line[len(str(material_number))].isspace()):
-            break
-            
-        # Otherwise, it's part of the current material definition
-        next_position += 1
+    # Create the original material string using __str__
+    original_material_str = original_material.__str__()
     
-    # Generate comment and perturbed material string using the __str__ method
+    # Generate comment and perturbed material string using __str__
     comment = f"c Perturbed material with 100% increase in nuclide {nuclide}\n"
+    perturbed_material_str = perturbed_material.__str__()
     
-    # Instead of using __str__ directly which might have duplicate components issues,
-    # manually create the material card string
-    perturbed_material_str = f"m{new_material_id}"
-    if perturbed_material.nlib:
-        perturbed_material_str += f" nlib={perturbed_material.nlib}"
-    if perturbed_material.plib:
-        perturbed_material_str += f" plib={perturbed_material.plib}"
-    perturbed_material_str += "\n"
+    # Generate density information for comments
+    if is_atomic_density:
+        density_str = f"c Density: {atomic_density:.6e} atoms/barn-cm | {mass_density:.6e} g/cm³\n"
+        new_density_str = f"c Density: {new_atomic_density:.6e} atoms/barn-cm | {new_mass_density:.6e} g/cm³\n"
+    else:
+        density_str = f"c Density: {mass_density:.6e} g/cm³ | {atomic_density:.6e} atoms/barn-cm\n"
+        new_density_str = f"c Density: {new_mass_density:.6e} g/cm³ | {new_atomic_density:.6e} atoms/barn-cm\n"
     
-    # Add components without duplication
-    for zaid, comp in perturbed_material.components.items():
-        fraction = comp['fraction']
-        if comp.get('nlib'):
-            perturbed_material_str += f"    {zaid}.{comp['nlib']} {fraction:.6e}\n"
-        else:
-            perturbed_material_str += f"    {zaid} {fraction:.6e}\n"
+    # Generate separators and headers
+    header_orig = f"c Original material being perturbed - rewritten by MCNPy\n{density_str}"
+    header_pert = f"c Perturbed material generated by MCNPy (normalized)\n{new_density_str}"
     
-    # Insert comment and perturbed material after original material
-    lines.insert(next_position, "\n")  # Add a blank line for separation
-    lines.insert(next_position + 1, comment)
-    lines.insert(next_position + 2, perturbed_material_str)
-    lines.insert(next_position + 3, "\n")  # Add another blank line
+    # Remove the original material lines from the file
+    del lines[original_position:next_position]
     
-    # Create output filename based on input filename
-    base_name = os.path.basename(inputfile)
-    filename, ext = os.path.splitext(base_name)
-    new_filename = f"{filename}_pert_{material_number}_{nuclide}{ext}"
-    output_path = os.path.join(os.getcwd(), new_filename)
+    # Insert the original material and perturbed material at the original position
+    lines.insert(original_position, MCNPY_HEADER)
+    lines.insert(original_position + 1, "c \n")  # Add blank comment line after header
+    lines.insert(original_position + 2, header_orig)
+    lines.insert(original_position + 3, original_material_str + "\n")
+    lines.insert(original_position + 4, "c \n")
+    lines.insert(original_position + 5, header_pert)
+    lines.insert(original_position + 6, comment)
+    lines.insert(original_position + 7, perturbed_material_str + "\n")
+    lines.insert(original_position + 8, "c \n")
+    lines.insert(original_position + 9, MCNPY_FOOTER)
     
-    # Write the modified content to the new file
-    with open(output_path, 'w') as f:
+    # Determine output file path
+    if output_path is None:
+        final_path = inputfile
+    else:
+        base_name = os.path.basename(inputfile)
+        filename, ext = os.path.splitext(base_name)
+        new_filename = f"{filename}_pert_{material_number}_{nuclide}{ext}"
+        final_path = os.path.join(output_path, new_filename)
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_path, exist_ok=True)
+    
+    # Print perturbation information before writing
+    print(f"Perturbation details:")
+    print(f"- Original material: {material_number}")
+    print(f"- Perturbed material ID: {new_material_id}")
+    print(f"- Perturbed nuclide: {nuclide}")
+    
+    if is_atomic_density:
+        print(f"- Original density: {atomic_density:.6e} atoms/barn-cm | {mass_density:.6e} g/cm³")
+        print(f"- Perturbed density: {new_atomic_density:.6e} atoms/barn-cm | {new_mass_density:.6e} g/cm³")
+    else:
+        print(f"- Original density: {mass_density:.6e} g/cm³ | {atomic_density:.6e} atoms/barn-cm")
+        print(f"- Perturbed density: {new_mass_density:.6e} g/cm³ | {new_atomic_density:.6e} atoms/barn-cm")
+    
+    # Write the modified content to the file
+    with open(final_path, 'w') as f:
         f.writelines(lines)
     
-    # Print information about the operation
-    if abs(total_fraction - 1.0) > 1e-10:
-        print(f"Note: Original material {material_number} had a total fraction of {total_fraction:.6f}")
-    
-    print(f"Created perturbed material {new_material_id} with 100% increase in nuclide {nuclide}")
-    print(f"Original nuclide fraction: {original_material.components[nuclide]['fraction']:.6e}")
-    print(f"Perturbed nuclide fraction: {perturbed_material.components[nuclide]['fraction']:.6e}")
-    print(f"New file created: {output_path}")
+    print(f"\nSuccess! Material written to: {final_path}")
     
     return
 
 
-def generate_PERTcards(cell, rho, reactions, energies, mat=None, order=2, errors=False, output_path=None):
+def generate_PERTcards(cell, density, reactions, energies, mat=None, order=2, errors=False, output_path=None):
     """Generates PERT cards for MCNP input files.
 
     Generates PERT cards based on the provided parameters. Can generate both first and
@@ -156,8 +220,8 @@ def generate_PERTcards(cell, rho, reactions, energies, mat=None, order=2, errors
 
     :param cell: Cell number(s) for PERT card application
     :type cell: int or str or list[int]
-    :param rho: Density value for the perturbation
-    :type rho: float
+    :param density: Density value for the perturbation
+    :type density: float
     :param reactions: List of reaction identifiers
     :type reactions: list[str]
     :param energies: Energy values. Used in consecutive pairs for energy bins
@@ -187,7 +251,7 @@ def generate_PERTcards(cell, rho, reactions, energies, mat=None, order=2, errors
         cell_str = ','.join(map(str, cell)) if isinstance(cell, list) else str(cell)
     else: 
         cell_str = str(cell)
-    # Loop over each combination of cell, rho, and reaction
+    # Loop over each combination of cell, density, and reaction
     for reaction in reactions:
         # Go through the energy list and use consecutive pairs
         for i in range(len(energies) - 1):
@@ -196,50 +260,50 @@ def generate_PERTcards(cell, rho, reactions, energies, mat=None, order=2, errors
 
             if mat is None:
                 # Print the output for METHOD=2
-                stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={rho:.6e} METHOD=2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                 pert_counter += 1
 
                 # Print the output for METHOD=3
                 if order == 2:
-                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={rho:.6e} METHOD=3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                     pert_counter += 1
 
                 if errors:
                     # Print the output for METHOD=-2
-                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={rho:.6e} METHOD=-2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=-2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                     pert_counter += 1
 
                     if order == 2:
                         # Print the output for METHOD=-3
-                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={rho:.6e} METHOD=-3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=-3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                         pert_counter += 1
 
                         # Print the output for METHOD=1
-                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={rho:.6e} METHOD=1 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=1 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                         pert_counter += 1
 
             else:
                 # Print the output for METHOD=2 with MAT
-                stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={rho:.6e} METHOD=2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                 pert_counter += 1
 
                 if order == 2:
                     # Print the output for METHOD=3 with MAT
-                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={rho:.6e} METHOD=3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                     pert_counter += 1
             
                 if errors:
                     # Print the output for METHOD=-2 with MAT
-                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={rho:.6e} METHOD=-2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=-2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                     pert_counter += 1
 
                     if order == 2:
                         # Print the output for METHOD=-3 with MAT
-                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={rho:.6e} METHOD=-3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=-3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                         pert_counter += 1
 
                         # Print the output for METHOD=1 with MAT
-                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={rho:.6e} METHOD=1 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=1 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                         pert_counter += 1
 
     # Close the file if it was opened

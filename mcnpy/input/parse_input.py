@@ -1,4 +1,5 @@
-from .input import Input, Perturbation, Pert, Mat, Materials, Component
+from .input import Input, Perturbation, Pert, Mat, Materials, Nuclide
+from .._constants import ATOMIC_MASS, N_AVOGADRO
 import re
 
 def _read_PERT(lines, start_index):
@@ -168,12 +169,28 @@ def _read_material(lines, start_index):
                     nuclide = int(nuclide_spec)
                 
                 fraction = float(parts[1])
-                material_obj.add_component(zaid=nuclide, fraction=fraction, library=specific_lib)
                 
-            except (ValueError, IndexError):
-                pass  # Skip if can't parse
+                # Check for consistency in fraction types
+                if material_obj.nuclides:
+                    existing_is_negative = next(iter(material_obj.nuclides.values())).fraction < 0
+                    current_is_negative = fraction < 0
+                    if existing_is_negative != current_is_negative:
+                        raise ValueError(f"Material {material_id} has inconsistent fraction types (mixed weight and atomic fractions)")
+                
+                # Add nuclide with the fraction as-is (will be converted later if needed)
+                material_obj.add_nuclide(zaid=nuclide, fraction=fraction, library=specific_lib)
+                
+            except (ValueError, IndexError) as e:
+                if isinstance(e, ValueError) and "inconsistent fraction types" in str(e):
+                    raise
+                # Skip if can't parse
+                pass
         
         i += 1
+    
+    # If weight fractions were used (negative values), convert to atomic fractions
+    if material_obj.nuclides and any(nuclide.fraction < 0 for nuclide in material_obj.nuclides.values()):
+        material_obj.to_atomic_fraction()
     
     return material_obj, i
 
