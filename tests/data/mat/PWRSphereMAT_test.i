@@ -1,15 +1,15 @@
 c ----------------------------------------------------------------------------
 c MATERIALS
 c ----------------------------------------------------------------------------
-c material m200100: 'Water' (Cbore = 10 ppm)
-m200100	nlib=06c   			$ rho=7.188250e-02 | -7.166057e-01
+c material m20: 'Water' (Cbore = 10 ppm)
+m20	nlib=06c   			$ rho=7.188250e-02 | -7.166057e-01
 	1001  6.666630e-01                                                      
 	8016  3.333315e-01                                                      
 	5010  1.105447e-06                                                      
 	5011  4.449567e-06
 c 	
-c material m300000: 'Structural Material - Vessel' (16MND5 from EPR)
-m300000  nlib=06c plib=02p			$ rho=-7.850e+00 | 8.526729e-02
+c material m30: 'Structural Material - Vessel' (16MND5 from EPR)
+m30 nlib=06c plib=02p			$ rho=-7.850e+00 | 8.526729e-02
 c Carbon %
 	6012  9.126127e-03 
 	6013.03c  1.022318e-04
@@ -60,8 +60,8 @@ c Iron %
 	26057 2.063485e-02  
 	26058 2.783306e-03
 c
-c material m100000: 'Air' 
-m100000	nlib=06c 	   		$ rho=5.324800e-05 | -1.275410e-03
+c material m10: 'Air' 
+m10	nlib=06c 	   		$ rho=5.324800e-05 | -1.275410e-03
 	7014  7.884803e-01 		
 	8016  2.115197e-01 		
 c

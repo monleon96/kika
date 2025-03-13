@@ -9,14 +9,14 @@ def test_sdf():
     try:
         reference_sdf_path = 'tests/data/sdf/ref_1.00e+00_3.00e+00.sdf'
 
-        pertfile1 = '/home/MONLEON-JUAN/MCNPy/tests/data/sdf/26056_PERT.i'
-        mctalfile1 = '/home/MONLEON-JUAN/MCNPy/tests/data/sdf/26056.m'
-        pertfile2 = '/home/MONLEON-JUAN/MCNPy/tests/data/sdf/26054_PERT.i'
-        mctalfile2 = '/home/MONLEON-JUAN/MCNPy/tests/data/sdf/26054.m'
-        pertfile3 = '/home/MONLEON-JUAN/MCNPy/tests/data/sdf/1001_PERT.i'
-        mctalfile3 = '/home/MONLEON-JUAN/MCNPy/tests/data/sdf/1001.m'
-        pertfile4 = '/home/MONLEON-JUAN/MCNPy/tests/data/sdf/8016_PERT.i'
-        mctalfile4 = '/home/MONLEON-JUAN/MCNPy/tests/data/sdf/8016.m'
+        pertfile1 = 'tests/data/sdf/PWRSphere_26056_PERT.i'
+        mctalfile1 = 'tests/data/sdf/PWRSphere_26056.m'
+        pertfile2 = 'tests/data/sdf/PWRSphere_26054_PERT.i'
+        mctalfile2 = 'tests/data/sdf/PWRSphere_26054.m'
+        pertfile3 = 'tests/data/sdf/PWRSphere_1001_PERT.i'
+        mctalfile3 = 'tests/data/sdf/PWRSphere_1001.m'
+        pertfile4 = 'tests/data/sdf/PWRSphere_8016_PERT.i'
+        mctalfile4 = 'tests/data/sdf/PWRSphere_8016.m'
 
         sensData1 = mcnpy.compute_sensitivity(pertfile1, mctalfile1, 4, 26056, 'Fe56')
         sensData2 = mcnpy.compute_sensitivity(pertfile2, mctalfile2, 4, 26054, 'Fe54')

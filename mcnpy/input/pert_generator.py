@@ -1,6 +1,5 @@
 import sys
 import os
-from mcnpy._grids import ENERGY_GRIDS
 from .parse_input import read_mcnp, _read_material
 from mcnpy._constants import MCNPY_HEADER, MCNPY_FOOTER, ATOMIC_MASS, N_AVOGADRO
 
@@ -50,8 +49,6 @@ def perturb_material(inputfile, material_number, density, nuclide, output_path=N
     
     # Create a new material ID (original ID + 01 or user specified)
     new_material_id = pert_mat_id if pert_mat_id is not None else material_number * 100 + 1
-    
-    # Create a copy of the original material with the new ID using the copy method
     perturbed_material = original_material.copy(new_material_id)
     
     # Calculate the sum of all fractions in the original material
@@ -210,7 +207,7 @@ def perturb_material(inputfile, material_number, density, nuclide, output_path=N
     return
 
 
-def generate_PERTcards(cell, density, reactions, energies, mat=None, order=2, errors=False, output_path=None):
+def generate_PERTcards(cell, density, reactions, energies, material, order=2, errors=False, output_file=None):
     """Generates PERT cards for MCNP input files.
 
     Generates PERT cards based on the provided parameters. Can generate both first and
@@ -226,31 +223,38 @@ def generate_PERTcards(cell, density, reactions, energies, mat=None, order=2, er
     :type reactions: list[str]
     :param energies: Energy values. Used in consecutive pairs for energy bins
     :type energies: list[float]
-    :param mat: Material identifier, defaults to None
-    :type mat: str, optional
+    :param material: Material identifier for perturbation
+    :type material: str or int
     :param order: Order of PERT card method (1 or 2), defaults to 2
     :type order: int, optional
     :param errors: Whether to include error methods (-2, -3, 1), defaults to False
     :type errors: bool, optional
-    :param output_path: Path to output file. If None, prints to stdout
-    :type output_path: str, optional
+    :param output_file: Path to output file. If None, prints to stdout
+    :type output_file: str, optional
     
     :returns: None
     
-    :note: Prints PERT cards to either stdout or specified file with sequential numbering
+    :note: Prints PERT cards with MCNPY header and footer to either stdout or specified file with sequential numbering
     """
     # Determine output stream
-    if output_path:
-        stream = open(output_path, "w")
+    if output_file:
+        stream = open(output_file, "w")
     else:
         stream = sys.stdout
 
+    # Format cell parameter to string
+    if isinstance(cell, list):
+        cell_str = ','.join(map(str, cell))
+    else:
+        cell_str = str(cell)
+
     # Initialize the perturbation counter
     pert_counter = 1
-    if type(cell) == list: 
-        cell_str = ','.join(map(str, cell)) if isinstance(cell, list) else str(cell)
-    else: 
-        cell_str = str(cell)
+    
+    # Write header
+    stream.write(MCNPY_HEADER)
+    stream.write("c \n")
+    
     # Loop over each combination of cell, density, and reaction
     for reaction in reactions:
         # Go through the energy list and use consecutive pairs
@@ -258,54 +262,36 @@ def generate_PERTcards(cell, density, reactions, energies, mat=None, order=2, er
             E1 = energies[i]
             E2 = energies[i + 1]
 
-            if mat is None:
-                # Print the output for METHOD=2
-                stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+            # Print the output for METHOD=2 with material
+            stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={material} &\nRHO={density:.6e} METHOD=2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+            pert_counter += 1
+
+            if order == 2:
+                # Print the output for METHOD=3 with material
+                stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={material} &\nRHO={density:.6e} METHOD=3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                 pert_counter += 1
-
-                # Print the output for METHOD=3
-                if order == 2:
-                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
-                    pert_counter += 1
-
-                if errors:
-                    # Print the output for METHOD=-2
-                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=-2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
-                    pert_counter += 1
-
-                    if order == 2:
-                        # Print the output for METHOD=-3
-                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=-3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
-                        pert_counter += 1
-
-                        # Print the output for METHOD=1
-                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} &\nRHO={density:.6e} METHOD=1 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
-                        pert_counter += 1
-
-            else:
-                # Print the output for METHOD=2 with MAT
-                stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+        
+            if errors:
+                # Print the output for METHOD=-2 with material
+                stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={material} &\nRHO={density:.6e} METHOD=-2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                 pert_counter += 1
 
                 if order == 2:
-                    # Print the output for METHOD=3 with MAT
-                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
-                    pert_counter += 1
-            
-                if errors:
-                    # Print the output for METHOD=-2 with MAT
-                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=-2 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                    # Print the output for METHOD=-3 with material
+                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={material} &\nRHO={density:.6e} METHOD=-3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
                     pert_counter += 1
 
-                    if order == 2:
-                        # Print the output for METHOD=-3 with MAT
-                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=-3 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
-                        pert_counter += 1
-
-                        # Print the output for METHOD=1 with MAT
-                        stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={mat} &\nRHO={density:.6e} METHOD=1 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
-                        pert_counter += 1
+                    # Print the output for METHOD=1 with material
+                    stream.write(f"PERT{pert_counter}:n CELL={cell_str} MAT={material} &\nRHO={density:.6e} METHOD=1 RXN={reaction} ERG={E1:.6e} {E2:.6e}\n")
+                    pert_counter += 1
+    
+    # Write footer
+    stream.write("c \n")
+    stream.write(MCNPY_FOOTER)
 
     # Close the file if it was opened
-    if output_path:
+    if output_file:
         stream.close()
+        print(f"\nSuccess! PERT cards written to: {output_file}")
+    
+    return

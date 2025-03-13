@@ -1,10 +1,9 @@
 import pytest
-import mcnpy
 from mcnpy.mctal.parse_mctal import read_mctal
 
 def test_mctal_parsing():
     
-    filename = "tests/data/F4Tally_test1.m"
+    filename = "tests/data/mctal/PWRSphere_F4_test.m"
 
     try:
         # Parse file (set pert=False to avoid TallyPert parsing)
@@ -69,7 +68,7 @@ def test_mctal_parsing():
 
 def test_mctal_pert_parsing():
     
-    filename = "tests/data/F4PertTally_test1.m"
+    filename = "tests/data/pert/PWRSphere_F4_PERT_test.m"
 
     try:
         # Parse file (set pert=False to avoid TallyPert parsing)
