@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, List, Dict
 import matplotlib.pyplot as plt
+import pandas as pd  # Add pandas import
 
 @dataclass
 class Mctal:
@@ -57,6 +58,166 @@ class Mctal:
         if self.tally is None:
             self.tally = {}  
 
+    def print_summary(self):
+        """Prints a summary of the MCTAL file contents.
+        
+        Displays general information about the MCNP run and summary statistics
+        for each tally without showing all the detailed data.
+        """
+        print("=" * 50)
+        print(f"{'MCNP MCTAL SUMMARY':^50}")
+        print("=" * 50)
+        
+        # Header information
+        print(f"\n{'Code:':20} {self.code_name} {self.ver}")
+        print(f"{'Problem ID:':20} {self.probid}")
+        print(f"{'NPS:':20} {self.nps:.2e}")
+        if self.problem_id:
+            print(f"{'Title:':20} {self.problem_id}")
+        print("")
+
+        # Add table showing tally type distribution
+        if self.tally:
+            # Count tallies by type (last digit)
+            tally_type_counts = {}
+            for tally_id in self.tally:
+                # MCNP tally type is determined by the last digit of the tally number
+                tally_type = f"F{tally_id % 10}"
+                tally_type_counts[tally_type] = tally_type_counts.get(tally_type, 0) + 1
+            
+            if tally_type_counts:
+                print("\nTally Type Distribution:")
+                print("-" * 30)
+                print(f"{'Tally Type':^15}|{'Count':^12}")
+                print("-" * 30)
+                
+                # Sort by tally type number
+                for tally_type in sorted(tally_type_counts.keys()):
+                    print(f"{tally_type:^15}|{tally_type_counts[tally_type]:^12}")
+                print("-" * 30)
+                # Add the total number of tallies here
+                print(f"Total: {self.ntal} tallies\n")
+        
+        # Summary for each tally
+        if self.tally:
+            # Get maximum tally ID length for proper formatting
+            max_id_length = max(len(str(tally_id)) for tally_id in self.tally.keys())
+            id_column_width = max(8, max_id_length + 3)  # Min width 8, or length + 3 spaces
+            
+            total_width = id_column_width + 12 + 12 + 18 + 3  # 3 separators
+            
+            print("\nTally Summary:")
+            print("-" * total_width) 
+            print(f"{'ID':^{id_column_width}}|{'Results':^12}|{'Energy Bins':^12}|{'Name':^18}")
+            print("-" * total_width)  
+            
+            for tally_id, tally_obj in self.tally.items():
+                result_count = len(tally_obj.results) if tally_obj.results else 0
+                energy_bins = len(tally_obj.energies) if tally_obj.energies else 0
+                name = (tally_obj.name[:15] + '...') if len(tally_obj.name) > 18 else tally_obj.name
+                
+                # Right-align with dynamic width, ensuring at least 2 spaces padding
+                id_field_width = id_column_width - 3
+                print(f"{tally_id:>{id_field_width}}   |{result_count:^12}|{energy_bins:^12}|{name:^18}")
+            print("-" * total_width + "\n") 
+        
+        # Perturbation data summary
+        tallies_with_pert = [(tid, len(t.perturbation)) for tid, t in self.tally.items() if t.perturbation]
+        if tallies_with_pert:
+            print("\nPerturbation Data Summary:")
+            print("-" * 35)
+            print(f"{'Tally ID':^15}|{'Perturbations':^18}")
+            print("-" * 35)
+            
+            for tally_id, pert_count in sorted(tallies_with_pert):
+                print(f"{tally_id:^15}|{pert_count:^18}")
+            
+            print("-" * 35)
+            print(f"Total: {sum(count for _, count in tallies_with_pert)} perturbations across {len(tallies_with_pert)} tallies")
+        
+        print("\n" + "=" * 50 + "\n")
+
+class PerturbationCollection(dict):
+    """A collection class for perturbation data that provides a nice summary representation.
+    
+    This class extends the standard dictionary with a custom __repr__ method
+    to provide a formatted summary of the perturbation data.
+    """
+    
+    def __repr__(self):
+        """Returns a condensed formatted summary of the perturbation data.
+        
+        :return: Formatted string showing perturbation summary
+        :rtype: str
+        """
+        if not self:
+            return "No perturbation data available"
+            
+        # Get sorted perturbation numbers
+        pert_nums = sorted(self.keys())
+        
+        # Find ranges of consecutive perturbation numbers
+        ranges = []
+        start = pert_nums[0]
+        prev = pert_nums[0]
+        
+        for i in range(1, len(pert_nums)):
+            # If there's a gap in sequence
+            if pert_nums[i] > prev + 1:
+                # Add the completed range
+                if start == prev:
+                    ranges.append(str(start))
+                else:
+                    ranges.append(f"{start}-{prev}")
+                # Start a new range
+                start = pert_nums[i]
+            prev = pert_nums[i]
+        
+        # Add the last range
+        if start == prev:
+            ranges.append(str(start))
+        else:
+            ranges.append(f"{start}-{prev}")
+        
+        # Build the compact summary
+        width = 60
+        header = f"{'=' * width}\n"
+        header += f"{'Perturbation Collection':^{width}}\n"
+        header += f"{'=' * width}\n\n"
+        
+        # Summary line with total count
+        summary = f"Total: {len(self)} perturbations\n"
+        
+        # Ranges information
+        range_info = "Perturbation numbers: " + ", ".join(ranges) + "\n"
+        
+        # Access instructions
+        instructions = "\nAccess:\n- perturbation[num] for individual perturbations\n"
+        instructions += "- .to_dataframe() to convert all to DataFrame\n"
+        
+        return header + summary + range_info  + instructions
+    
+    def to_dataframe(self):
+        """Converts all perturbation data to a pandas DataFrame.
+        
+        :return: DataFrame containing data from all perturbations
+        :rtype: pandas.DataFrame
+        """
+        if not self:
+            return pd.DataFrame()
+        
+        data = []
+        for pert_num, pert_data in self.items():
+            if hasattr(pert_data, 'to_dataframe'):
+                df = pert_data.to_dataframe()
+                df['Perturbation'] = pert_num  # Add the perturbation number
+                data.append(df)
+        
+        if data:
+            return pd.concat(data, ignore_index=True)
+        else:
+            return pd.DataFrame()
+
 @dataclass
 class Tally:
     """Container for MCNP tally data.
@@ -83,8 +244,8 @@ class Tally:
     :type tfc_errors: List[float]
     :ivar tfc_fom: Figure of Merit at each TFC step
     :type tfc_fom: List[float]
-    :ivar pert_data: Perturbation data keyed by perturbation index
-    :type pert_data: Dict[int, dict]
+    :ivar perturbation: Perturbation data keyed by perturbation index
+    :type perturbation: PerturbationCollection
     """
     tally_id: int
     name: str = ""
@@ -99,7 +260,7 @@ class Tally:
     tfc_errors: List[float] = None
     tfc_fom: List[float] = None
     # Perturbation data
-    pert_data: Dict[int, dict] = None
+    perturbation: PerturbationCollection = None
     
     def __post_init__(self):
         if self.energies is None:
@@ -116,16 +277,109 @@ class Tally:
             self.tfc_errors = []
         if self.tfc_fom is None:
             self.tfc_fom = []
-        if self.pert_data is None:
-            self.pert_data = {}
+        # Convert existing dictionary to PerturbationCollection or create a new one
+        if self.perturbation is None:
+            self.perturbation = PerturbationCollection()
+        elif not isinstance(self.perturbation, PerturbationCollection):
+            # Convert existing dict to PerturbationCollection
+            self.perturbation = PerturbationCollection(self.perturbation)
+
+    def __repr__(self):
+        """Returns a formatted string representation of the tally.
+        
+        This method is called when the object is evaluated in interactive environments
+        like Jupyter notebooks or the Python interpreter.
+        
+        :return: Formatted string representation of the tally
+        :rtype: str
+        """
+        # Create a more visually appealing header with a border
+        header_width = 60
+        header = "=" * header_width + "\n"
+        header += f"{'MCNP Tally ' + str(self.tally_id):^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        # Create aligned key-value pairs with consistent width
+        label_width = 25  # Width for labels
+        
+        info_lines = []
+        if self.name:
+            info_lines.append(f"{'Tally Name:':{label_width}} {self.name}")
+        
+        info_lines.append(f"{'Number of energy bins:':{label_width}} {len(self.energies)}")
+        info_lines.append(f"{'Number of results:':{label_width}} {len(self.results)}")
+        
+        stats = "\n".join(info_lines)
+        
+        # Add an empty line between statistics and data table
+        data_table = "\n\n"
+        
+        # Check if we have energy-dependent results
+        if self.integral_result is not None:
+            data_table += "  Energy (MeV)      Result          Rel. Error\n"
+            data_table += "  ------------    ------------    ------------\n"
+            
+            # If we have energy bins, show all results
+            if self.results and len(self.energies) > 0:
+                for i in range(len(self.results)):
+                    data_table += f"  {self.energies[i]:<15.6e} {self.results[i]:<15.6e} {self.errors[i]:<15.6e}\n"
+                
+                data_table += "  ------------------------------------------------\n"
+            
+            # Show the total row (either alone or after energy bins)
+            data_table += f"  {'Total':<15} {self.integral_result:<15.6e} {self.integral_error:<15.6e}\n\n"
+        
+        # Additional information with aligned labels
+        additional_info = []
+        if self.perturbation:  # Update to use perturbation instead of pert_data
+            additional_info.append(f"{'Perturbation data:':{label_width}} {len(self.perturbation)} perturbations")
+
+        if self.tfc_nps:
+            additional_info.append(f"{'TFC data available:':{label_width}} {len(self.tfc_nps)} points")
+        
+        additional = "\n".join(additional_info)
+        
+        # Add an empty line before the footer
+        footer = "\n\nAvailable methods:\n"
+        footer += "- .to_dataframe() - Get full data as DataFrame\n"
+        footer += "- .plot_tfc_data() - Visualize convergence\n"
+        if self.perturbation:  # Add note about accessing perturbations
+            footer += "- .perturbation - Access perturbations\n"
+        
+        return header + stats + data_table + additional + footer
+
+    def to_dataframe(self):
+        """Converts tally data to a pandas DataFrame.
+        
+        Creates a DataFrame with three columns: 'Energy', 'Result', and 'Error',
+        containing the energy bin values and corresponding results and errors.
+        
+        :return: DataFrame containing the tally data
+        :rtype: pandas.DataFrame
+        :raises ValueError: If data lengths are inconsistent
+        """
+        # Check that we have data to convert
+        if not self.results:
+            return pd.DataFrame(columns=['Energy', 'Result', 'Error'])
+            
+        # Create DataFrame
+        df = pd.DataFrame({
+            'Energy': self.energies,
+            'Result': self.results,
+            'Error': self.errors
+        })
+        
+        return df
 
     def plot_tfc_data(self, figsize=(15, 5)):
-        """Creates plots showing TFC convergence data.
+        """Creates and displays plots showing TFC convergence data.
+
+        This method creates a figure with three subplots showing the TFC convergence data:
+        results vs NPS, relative errors vs NPS, and figure of merit vs NPS.
+        The figure is displayed immediately.
 
         :param figsize: Figure size in inches as (width, height)
         :type figsize: tuple
-        :returns: The created figure containing the plots
-        :rtype: matplotlib.figure.Figure
         :raises ValueError: If no TFC data is available for plotting
         """
         if not self.tfc_nps:
@@ -155,15 +409,57 @@ class Tally:
         ax3.grid(True)
         
         plt.tight_layout()
-        return fig
-
+        plt.show()
 
 @dataclass
 class TallyPert(Tally):
     """Container for perturbed tally data, inheriting from Tally.
     
     :ivar: Inherits all attributes from Tally class
+    :ivar perturbation_number: The perturbation index number
+    :type perturbation_number: int
     """
+    perturbation_number: int = None
+    
     def __post_init__(self):
         # Call parent post init to initialize lists/dict as needed.
         super().__post_init__()
+        
+    def __repr__(self):
+        """Returns a concise string representation of the perturbed tally.
+        
+        :return: Formatted string representation of the perturbed tally
+        :rtype: str
+        """
+        # Create a more visually appealing header with a border
+        header_width = 60
+        header = "=" * header_width + "\n"
+        header += f"{'MCNP Tally ' + str(self.tally_id) + ' - Perturbation ' + str(self.perturbation_number):^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        # Create aligned key-value pairs with consistent width
+        label_width = 25  # Width for labels
+        
+        # Include only the most important information
+        info_lines = []
+        if self.name:
+            info_lines.append(f"{'Tally Name:':{label_width}} {self.name}")
+        
+        info_lines.append(f"{'Number of energy bins:':{label_width}} {len(self.energies)}")
+        info_lines.append(f"{'Number of results:':{label_width}} {len(self.results)}")
+        
+        stats = "\n".join(info_lines)
+        
+        # Simplified data preview - show only integral result if available
+        data_preview = "\n\n"
+        if self.integral_result is not None:
+            data_preview += f"  {'Integral Result:':{label_width}} {self.integral_result:.6e}\n"
+            data_preview += f"  {'Integral Error:':{label_width}} {self.integral_error:.6e}\n"
+        
+        # Clear footer with available methods
+        footer = "\n\nAvailable methods:\n"
+        footer += "- .to_dataframe() - Get full data as DataFrame\n"
+        if self.tfc_nps:
+            footer += "- .plot_tfc_data() - Visualize convergence\n"
+        
+        return header + stats + data_preview + footer

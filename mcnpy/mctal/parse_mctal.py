@@ -468,9 +468,9 @@ def parse_tally(tally_id, file_obj, start_pos, tfc=True, pert=True):
                 tfc_results=pert_tfc_results,
                 tfc_errors=pert_tfc_errors,
                 tfc_fom=pert_tfc_fom,
-                pert_data={}  # New pert instance doesn't have its own pert_data
+                perturbation={}  # New pert instance doesn't have its own perturbation
             )
-            tally.pert_data[pert_index] = new_tally_pert
+            tally.perturbation[pert_index] = new_tally_pert
 
     tally._end_pos = file_obj.tell()
     return tally
