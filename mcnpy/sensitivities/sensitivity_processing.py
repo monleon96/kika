@@ -9,7 +9,7 @@ import numpy as np
 from mcnpy.input.parse_input import read_mcnp
 from mcnpy.mctal.parse_mctal import read_mctal
 from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL, MT_TO_REACTION
-from mcnpy.sensitivities.sensitivity import SensitivityData, Coefficients
+from mcnpy.sensitivities.sensitivity import SensitivityData, Coefficients, TaylorRatio
 from mcnpy.sensitivities.sdf import SDFData, SDFReactionData
 import math
 import matplotlib.pyplot as plt
@@ -36,7 +36,16 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
     
     pert_energies = input.pert.pert_energies
     reactions = input.pert.reactions
-    group_dict = input.pert.group_perts_by_reaction(2)
+    group_dict_first = input.pert.group_perts_by_reaction(2)
+    
+    # Check if second-order perturbations are available
+    # Use a more reliable method to check for method 3 perturbations
+    has_second_order = False
+    try:
+        group_dict_second = input.pert.group_perts_by_reaction(3)
+        has_second_order = bool(group_dict_second)  # True if dictionary is not empty
+    except:
+        group_dict_second = {}
     
     energy = mctal.tally[tally].energies 
     r0 = np.array(mctal.tally[tally].results)
@@ -44,9 +53,12 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
     
     # Prepare all the data first before creating the SensitivityData object
     full_data = {}
+    ratios = {}  # Store Taylor ratios by energy and reaction
 
     for i in range(len(energy)):            # Loop over detector energies
         energy_data = {}
+        ratio_data = {}
+        
         # Calculate energy boundaries for the energy string
         if i == 0:
             lower_bound = 0.0
@@ -57,49 +69,124 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
         energy_str = f"{lower_bound:.2e}_{upper_bound:.2e}"
         
         for rxn in reactions:               # Loop over unique reaction
-            sensCoef = np.zeros(len(group_dict[rxn]))
-            sensErr = np.zeros(len(group_dict[rxn]))
-            for j, pert in enumerate(group_dict[rxn]):    # Loop over list of perturbations - one per pert energy bin
+            # First-order processing
+            sensCoef = np.zeros(len(group_dict_first[rxn]))
+            sensErr = np.zeros(len(group_dict_first[rxn]))
+            
+            for j, pert in enumerate(group_dict_first[rxn]):
                 c1 = mctal.tally[tally].perturbation[pert].results[i]
                 e1 = mctal.tally[tally].perturbation[pert].errors[i]
                 sensCoef[j] = c1/r0[i]
                 sensErr[j] = np.sqrt(e0[i]**2 + e1**2)
             
+            # Store first-order coefficients
             energy_data[rxn] = Coefficients(
                 energy=energy_str,
                 reaction=rxn,
                 pert_energies=pert_energies,
                 values=sensCoef,
                 errors=sensErr,
-                r0=float(r0[i]),  
-                e0=float(e0[i])   
+                r0=float(r0[i]),
+                e0=float(e0[i])
             )
+            
+            # Second-order processing (if available)
+            if has_second_order and rxn in group_dict_second:
+                c2_values = []
+                c1_values = []  # Store the actual Taylor coefficients c1
+                
+                for j, pert in enumerate(group_dict_second[rxn]):
+                    # Get first-order Taylor coefficient directly (not the sensitivity)
+                    c1 = mctal.tally[tally].perturbation[group_dict_first[rxn][j]].results[i]
+                    c1_values.append(c1)
+                    
+                    # Get second-order Taylor coefficient directly
+                    c2 = mctal.tally[tally].perturbation[pert].results[i]
+                    c2_values.append(c2)
+                
+                # Calculate the ratio c2/c1 directly for each energy bin
+                ratio_values = []
+                for j in range(len(c1_values)):
+                    if c1_values[j] != 0:  # Avoid division by zero
+                        ratio_values.append(c2_values[j] / c1_values[j])
+                    else:
+                        ratio_values.append(float('nan'))
+                
+                ratio_data[rxn] = TaylorRatio(
+                    energy=energy_str,
+                    reaction=rxn,
+                    pert_energies=pert_energies,
+                    c1=c1_values,
+                    c2=c2_values,
+                    ratio=ratio_values
+                )
         
         full_data[energy_str] = energy_data
+        if ratio_data:  # Only add if there are any ratios
+            ratios[energy_str] = ratio_data
 
+    # Process integral results if available
     if mctal.tally[tally].integral_result is not None:
         integral_data = {}
+        integral_ratio_data = {}
         integral_r0 = mctal.tally[tally].integral_result
         integral_e0 = mctal.tally[tally].integral_error
         
         for rxn in reactions:
-            sensCoef_int = np.zeros(len(group_dict[rxn]))
-            sensErr_int = np.zeros(len(group_dict[rxn]))
-            for j, pert in enumerate(group_dict[rxn]):
+            sensCoef_int = np.zeros(len(group_dict_first[rxn]))
+            sensErr_int = np.zeros(len(group_dict_first[rxn]))
+            
+            # Process first-order coefficients for integral results
+            for j, pert in enumerate(group_dict_first[rxn]):
                 c1_int = mctal.tally[tally].perturbation[pert].integral_result
                 e1_int = mctal.tally[tally].perturbation[pert].integral_error
                 sensCoef_int[j] = c1_int / integral_r0
                 sensErr_int[j] = np.sqrt(integral_e0**2 + e1_int**2)
+            
             integral_data[rxn] = Coefficients(
                 energy="integral",
                 reaction=rxn,
                 pert_energies=pert_energies,
                 values=sensCoef_int,
                 errors=sensErr_int,
-                r0=integral_r0,  
-                e0=integral_e0   
+                r0=integral_r0,
+                e0=integral_e0
             )
+            
+            # Process second-order coefficients for integral results (if available)
+            if has_second_order and rxn in group_dict_second:
+                c2_values_int = []
+                c1_values_int = []  # Store the actual Taylor coefficients
+                
+                for j, pert in enumerate(group_dict_second[rxn]):
+                    # Get first-order Taylor coefficient directly
+                    c1_int_val = mctal.tally[tally].perturbation[group_dict_first[rxn][j]].integral_result
+                    c1_values_int.append(c1_int_val)
+                    
+                    # Get second-order Taylor coefficient directly
+                    c2_int_val = mctal.tally[tally].perturbation[pert].integral_result
+                    c2_values_int.append(c2_int_val)
+                
+                # Calculate ratios for integral results
+                ratio_values_int = []
+                for j in range(len(c1_values_int)):
+                    if c1_values_int[j] != 0:
+                        ratio_values_int.append(c2_values_int[j] / c1_values_int[j])
+                    else:
+                        ratio_values_int.append(float('nan'))
+                
+                integral_ratio_data[rxn] = TaylorRatio(
+                    energy="integral",
+                    reaction=rxn,
+                    pert_energies=pert_energies,
+                    c1=c1_values_int,
+                    c2=c2_values_int,
+                    ratio=ratio_values_int
+                )
+        
         full_data["integral"] = integral_data
+        if integral_ratio_data:
+            ratios["integral"] = integral_ratio_data
     
     # Create SensitivityData object after all data is prepared
     return SensitivityData(
@@ -108,7 +195,8 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
         tally_name=mctal.tally[tally].name,
         zaid=zaid,
         label=label,
-        data=full_data  # Pass the fully populated data dictionary
+        data=full_data,
+        ratios=ratios
     )
 
 

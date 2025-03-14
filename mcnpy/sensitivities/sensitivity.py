@@ -1,10 +1,137 @@
 from dataclasses import dataclass, field
 from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL
-from typing import Dict, Union, List
+from typing import Dict, Union, List, Optional
 import numpy as np
 import matplotlib.pyplot as plt
 import math
 import pandas as pd
+
+
+@dataclass
+class TaylorRatio:
+    """Container for Taylor series expansion ratios between second and first-order coefficients.
+    
+    :ivar energy: Energy range string in format "lower_upper" (e.g., "0.00e+00_1.00e-01")
+    :type energy: str
+    :ivar reaction: Reaction number
+    :type reaction: int
+    :ivar pert_energies: Perturbation energy boundaries
+    :type pert_energies: List[float]
+    :ivar c1: First-order Taylor coefficients
+    :type c1: List[float]
+    :ivar c2: Second-order Taylor coefficients
+    :type c2: List[float]
+    :ivar ratio: Ratio of c2/c1 for each energy bin
+    :type ratio: List[float]
+    """
+    energy: str
+    reaction: int
+    pert_energies: list[float]
+    c1: list[float]
+    c2: list[float]
+    ratio: list[float]
+    
+    def calculate_nonlinearity(self, p: float) -> float:
+        """Calculate the nonlinearity factor at a specific perturbation.
+        
+        The nonlinearity factor is (c2*p)/c1, which represents the ratio of 
+        second-order to first-order term at perturbation magnitude p.
+        
+        :param p: Perturbation magnitude (0 to 100%)
+        :type p: float
+        :returns: Average nonlinearity across all energy bins
+        :rtype: float
+        """
+        valid_ratios = [r for r in self.ratio if not np.isnan(r)]
+        if not valid_ratios:
+            return float('nan')
+        # Convert p from percent to fraction (p/100)
+        p_fraction = p / 100.0
+        return np.mean(valid_ratios) * p_fraction
+    
+    def calculate_nonlinearity_by_bin(self, p: float) -> list:
+        """Calculate the nonlinearity factor for each energy bin at specific perturbation.
+        
+        The nonlinearity factor is (c2*p)/c1, which represents the ratio of 
+        second-order to first-order term at perturbation magnitude p.
+        
+        :param p: Perturbation magnitude (0 to 100%)
+        :type p: float
+        :returns: Nonlinearity factor for each energy bin
+        :rtype: list
+        """
+        # Convert p from percent to fraction (p/100)
+        p_fraction = p / 100.0
+        return [r * p_fraction if not np.isnan(r) else np.nan for r in self.ratio]
+    
+    def plot(self, ax=None, title=None, top_n=5):
+        """Plot the nonlinearity factor vs perturbation magnitude.
+        
+        The nonlinearity factor is plotted using absolute values for better comparison,
+        as the sign of the ratio doesn't provide valuable information in this context.
+        
+        :param ax: Optional existing axis to plot on
+        :type ax: matplotlib.axes.Axes, optional
+        :param title: Optional custom title for the plot
+        :type title: str, optional
+        :param top_n: Number of top absolute ratios to plot (0 means plot all)
+        :type top_n: int, optional
+        :returns: The axis containing the plot
+        :rtype: matplotlib.axes.Axes
+        """
+        if ax is None:
+            # Use the same figure size as in SensitivityData.plot_ratio() for consistency
+            fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Calculate x values (perturbation magnitudes in percent)
+        p_values = np.linspace(0, 20, 100)
+        
+        # Calculate nonlinearity for each energy bin and identify top N ratios by absolute value
+        # Include zeros as valid candidates for top_n
+        abs_ratios = [abs(r) if not np.isnan(r) else 0 for r in self.ratio]
+        sorted_indices = np.argsort(abs_ratios)[::-1]  # Sort in descending order
+        
+        # If top_n is 0, plot all with labels
+        if top_n == 0:
+            top_indices = list(range(len(self.ratio)))
+        else:
+            top_indices = sorted_indices[:min(top_n, len(abs_ratios))]  # Get top N (or fewer if there aren't N)
+        
+        # Only plot lines for top_n energy bins
+        for i in top_indices:
+            if np.isnan(self.ratio[i]):
+                continue
+                
+            # Calculate the nonlinearity values for this bin across p_values
+            # Convert p_values from percent to fraction for calculation
+            # Use absolute values for plotting
+            abs_ratio = abs(self.ratio[i])
+            y_values = [p/100.0 * abs_ratio * 100 for p in p_values]  # Convert to percentage
+            # Include the actual ratio value in the label
+            label = f"{self.pert_energies[i]:.2e}-{self.pert_energies[i+1]:.2e} MeV  ({abs_ratio:.2e})"
+            
+            ax.plot(p_values, y_values, label=label)
+        
+        # Add a horizontal line at 0
+        ax.axhline(y=0, color='k', linestyle='-', alpha=0.2)
+        
+        # Set plot style
+        if title:
+            ax.set_title(title, fontsize=14)
+        else:
+            ax.set_title(f"MT = {self.reaction} ({self.energy})", fontsize=14)
+        
+        ax.set_xlabel("Perturbation (%)", fontsize=12)
+        ax.set_ylabel("Absolute Nonlinearity Factor (%)", fontsize=12)
+        ax.grid(True, alpha=0.3)
+        
+        # Add legend only if we have any top ratios
+        if len(top_indices) > 0:
+            legend_title = "All Energy Bins" if top_n == 0 else f"Top {len(top_indices)} Energy Bins"
+            ax.legend(title=legend_title, bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        plt.tight_layout()
+        return ax
 
 
 @dataclass
@@ -23,6 +150,8 @@ class SensitivityData:
     :type tally_name: str
     :ivar data: Nested dictionary containing sensitivity coefficients organized by energy and reaction number
     :type data: Dict[str, Dict[int, Coefficients]]
+    :ivar ratios: Dictionary containing Taylor series ratios organized by energy and reaction number
+    :type ratios: Dict[str, Dict[int, TaylorRatio]]
     :ivar lethargy: List of lethargy intervals between perturbation energies
     :type lethargy: List[float]
     :ivar energies: List of energy values used as keys in the data dictionary
@@ -38,6 +167,7 @@ class SensitivityData:
     label: str
     tally_name: str = None
     data: Dict[str, Dict[int, 'Coefficients']] = None
+    ratios: Dict[str, Dict[int, TaylorRatio]] = field(default_factory=dict)
     lethargy: List[float] = field(init=False, repr=False)
     energies: List[str] = field(init=False, repr=False)
     reactions: List[int] = field(init=False, repr=False)
@@ -66,7 +196,7 @@ class SensitivityData:
         a = self.zaid % 1000
         self.nuclide = f"{ATOMIC_NUMBER_TO_SYMBOL[z]}-{a}"
 
-    def plot(self, energy: Union[str, List[str]] = None, 
+    def plot_sensitivity(self, energy: Union[str, List[str]] = None, 
              reaction: Union[List[int], int] = None, xlim: tuple = None):
         """Plot sensitivity coefficients for specified energies and reactions.
 
@@ -148,6 +278,98 @@ class SensitivityData:
             plt.tight_layout()
             plt.show()
 
+    def plot_ratio(self, energy: Union[str, List[str]] = None, reaction: Union[List[int], int] = None, top_n: int = 5):
+        """Plot ratio of second-order to first-order sensitivity coefficients.
+        
+        The ratio is calculated as:
+            R = (c2 * p) / c1
+        
+        Where:
+            - c2 is the second-order coefficient
+            - c1 is the first-order coefficient
+            - p is the perturbation fraction
+
+        :param energy: Energy string(s) to plot. If None, plots all energies
+        :type energy: Union[str, List[str]], optional
+        :param reaction: Reaction number(s) to plot. If None, plots all reactions
+        :type reaction: Union[List[int], int], optional
+        :param top_n: Number of top absolute ratios to plot with labels (0 means plot all)
+        :type top_n: int, optional
+        :raises ValueError: If sensitivity data does not contain Taylor ratios
+        :raises ValueError: If specified energies are not found in the data
+        """
+        if not self.ratios:
+            raise ValueError("Taylor ratios are required for ratio plots. Please recompute sensitivity with include_second_order=True.")
+            
+        # If no energy specified, use all energies
+        if energy is None:
+            energies = list(self.ratios.keys())
+        else:
+            # Ensure energy is always a list
+            energies = [energy] if not isinstance(energy, list) else energy
+            # Validate all energies exist in data
+            invalid_energies = [e for e in energies if e not in self.ratios]
+            if invalid_energies:
+                raise ValueError(f"Energies {invalid_energies} not found in ratio data.")
+
+        # Ensure reactions is always a list
+        if reaction is None:
+            # Get unique reactions from all energy data
+            reaction = list(set().union(*[d.keys() for d in self.ratios.values()]))
+            # Sort reactions in ascending numerical order
+            reaction.sort()
+        elif not isinstance(reaction, list):
+            reaction = [reaction]
+
+        # Create a separate figure for each energy
+        for e in energies:
+            rxn_dict = self.ratios[e]
+            n = len(reaction)
+            
+            # Use a single Axes if only one reaction
+            if n == 1:
+                fig, ax = plt.subplots(figsize=(8, 6))
+                axes = [ax]
+            else:
+                cols = 1  # Changed from 2 to 1 to have only one figure per row
+                rows = n  # Now rows equals the number of reactions
+                fig, axes = plt.subplots(rows, cols, figsize=(10, 6 * rows))  # Adjust figure size
+                # Ensure axes is a flat list of Axes objects
+                if hasattr(axes, "flatten"):
+                    axes = list(axes.flatten())
+                else:
+                    axes = [axes]
+            
+            # Energy group title
+            if e == "integral":
+                title_text = f"Order Ratio - Integral Result"
+            else:
+                # Parse the energy range from the string format
+                try:
+                    lower, upper = e.split('_')
+                    title_text = f"Order Ratio - Energy Range: {lower} - {upper} MeV"
+                except ValueError:
+                    title_text = f"Order Ratio - Energy = {e}"
+            
+            fig.suptitle(title_text, y=1.01, fontsize=16)
+            
+            for i, rxn in enumerate(reaction):
+                ax = axes[i]
+                if rxn not in rxn_dict:
+                    ax.text(0.5, 0.5, f"Reaction {rxn} not found", ha='center', va='center')
+                    ax.axis('off')
+                else:
+                    # Get the TaylorRatio object and plot it
+                    ratio_obj = rxn_dict[rxn]
+                    ratio_obj.plot(ax=ax, title=f"MT = {rxn}", top_n=top_n)
+
+            # Hide any extra subplots
+            for j in range(n, len(axes)):
+                axes[j].axis('off')
+            
+            plt.tight_layout()
+            plt.show()
+            
     def to_dataframe(self) -> pd.DataFrame:
         """Export sensitivity data as a pandas DataFrame for plotting.
 
@@ -237,7 +459,11 @@ class SensitivityData:
         info_lines.append(f"{'Number of perturbation bins:':{label_width}} {num_pert_bins}")
         info_lines.append(f"{'Reactions available:':{label_width}} {', '.join(map(str, self.reactions))}")
         
-        # Removed the "Integral results:" line as requested
+        # Add information about Taylor ratios if available
+        if self.ratios:
+            info_lines.append(f"{'Linearity ratios available:':{label_width}} Yes")
+        else:
+            info_lines.append(f"{'Linearity ratios available:':{label_width}} No")
         
         stats = "\n".join(info_lines)
         
@@ -256,7 +482,9 @@ class SensitivityData:
         
         # Add an empty line before the footer with available methods
         footer = "\n\nAvailable methods:\n"
-        footer += "- .plot(energy=None, reactions=None, xlim=None) - Plot sensitivity profiles\n"
+        footer += "- .plot_sensitivity(energy=None, reaction=None, xlim=None) - Plot sensitivity profiles\n"
+        if self.ratios:
+            footer += "- .plot_ratios(energy=None, reaction=None, p_range=None) - Plot Taylor ratio nonlinearity factors\n"
         footer += "- .to_dataframe() - Get full data as pandas DataFrame\n"
         
         # Add examples of accessing data
@@ -264,6 +492,10 @@ class SensitivityData:
         examples += "- .data['0.00e+00_1.00e-01'][1] - Get coefficients for energy bin 0-0.1 MeV, reaction 1\n"
         if "integral" in self.energies:
             examples += "- .data['integral'][2] - Get integral coefficients for reaction 2\n"
+        if self.ratios:
+            energy_key = next(iter(self.ratios.keys()))
+            rxn_key = next(iter(self.ratios[energy_key].keys()))
+            examples += f"- .ratios['{energy_key}'][{rxn_key}] - Get Taylor ratio data for energy bin, reaction {rxn_key}\n"
         
         # Combine all sections
         return header + stats + energy_info + footer + examples
@@ -279,14 +511,18 @@ class Coefficients:
     :type reaction: int
     :ivar pert_energies: Perturbation energy boundaries
     :type pert_energies: List[float]
-    :ivar values: Sensitivity coefficient values
+    :ivar values: Sensitivity coefficient values (first-order)
     :type values: List[float]
-    :ivar errors: Relative errors for the sensitivity coefficients
+    :ivar errors: Relative errors for the sensitivity coefficients (first-order)
     :type errors: List[float]
     :ivar r0: Unperturbed tally result
     :type r0: float
     :ivar e0: Unperturbed tally error
     :type e0: float
+    :ivar values_second: Second-order sensitivity coefficient values
+    :type values_second: List[float], optional
+    :ivar errors_second: Relative errors for the second-order sensitivity coefficients
+    :type errors_second: List[float], optional
     """
     energy: str
     reaction: int
@@ -294,7 +530,9 @@ class Coefficients:
     values: list[float]
     errors: list[float]
     r0: float = None 
-    e0: float = None 
+    e0: float = None
+    values_second: list[float] = None
+    errors_second: list[float] = None
 
     @property
     def lethargy(self):
