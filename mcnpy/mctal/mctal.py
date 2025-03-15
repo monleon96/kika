@@ -58,25 +58,41 @@ class Mctal:
         if self.tally is None:
             self.tally = {}  
 
-    def print_summary(self):
-        """Prints a summary of the MCTAL file contents.
+    def __repr__(self):
+        """Returns a formatted string representation of the MCTAL file data.
         
-        Displays general information about the MCNP run and summary statistics
-        for each tally without showing all the detailed data.
+        This method is called when the object is evaluated in interactive environments
+        like Jupyter notebooks or the Python interpreter.
+        
+        :return: Formatted string representation of the MCTAL file
+        :rtype: str
         """
-        print("=" * 50)
-        print(f"{'MCNP MCTAL SUMMARY':^50}")
-        print("=" * 50)
+        # Create a visually appealing header with a border
+        header_width = 60
+        header = "=" * header_width + "\n"
+        header += f"{'MCNP MCTAL File Summary':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
         
-        # Header information
-        print(f"\n{'Code:':20} {self.code_name} {self.ver}")
-        print(f"{'Problem ID:':20} {self.probid}")
-        print(f"{'NPS:':20} {self.nps:.2e}")
+        # Create aligned key-value pairs with consistent width
+        label_width = 20
+        
+        # General information section
+        info_lines = []
+        if self.code_name:
+            info_lines.append(f"{'Code:':>{label_width}} {self.code_name} {self.ver}")
+        if self.probid:
+            info_lines.append(f"{'Problem ID:':>{label_width}} {self.probid}")
+        if self.nps:
+            info_lines.append(f"{'NPS:':>{label_width}} {self.nps:.2e}")
         if self.problem_id:
-            print(f"{'Title:':20} {self.problem_id}")
-        print("")
-
-        # Add table showing tally type distribution
+            info_lines.append(f"{'Title:':>{label_width}} {self.problem_id}")
+        
+        info_section = "\n".join(info_lines)
+        
+        # Tally type distribution
+        tally_section = "\n\nTally Information:\n"
+        tally_section += f"{'Total Tallies:':>{label_width}} {self.ntal}\n"
+        
         if self.tally:
             # Count tallies by type (last digit)
             tally_type_counts = {}
@@ -86,56 +102,37 @@ class Mctal:
                 tally_type_counts[tally_type] = tally_type_counts.get(tally_type, 0) + 1
             
             if tally_type_counts:
-                print("\nTally Type Distribution:")
-                print("-" * 30)
-                print(f"{'Tally Type':^15}|{'Count':^12}")
-                print("-" * 30)
+                tally_section += "\nTally Type Distribution:\n"
+                tally_section += "-" * 30 + "\n"
+                tally_section += f"{'Tally Type':^15}|{'Count':^12}\n"
+                tally_section += "-" * 30 + "\n"
                 
                 # Sort by tally type number
                 for tally_type in sorted(tally_type_counts.keys()):
-                    print(f"{tally_type:^15}|{tally_type_counts[tally_type]:^12}")
-                print("-" * 30)
-                # Add the total number of tallies here
-                print(f"Total: {self.ntal} tallies\n")
+                    tally_section += f"{tally_type:^15}|{tally_type_counts[tally_type]:^12}\n"
+                tally_section += "-" * 30 + "\n"
         
-        # Summary for each tally
-        if self.tally:
-            # Get maximum tally ID length for proper formatting
-            max_id_length = max(len(str(tally_id)) for tally_id in self.tally.keys())
-            id_column_width = max(8, max_id_length + 3)  # Min width 8, or length + 3 spaces
-            
-            total_width = id_column_width + 12 + 12 + 18 + 3  # 3 separators
-            
-            print("\nTally Summary:")
-            print("-" * total_width) 
-            print(f"{'ID':^{id_column_width}}|{'Results':^12}|{'Energy Bins':^12}|{'Name':^18}")
-            print("-" * total_width)  
-            
-            for tally_id, tally_obj in self.tally.items():
-                result_count = len(tally_obj.results) if tally_obj.results else 0
-                energy_bins = len(tally_obj.energies) if tally_obj.energies else 0
-                name = (tally_obj.name[:15] + '...') if len(tally_obj.name) > 18 else tally_obj.name
-                
-                # Right-align with dynamic width, ensuring at least 2 spaces padding
-                id_field_width = id_column_width - 3
-                print(f"{tally_id:>{id_field_width}}   |{result_count:^12}|{energy_bins:^12}|{name:^18}")
-            print("-" * total_width + "\n") 
-        
-        # Perturbation data summary
+        # Perturbation summary
+        pert_section = ""
         tallies_with_pert = [(tid, len(t.perturbation)) for tid, t in self.tally.items() if t.perturbation]
         if tallies_with_pert:
-            print("\nPerturbation Data Summary:")
-            print("-" * 35)
-            print(f"{'Tally ID':^15}|{'Perturbations':^18}")
-            print("-" * 35)
+            pert_section = "\n\nPerturbation Data Summary:\n"
+            pert_section += "-" * 35 + "\n"
+            pert_section += f"{'Tally ID':^15}|{'Perturbations':^18}\n"
+            pert_section += "-" * 35 + "\n"
             
             for tally_id, pert_count in sorted(tallies_with_pert):
-                print(f"{tally_id:^15}|{pert_count:^18}")
+                pert_section += f"{tally_id:^15}|{pert_count:^18}\n"
             
-            print("-" * 35)
-            print(f"Total: {sum(count for _, count in tallies_with_pert)} perturbations across {len(tallies_with_pert)} tallies")
+            pert_section += "-" * 35 + "\n"
+            pert_section += f"Total: {sum(count for _, count in tallies_with_pert)} perturbations across {len(tallies_with_pert)} tallies\n"
         
-        print("\n" + "=" * 50 + "\n")
+        # Add information about methods
+        footer = "\n\nAvailable methods:\n"
+        footer += "- .tally[tally_id] - Access individual tallies\n"
+        
+        # Combine all sections
+        return header + info_section + tally_section + pert_section + footer
 
 class PerturbationCollection(dict):
     """A collection class for perturbation data that provides a nice summary representation.

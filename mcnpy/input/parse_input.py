@@ -1,4 +1,5 @@
-from .input import Input, Perturbation, Pert
+from .input import Input
+from .perturbations import Perturbation, Pert
 from .material import Mat, Materials
 import re
 
@@ -11,9 +12,9 @@ def _read_PERT(lines, start_index):
     :type start_index: int
 
     :returns: A tuple containing:
-        - Perturbation object with parsed data, or None if parsing fails
+        - Pert object with parsed data, or None if parsing fails
         - The new index after processing the PERT card
-    :rtype: tuple[Perturbation, int]
+    :rtype: tuple[Pert, int]
     """
     i = start_index
     line = lines[i].strip()
@@ -76,7 +77,7 @@ def _read_PERT(lines, start_index):
         else:
             break
     
-    return Perturbation(id=pert_num, particle=particle, **pert_attrs), i + 1
+    return Pert(id=pert_num, particle=particle, **pert_attrs), i + 1
 
 def _read_material(lines, start_index):
     """Internal helper function to read and parse a material card from MCNP input lines.
@@ -207,7 +208,7 @@ def read_mcnp(file_path):
     :rtype: Input
     """
     inst = Input()  # instance of the input class
-    inst.pert = Pert()
+    inst.perturbation = Perturbation()
     inst.materials = Materials()
     
     with open(file_path, 'r') as f:
@@ -219,7 +220,7 @@ def read_mcnp(file_path):
         if line.startswith("PERT"):
             pert_obj, i = _read_PERT(lines, i)  
             if pert_obj:
-                inst.pert.perturbation[pert_obj.id] = pert_obj
+                inst.perturbation.pert[pert_obj.id] = pert_obj
         elif line.startswith("m"):
             material_obj, i = _read_material(lines, i)
             if material_obj:

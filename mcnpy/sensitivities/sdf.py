@@ -45,6 +45,58 @@ class SDFReactionData:
             raise KeyError(f"MT number {self.mt} not found in MT_TO_REACTION dictionary")
             
         self.reaction_name = MT_TO_REACTION[self.mt]
+    
+    def __repr__(self) -> str:
+        """Returns a formatted string representation of the reaction data.
+        
+        This method is called when the object is evaluated in interactive environments
+        like Jupyter notebooks or the Python interpreter.
+        
+        :return: Formatted string representation of the reaction data
+        :rtype: str
+        """
+        # Create a visually appealing header with a border
+        header_width = 60
+        header = "=" * header_width + "\n"
+        header += f"{'SDF Reaction Data':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        # Create aligned key-value pairs with consistent width
+        label_width = 25  # Width for labels
+        
+        info_lines = []
+        info_lines.append(f"{'Nuclide:':{label_width}} {self.nuclide} (ZAID {self.zaid})")
+        info_lines.append(f"{'Reaction:':{label_width}} {self.reaction_name} (MT {self.mt})")
+        info_lines.append(f"{'Energy groups:':{label_width}} {len(self.sensitivity)}")
+        
+        # Calculate total sensitivity
+        total_sens = sum(self.sensitivity)
+        info_lines.append(f"{'Total sensitivity:':{label_width}} {total_sens:.6e}")
+        
+        stats = "\n".join(info_lines)
+        
+        # Data preview - show first few and last few sensitivity values
+        data_preview = "\n\nSensitivity coefficients (preview):\n"
+        data_preview += "  Group      Sensitivity       Rel. Error\n"
+        data_preview += "  -----    --------------    ------------\n"
+        
+        # Show first 3 and last 3 groups, if available
+        n_groups = len(self.sensitivity)
+        preview_count = min(3, n_groups)
+        
+        for i in range(preview_count):
+            data_preview += f"  {i+1:<5d}    {self.sensitivity[i]:14.6e}    {self.error[i]:12.6e}\n"
+            
+        # Add ellipsis if there are more than 6 groups
+        if n_groups > 6:
+            data_preview += "  ...\n"
+            
+        # Show last 3 groups if there are more than 3 groups
+        if n_groups > 3:
+            for i in range(max(preview_count, n_groups-3), n_groups):
+                data_preview += f"  {i+1:<5d}    {self.sensitivity[i]:14.6e}    {self.error[i]:12.6e}\n"
+        
+        return header + stats + data_preview
 
 
 @dataclass
@@ -101,6 +153,95 @@ class SDFData:
             summary.append(f"  {nuclide}: {reaction_str}")
         
         return "\n".join(summary)
+
+    def __repr__(self) -> str:
+        """Returns a detailed formatted string representation of the SDF data.
+        
+        This method is called when the object is evaluated in interactive environments
+        like Jupyter notebooks or the Python interpreter.
+        
+        :return: Formatted string representation of the SDF data
+        :rtype: str
+        """
+        # Create a visually appealing header with a border
+        header_width = 70
+        header = "=" * header_width + "\n"
+        header += f"{'SDF Data: ' + self.title:^{header_width}}\n"
+        header += f"{'Energy range: ' + self.energy:^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        # Create aligned key-value pairs with consistent width
+        label_width = 25  # Width for labels
+        
+        # Basic information section
+        info_lines = []
+        info_lines.append(f"{'Response value:':{label_width}} {self.r0:.6e} ± {self.e0:.6e}")
+        info_lines.append(f"{'Energy groups:':{label_width}} {len(self.pert_energies) - 1}")
+        info_lines.append(f"{'Sensitivity profiles:':{label_width}} {len(self.data)}")
+        
+        # Count unique nuclides
+        nuclides = {react.nuclide for react in self.data}
+        info_lines.append(f"{'Unique nuclides:':{label_width}} {len(nuclides)}")
+        
+        stats = "\n".join(info_lines)
+        
+        # Energy grid preview
+        energy_preview = "\n\nEnergy grid (preview):"
+        energy_grid = "  " + ", ".join(f"{e:.6e}" for e in self.pert_energies[:3])
+        
+        if len(self.pert_energies) > 6:
+            energy_grid += ", ... , " 
+            energy_grid += ", ".join(f"{e:.6e}" for e in self.pert_energies[-3:])
+        elif len(self.pert_energies) > 3:
+            energy_grid += ", " + ", ".join(f"{e:.6e}" for e in self.pert_energies[3:])
+            
+        energy_preview += "\n  " + energy_grid
+        
+        # Data summary - most important nuclides and reactions with indices
+        data_summary = "\n\nNuclides and reactions (with access indices):\n"
+        
+        # Group by nuclide
+        nuclide_reactions = {}
+        nuclide_indices = {}
+        
+        # Store all reaction data with their indices
+        for idx, react in enumerate(self.data):
+            if react.nuclide not in nuclide_reactions:
+                nuclide_reactions[react.nuclide] = []
+                nuclide_indices[react.nuclide] = []
+            nuclide_reactions[react.nuclide].append((react.reaction_name, react.mt))
+            nuclide_indices[react.nuclide].append(idx)
+        
+        # Determine width for consistent alignment
+        reaction_width = 30  # Base width for reaction name + MT
+        
+        # Show data for each nuclide (limit to first 5 nuclides)
+        for i, nuclide in enumerate(sorted(nuclide_reactions.keys())):
+            if i >= 5:
+                data_summary += f"\n  ... ({len(nuclides) - 5} more nuclides) ...\n"
+                break
+                
+            data_summary += f"\n  {nuclide}:\n"
+            reactions = nuclide_reactions[nuclide]
+            indices = nuclide_indices[nuclide]
+            
+            # Sort by MT number but keep track of original indices
+            sorted_data = sorted(zip(reactions, indices), key=lambda x: x[0][1])
+            
+            for j, ((name, mt), idx) in enumerate(sorted_data):
+                if j >= 10:  # Limit to 10 reactions per nuclide
+                    data_summary += f"    ... ({len(reactions) - 10} more reactions) ...\n"
+                    break
+                # Format the reaction info with consistent alignment for the "access with" part
+                reaction_info = f"{name} (MT={mt})"
+                data_summary += f"    {reaction_info:{reaction_width}} access with .data[{idx}]\n"
+        
+        # Footer with available methods
+        footer = "\n\nAvailable methods:\n"
+        footer += "- .write_file() - Write SDF data to a file\n"
+        footer += "- .group_inelastic_reactions() - Group MT 51-91 into MT 4\n"
+        
+        return header + stats + energy_preview + data_summary + footer
 
     def write_file(self, output_dir: Optional[str] = None):
         """

@@ -23,6 +23,10 @@ class TaylorRatio:
     :type c2: List[float]
     :ivar ratio: Ratio of c2/c1 for each energy bin
     :type ratio: List[float]
+    :ivar c2_errors: Errors of second-order Taylor coefficients
+    :type c2_errors: List[float]
+    :ivar c1_errors: Errors of first-order Taylor coefficients
+    :type c1_errors: List[float]
     """
     energy: str
     reaction: int
@@ -30,6 +34,8 @@ class TaylorRatio:
     c1: list[float]
     c2: list[float]
     ratio: list[float]
+    c2_errors: list[float]
+    c1_errors: list[float]
     
     def calculate_nonlinearity(self, p: float) -> float:
         """Calculate the nonlinearity factor at a specific perturbation.
@@ -80,8 +86,8 @@ class TaylorRatio:
         :rtype: matplotlib.axes.Axes
         """
         if ax is None:
-            # Use the same figure size as in SensitivityData.plot_ratio() for consistency
-            fig, ax = plt.subplots(figsize=(10, 6))
+            # Use smaller figure size to match SensitivityData.plot_ratio()
+            fig, ax = plt.subplots(figsize=(8, 4))  # Reduced from (10, 6) to (8, 4)
         
         # Calculate x values (perturbation magnitudes in percent)
         p_values = np.linspace(0, 20, 100)
@@ -119,10 +125,10 @@ class TaylorRatio:
         if title:
             ax.set_title(title, fontsize=14)
         else:
-            ax.set_title(f"MT = {self.reaction} ({self.energy})", fontsize=14)
+            ax.set_title(f"MT {self.reaction} - {self.energy} MeV", fontsize=14)
         
         ax.set_xlabel("Perturbation (%)", fontsize=12)
-        ax.set_ylabel("Absolute Nonlinearity Factor (%)", fontsize=12)
+        ax.set_ylabel("Nonlinearity Factor (%)", fontsize=12)
         ax.grid(True, alpha=0.3)
         
         # Add legend only if we have any top ratios
@@ -328,12 +334,12 @@ class SensitivityData:
             
             # Use a single Axes if only one reaction
             if n == 1:
-                fig, ax = plt.subplots(figsize=(8, 6))
+                fig, ax = plt.subplots(figsize=(8, 4))  # Reduced height from 6 to 4
                 axes = [ax]
             else:
                 cols = 1  # Changed from 2 to 1 to have only one figure per row
                 rows = n  # Now rows equals the number of reactions
-                fig, axes = plt.subplots(rows, cols, figsize=(10, 6 * rows))  # Adjust figure size
+                fig, axes = plt.subplots(rows, cols, figsize=(8, 3 * rows))  # Reduced height per row from 6 to 3
                 # Ensure axes is a flat list of Axes objects
                 if hasattr(axes, "flatten"):
                     axes = list(axes.flatten())
@@ -342,16 +348,16 @@ class SensitivityData:
             
             # Energy group title
             if e == "integral":
-                title_text = f"Order Ratio - Integral Result"
+                title_text = f"Integral Result"
             else:
                 # Parse the energy range from the string format
                 try:
                     lower, upper = e.split('_')
-                    title_text = f"Order Ratio - Energy Range: {lower} - {upper} MeV"
+                    title_text = f"Energy Range: {lower} - {upper} MeV"
                 except ValueError:
-                    title_text = f"Order Ratio - Energy = {e}"
+                    title_text = f"Energy = {e}"
             
-            fig.suptitle(title_text, y=1.01, fontsize=16)
+            fig.suptitle(title_text, y=1.01, fontsize=14)  # Reduced font size from 16 to 14
             
             for i, rxn in enumerate(reaction):
                 ax = axes[i]
@@ -361,7 +367,7 @@ class SensitivityData:
                 else:
                     # Get the TaylorRatio object and plot it
                     ratio_obj = rxn_dict[rxn]
-                    ratio_obj.plot(ax=ax, title=f"MT = {rxn}", top_n=top_n)
+                    ratio_obj.plot(ax=ax, title=f"MT {rxn}", top_n=top_n)
 
             # Hide any extra subplots
             for j in range(n, len(axes)):
@@ -500,6 +506,236 @@ class SensitivityData:
         # Combine all sections
         return header + stats + energy_info + footer + examples
 
+    def plot_perturbed_response(self, 
+                            energy: Union[str, List[str]] = None, 
+                            reaction: Union[List[int], int] = None,
+                            p_range: tuple = (-20, 20),
+                            n_points: int = 100, 
+                            top_n: int = 3,
+                            plot_type: str = 'comparative',
+                            e_bins: List[int] = None,
+                            n_sigma: float = 1.0):
+        """Plot perturbed response as a function of perturbation magnitude.
+        
+        Compares first-order approximation R(p) = R0 + c1*p with 
+        second-order approximation R(p) = R0 + c1*p + c2*p^2.
+        
+        :param energy: Energy string(s) to plot. If None, plots all energies
+        :type energy: Union[str, List[str]], optional
+        :param reaction: Reaction number(s) to plot. If None, plots all reactions
+        :type reaction: Union[List[int], int], optional
+        :param p_range: Range of perturbation magnitudes as (min%, max%) in percent
+        :type p_range: tuple, optional
+        :param n_points: Number of points to evaluate for plotting
+        :type n_points: int, optional
+        :param top_n: Number of perturbation energy bins with highest nonlinearity to show.
+                    If 0, shows all bins.
+        :type top_n: int, optional
+        :param plot_type: Type of plot: 'comparative' (1st vs. 1st+2nd order) or 
+                         'difference' (difference between approximations)
+        :type plot_type: str, optional
+        :param e_bins: Specific indices of perturbation energy bins to plot.
+                      Overrides top_n if provided.
+        :type e_bins: List[int], optional
+        :param n_sigma: Number of standard deviations to show in error bands
+        :type n_sigma: float, optional
+        :raises ValueError: If sensitivity data does not contain Taylor ratios
+        :raises ValueError: If specified energies are not found in the data
+        """
+        if not self.ratios:
+            raise ValueError("Taylor ratios are required for perturbed response plots. "
+                            "Please recompute sensitivity with include_second_order=True.")
+            
+        # If no energy specified, use all energies
+        if energy is None:
+            energies = list(self.ratios.keys())
+        else:
+            # Ensure energy is always a list
+            energies = [energy] if not isinstance(energy, list) else energy
+            # Validate all energies exist in data
+            invalid_energies = [e for e in energies if e not in self.ratios]
+            if invalid_energies:
+                raise ValueError(f"Energies {invalid_energies} not found in ratio data.")
+
+        # Ensure reactions is always a list
+        if reaction is None:
+            # Get unique reactions from all energy data
+            reaction = list(set().union(*[d.keys() for d in self.ratios.values()]))
+            # Sort reactions in ascending numerical order
+            reaction.sort()
+        elif not isinstance(reaction, list):
+            reaction = [reaction]
+
+        # Validate plot_type
+        valid_plot_types = ['comparative', 'difference']
+        if plot_type not in valid_plot_types:
+            raise ValueError(f"plot_type must be one of {valid_plot_types}")
+
+        # Generate perturbation values (convert from percent to fraction)
+        p_values = np.linspace(p_range[0], p_range[1], n_points) / 100.0
+        
+        # Create a separate figure for each energy
+        for e in energies:
+            for rxn in reaction:
+                if rxn not in self.ratios[e]:
+                    # Skip if reaction not available for this energy
+                    continue
+                
+                # Get Taylor coefficients and their errors
+                ratio_obj = self.ratios[e][rxn]
+                c1_values = ratio_obj.c1
+                c2_values = ratio_obj.c2
+                c1_errors = ratio_obj.c1_errors
+                c2_errors = ratio_obj.c2_errors
+                r0 = self.data[e][rxn].r0
+                e0_relative = self.data[e][rxn].e0  # Unperturbed error (in relative form)
+                e0_abs = r0 * e0_relative  # Convert to absolute error
+                
+                # Get the number of perturbation energy bins
+                n_bins = len(c1_values)
+                
+                if e_bins is not None:
+                    # Use specific bins if provided
+                    selected_bins = [i for i in e_bins if i < n_bins]
+                elif top_n > 0:
+                    # Calculate nonlinearity metric for each bin (use maximum p in range)
+                    max_p = max(abs(p_range[0]), abs(p_range[1])) / 100.0
+                    nonlinearity = np.array([abs((c2_values[i] * max_p) / c1_values[i]) 
+                                           if c1_values[i] != 0 else 0 
+                                           for i in range(n_bins)])
+                    # Get indices of top_n bins with highest nonlinearity
+                    selected_bins = np.argsort(nonlinearity)[-top_n:]
+                else:
+                    # Use all bins
+                    selected_bins = list(range(n_bins))
+                
+                # Skip if no bins to plot
+                if len(selected_bins) == 0:
+                    continue
+                
+                # Create figure with one row per selected energy bin
+                n_selected = len(selected_bins)
+                fig, axes = plt.subplots(n_selected, 1, figsize=(10, 4 * n_selected), 
+                                       sharex=True, squeeze=False)
+                axes = axes.flatten()
+                
+                # Set main title
+                if e == "integral":
+                    title_text = f"MT {rxn} - Integral Result"
+                else:
+                    try:
+                        lower, upper = e.split('_')
+                        title_text = f"MT {rxn} - Energy Range: {lower} - {upper} MeV"
+                    except ValueError:
+                        title_text = f"MT {rxn} - Energy = {e}"
+                
+                fig.suptitle(title_text, fontsize=16, y=1.02)
+                
+                # Plot each selected energy bin
+                for i, bin_idx in enumerate(selected_bins):
+                    ax = axes[i]
+                    
+                    # Get bin-specific coefficients and errors
+                    c1 = c1_values[bin_idx]
+                    c2 = c2_values[bin_idx]
+                    
+                    # Convert relative errors to absolute errors
+                    c1_err_abs = c1 * c1_errors[bin_idx]  # Convert relative to absolute error
+                    c2_err_abs = c2 * c2_errors[bin_idx]  # Convert relative to absolute error
+                    
+                    # Calculate first and second order responses
+                    first_order = r0 + c1 * p_values
+                    second_order = r0 + c1 * p_values + c2 * (p_values**2)
+                    
+                    # Calculate errors for first and second order using error propagation
+                    # Now using all absolute errors properly
+                    first_order_err = np.sqrt(e0_abs**2 + (c1_err_abs * p_values)**2)
+                    second_order_err = np.sqrt(e0_abs**2 + (c1_err_abs * p_values)**2 + 
+                                             (c2_err_abs * p_values**2)**2)
+                    
+                    # Scale errors by n_sigma
+                    first_order_err *= n_sigma
+                    second_order_err *= n_sigma
+                    
+                    # Get energy bin boundaries for title
+                    e_low = ratio_obj.pert_energies[bin_idx]
+                    e_high = ratio_obj.pert_energies[bin_idx+1]
+                    
+                    # Set subplot title
+                    ax.set_title(f"Perturbation Energy Bin: {e_low:.2e} - {e_high:.2e} MeV", fontsize=12)
+                    
+                    if plot_type == 'comparative':
+                        # Plot both approximations with error bands
+                        # First order (blue)
+                        ax.plot(p_values * 100, first_order, 'b-', linewidth=2, 
+                               label=f"First Order: R₀ + c₁·p")
+                        ax.fill_between(p_values * 100, 
+                                      first_order - first_order_err, 
+                                      first_order + first_order_err, 
+                                      color='blue', alpha=0.2)
+                        
+                        # Second order (red) - now using solid line instead of dashed
+                        ax.plot(p_values * 100, second_order, 'r-', linewidth=2, 
+                               label=f"Second Order: R₀ + c₁·p + c₂·p²")
+                        ax.fill_between(p_values * 100, 
+                                      second_order - second_order_err, 
+                                      second_order + second_order_err, 
+                                      color='red', alpha=0.2)
+                        
+                        # Reference line for unperturbed value
+                        ax.axhline(y=r0, color='k', linestyle='-', alpha=0.3, 
+                                  label=f"Unperturbed (R₀ = {r0:.4e})")
+                        
+                        # Calculate and display nonlinearity metric
+                        max_p_abs = max(abs(p_range[0]), abs(p_range[1]))
+                        nonlin = (c2 * (max_p_abs/100)) / c1 * 100 if c1 != 0 else float('nan')
+                        ax.text(0.02, 0.95, 
+                              f"Ratio (c₂·p/c₁) at {max_p_abs}%: {nonlin:.2f}% | {n_sigma}σ error bands", 
+                              transform=ax.transAxes, fontsize=10, 
+                              bbox=dict(facecolor='white', alpha=0.7))
+                        
+                        ylabel = "Response"
+                    
+                    else:  # 'difference'
+                        # Plot difference between approximations
+                        diff = ((second_order - first_order) / r0) * 100  # percent difference
+                        
+                        # Calculate error in the difference
+                        # We need the absolute error of the difference between approximations
+                        # For the difference (second_order - first_order), r0 error doesn't affect the difference
+                        # The error is from the c2*p² term
+                        diff_err = np.abs((c2_err_abs * p_values**2) / r0 * 100)
+                        diff_err *= n_sigma
+                        
+                        ax.plot(p_values * 100, diff, 'g-', linewidth=2)
+                        ax.fill_between(p_values * 100, 
+                                      diff - diff_err, 
+                                      diff + diff_err, 
+                                      color='green', alpha=0.2)
+                        
+                        ax.axhline(y=0, color='k', linestyle='-', alpha=0.3)
+                        
+                        # Calculate and display coefficient values
+                        ax.text(0.02, 0.95, 
+                               f"c₁ = {c1:.4e}, c₂ = {c2:.4e}, c₂/c₁ = {c2/c1 if c1 != 0 else float('nan'):.4e} | {n_sigma}σ error bands", 
+                               transform=ax.transAxes, fontsize=10,
+                               bbox=dict(facecolor='white', alpha=0.7))
+                        
+                        ylabel = "Difference between approximations (%)"
+                    
+                    ax.set_ylabel(ylabel)
+                    ax.grid(True, alpha=0.3)
+                    
+                    # Only add x-label to bottom plot
+                    if i == len(selected_bins) - 1:
+                        ax.set_xlabel("Perturbation Magnitude (%)")
+                    
+                    if plot_type == 'comparative':
+                        ax.legend(loc='upper right')
+                
+                plt.tight_layout()
+                plt.show()
+
 
 @dataclass
 class Coefficients:
@@ -542,7 +778,7 @@ class Coefficients:
         :rtype: List[float]
         """
         return [np.log(self.pert_energies[i+1]/self.pert_energies[i]) for i in range(len(self.pert_energies)-1)]
-
+    
     @property
     def values_per_lethargy(self):
         """Calculate sensitivity coefficients per unit lethargy.

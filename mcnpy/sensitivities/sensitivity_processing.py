@@ -34,15 +34,15 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
     input = read_mcnp(input_path)
     mctal = read_mctal(mctal_path)
     
-    pert_energies = input.pert.pert_energies
-    reactions = input.pert.reactions
-    group_dict_first = input.pert.group_perts_by_reaction(2)
+    pert_energies = input.perturbation.pert_energies
+    reactions = input.perturbation.reactions
+    group_dict_first = input.perturbation._group_perts_by_reaction(2)
     
     # Check if second-order perturbations are available
     # Use a more reliable method to check for method 3 perturbations
     has_second_order = False
     try:
-        group_dict_second = input.pert.group_perts_by_reaction(3)
+        group_dict_second = input.perturbation._group_perts_by_reaction(3)
         has_second_order = bool(group_dict_second)  # True if dictionary is not empty
     except:
         group_dict_second = {}
@@ -94,15 +94,21 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
             if has_second_order and rxn in group_dict_second:
                 c2_values = []
                 c1_values = []  # Store the actual Taylor coefficients c1
+                c1_errors = []  # Store errors of Taylor coefficients c1
+                c2_errors = []  # Store errors of Taylor coefficients c2
                 
                 for j, pert in enumerate(group_dict_second[rxn]):
                     # Get first-order Taylor coefficient directly (not the sensitivity)
                     c1 = mctal.tally[tally].perturbation[group_dict_first[rxn][j]].results[i]
+                    c1_err = mctal.tally[tally].perturbation[group_dict_first[rxn][j]].errors[i]
                     c1_values.append(c1)
+                    c1_errors.append(c1_err)
                     
                     # Get second-order Taylor coefficient directly
                     c2 = mctal.tally[tally].perturbation[pert].results[i]
+                    c2_err = mctal.tally[tally].perturbation[pert].errors[i]
                     c2_values.append(c2)
+                    c2_errors.append(c2_err)
                 
                 # Calculate the ratio c2/c1 directly for each energy bin
                 ratio_values = []
@@ -118,7 +124,9 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
                     pert_energies=pert_energies,
                     c1=c1_values,
                     c2=c2_values,
-                    ratio=ratio_values
+                    ratio=ratio_values,
+                    c1_errors=c1_errors,
+                    c2_errors=c2_errors
                 )
         
         full_data[energy_str] = energy_data
@@ -157,15 +165,21 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
             if has_second_order and rxn in group_dict_second:
                 c2_values_int = []
                 c1_values_int = []  # Store the actual Taylor coefficients
+                c1_errors_int = []  # Store errors of Taylor coefficients c1
+                c2_errors_int = []  # Store errors of Taylor coefficients c2
                 
                 for j, pert in enumerate(group_dict_second[rxn]):
                     # Get first-order Taylor coefficient directly
                     c1_int_val = mctal.tally[tally].perturbation[group_dict_first[rxn][j]].integral_result
+                    c1_int_err = mctal.tally[tally].perturbation[group_dict_first[rxn][j]].integral_error
                     c1_values_int.append(c1_int_val)
+                    c1_errors_int.append(c1_int_err)
                     
                     # Get second-order Taylor coefficient directly
                     c2_int_val = mctal.tally[tally].perturbation[pert].integral_result
+                    c2_int_err = mctal.tally[tally].perturbation[pert].integral_error
                     c2_values_int.append(c2_int_val)
+                    c2_errors_int.append(c2_int_err)
                 
                 # Calculate ratios for integral results
                 ratio_values_int = []
@@ -181,7 +195,9 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
                     pert_energies=pert_energies,
                     c1=c1_values_int,
                     c2=c2_values_int,
-                    ratio=ratio_values_int
+                    ratio=ratio_values_int,
+                    c1_errors=c1_errors_int,
+                    c2_errors=c2_errors_int
                 )
         
         full_data["integral"] = integral_data
@@ -321,14 +337,16 @@ def create_sdf_data(
     :type energy: str
     :param title: Title for the SDF dataset
     :type title: str
-    :param response_values: Optional tuple of (r0, e0) to override values from sensitivity data.
+    :param response_values: Optional tuple of (r0, e0) to override the reference values from sensitivity data.
+                           This allows combining data from different sources that might have different base values.
                            r0 is the unperturbed tally result (reference response value),
                            e0 is the error of the unperturbed tally result.
+                           Use this to ensure consistency when merging sensitivity data from different calculations.
     :type response_values: Tuple[float, float], optional
     :returns: SDFData object containing the combined sensitivity data
     :rtype: SDFData
     :raises ValueError: If pert_energies don't match across sensitivity data objects
-    :raises ValueError: If r0 and e0 values don't match across sensitivity data objects
+    :raises ValueError: If r0 and e0 values don't match across sensitivity data objects and no response_values are provided
     """
     # Check if we have a list of SensitivityData objects or tuples
     has_tuples = any(isinstance(item, tuple) for item in sensitivity_data_list)
