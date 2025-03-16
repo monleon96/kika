@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from .material import Materials
 from .perturbations import Perturbation
+from mcnpy.utils.energy_grids import _identify_energy_grid
 
 
 @dataclass
@@ -142,7 +143,12 @@ class Input:
                 energies = self.perturbation.pert_energies
                 if energies and len(energies) > 0:
                     pert_section += f"{'Energy range:':{label_width}} {min(energies):.2e} - {max(energies):.2e} MeV\n"
-                    pert_section += f"{'Energy points:':{label_width}} {len(energies)}\n"
+                    pert_section += f"{'Energy bins:':{label_width}} {len(energies)-1}\n"
+                    
+                    # Add grid structure identification
+                    grid_name = _identify_energy_grid(energies)
+                    if grid_name:
+                        pert_section += f"{'Energy structure:':{label_width}} {grid_name}\n"
             else:
                 pert_section += f"{'Number of perturbations:':{label_width}} 0 (empty collection)\n"
             

@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import pandas as pd
+from mcnpy.utils.energy_grids import _identify_energy_grid
 
 
 @dataclass
@@ -138,6 +139,89 @@ class TaylorRatio:
         
         plt.tight_layout()
         return ax
+    
+    def __repr__(self):
+        """Returns a formatted string representation of the Taylor ratio data.
+        
+        This method is called when the object is evaluated in interactive environments
+        like Jupyter notebooks or the Python interpreter.
+        
+        :return: Formatted string representation of the Taylor ratio data
+        :rtype: str
+        """
+        # Create a visually appealing header with a border
+        header_width = 60
+        header = "=" * header_width + "\n"
+        header += f"{'Taylor Ratio Data - MT ' + str(self.reaction):^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        # Create aligned key-value pairs with consistent width
+        label_width = 28  # Width for labels
+        
+        # Basic information
+        info_lines = []
+        info_lines.append(f"{'Energy Range:':{label_width}} {self.energy}")
+        info_lines.append(f"{'Reaction Number (MT):':{label_width}} {self.reaction}")
+        info_lines.append(f"{'Number of perturbation bins:':{label_width}} {len(self.ratio)}")
+        
+        # Add energy grid structure identification
+        grid_name = _identify_energy_grid(self.pert_energies)
+        if grid_name:
+            info_lines.append(f"{'Energy structure:':{label_width}} {grid_name}")
+        
+        # Calculate average ratio and identify bins with largest absolute ratio
+        valid_ratios = [r for r in self.ratio if not np.isnan(r)]
+        if valid_ratios:
+            avg_ratio = np.mean(valid_ratios)
+            max_idx = np.nanargmax(np.abs(self.ratio))
+            max_ratio = self.ratio[max_idx]
+            info_lines.append(f"{'Average c2/c1 ratio:':{label_width}} {avg_ratio:.6e}")
+            info_lines.append(f"{'Max |c2/c1| ratio:':{label_width}} {max_ratio:.6e}")
+            info_lines.append(f"{' - at energy bin:':{label_width}} {self.pert_energies[max_idx]:.2e}-{self.pert_energies[max_idx+1]:.2e} MeV")
+        
+        stats = "\n".join(info_lines)
+        
+        # Data preview section - show first few and last few values
+        n_preview = 3  # Number of values to show at beginning and end
+        n_values = len(self.ratio)
+        
+        data_preview = "\n\nData preview:\n\n"
+        
+        # Format as a small table
+        data_preview += f"{'  Energy Bin':^22} | {'c1':^15} | {'c2':^15} | {'c2/c1':^12}\n"
+        data_preview += "-" * 70 + "\n"
+        
+        for i in range(min(n_preview, n_values)):
+            e_low = f"{self.pert_energies[i]:.3e}"
+            e_high = f"{self.pert_energies[i+1]:.3e}"
+            c1_val = self.c1[i]
+            c2_val = self.c2[i]
+            ratio_val = self.ratio[i]
+            
+            data_preview += f"{e_low}-{e_high:^8} | {c1_val:15.6e} | {c2_val:15.6e} | {ratio_val:12.6e}\n"
+        
+        # Add ellipsis if there are more values than shown
+        if n_values > 2 * n_preview:
+            data_preview += "..." + " " * 67 + "\n"
+            
+            # Show last few values
+            for i in range(max(n_preview, n_values - n_preview), n_values):
+                e_low = f"{self.pert_energies[i]:.3e}"
+                e_high = f"{self.pert_energies[i+1]:.3e}"
+                c1_val = self.c1[i]
+                c2_val = self.c2[i]
+                ratio_val = self.ratio[i]
+                
+                data_preview += f"{e_low}-{e_high:^8} | {c1_val:15.6e} | {c2_val:15.6e} | {ratio_val:12.6e}\n"
+        
+        # Available methods section
+        methods = "\n\nAvailable methods:\n"
+        methods += "- .calculate_nonlinearity(p) - Calculate nonlinearity factor for specified perturbation magnitude\n"
+        methods += "- .calculate_nonlinearity_by_bin(p) - Calculate nonlinearity factor by energy bin\n"
+        methods += "- .plot(ax=None, title=None, top_n=5) - Plot nonlinearity factor vs perturbation magnitude\n"
+        
+        # Combine all sections
+        return header + stats + data_preview + methods
 
 
 @dataclass
@@ -463,6 +547,12 @@ class SensitivityData:
         info_lines.append(f"{'Number of detector energy bins:':{label_width}} {num_energy_groups-1 if 'integral' in self.energies else num_energy_groups}")
         num_pert_bins = len(self.pert_energies) - 1
         info_lines.append(f"{'Number of perturbation bins:':{label_width}} {num_pert_bins}")
+        
+        # Add energy grid structure identification
+        grid_name = _identify_energy_grid(self.pert_energies)
+        if grid_name:
+            info_lines.append(f"{'Energy structure:':{label_width}} {grid_name}")
+            
         info_lines.append(f"{'Reactions available:':{label_width}} {', '.join(map(str, self.reactions))}")
         
         # Add information about Taylor ratios if available

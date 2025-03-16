@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, Tuple
-import pandas as pd  # Add pandas import
-
+import pandas as pd
+from mcnpy.utils.energy_grids import _identify_energy_grid
 
 class PertCollection(dict):
     """A collection class for perturbation cards that provides a nice summary representation.
@@ -83,7 +83,13 @@ class PertCollection(dict):
                 
         if energy_values:
             info_lines.append(f"{'Energy range:':{label_width}} {min(energy_values):.2e} - {max(energy_values):.2e} MeV")
-            info_lines.append(f"{'Number of energy points:':{label_width}} {len(energy_values)}")
+            info_lines.append(f"{'Number of energy bins:':{label_width}} {len(energy_values)-1}")
+            
+            # Try to identify energy structure if we have a sorted list
+            energy_list = sorted(list(energy_values))
+            grid_name = _identify_energy_grid(energy_list)
+            if grid_name:
+                info_lines.append(f"{'Energy structure:':{label_width}} {grid_name}")
         
         content = "\n".join(info_lines)
         
@@ -158,10 +164,10 @@ class Perturbation:
     
     def to_dataframe(self) -> 'pd.DataFrame':
         """Convert perturbation data to a pandas DataFrame.
-        
+
         This method creates a structured DataFrame containing all perturbation information
         with perturbation IDs as the index.
-        
+
         :return: DataFrame containing perturbation data
         :rtype: pd.DataFrame
         :raises ValueError: If no perturbations are defined
@@ -195,9 +201,8 @@ class Perturbation:
         df = pd.DataFrame(data)
         if not df.empty:
             df.set_index('id', inplace=True)
-            
         return df
-        
+    
     def __repr__(self):
         """Returns a formatted string representation of the perturbation data.
         
@@ -269,7 +274,12 @@ class Perturbation:
             energies = self.pert_energies
             if energies and len(energies) > 0:
                 info_lines.append(f"{'Energy range:':{label_width}} {min(energies):.2e} - {max(energies):.2e} MeV")
-                info_lines.append(f"{'Number of energy points:':{label_width}} {len(energies)}")
+                info_lines.append(f"{'Number of energy bins:':{label_width}} {len(energies)-1}")
+                
+                # Add grid structure identification
+                grid_name = _identify_energy_grid(energies)
+                if grid_name:
+                    info_lines.append(f"{'Energy structure:':{label_width}} {grid_name}")
         
         content = "\n".join(info_lines)
         
@@ -278,6 +288,7 @@ class Perturbation:
         examples += "- .pert[perturbation_number] - Access a specific perturbation\n"
         
         return header + content + examples
+
 
 @dataclass
 class Pert:
