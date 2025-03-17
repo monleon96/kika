@@ -1,16 +1,17 @@
-# Configuration file for the Sphinx documentation builder.
-#
-# For the full list of built-in configuration values, see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
-
-# -- Project information -----------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
-
 import datetime
 import os
 import sys
+
+# Add the repository root directory to sys.path
 sys.path.insert(0, os.path.abspath('../..'))
-from mcnpy._config import LIBRARY_VERSION, AUTHOR
+
+# Attempt safe import
+try:
+    from mcnpy._config import LIBRARY_VERSION, AUTHOR
+except ImportError:
+    LIBRARY_VERSION = "unknown"
+    AUTHOR = "unknown"
+    print("WARNING: Could not import LIBRARY_VERSION or AUTHOR from mcnpy._config.")
 
 project = 'MCNPy'
 copyright = f"{datetime.datetime.now().year}, {AUTHOR}"
@@ -18,25 +19,19 @@ author = AUTHOR
 release = LIBRARY_VERSION
 
 # -- General configuration ---------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
-    # Documentation generation
-    'sphinx.ext.autodoc',       
-    'sphinx.ext.napoleon',      
-
-    # Markdown support
-    'myst_parser',              
-
-    # Additional features
-    'sphinx.ext.viewcode',      
-    'sphinx.ext.intersphinx',   
+    'sphinx.ext.autodoc',
+    'sphinx.ext.napoleon',
+    'myst_parser',
+    'sphinx.ext.viewcode',
+    'sphinx.ext.intersphinx',
 ]
 
 templates_path = ['_templates']
 exclude_patterns = []
 
-# Napoleon settings for docstring parsing
+# Napoleon settings
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
 napoleon_include_init_with_doc = True
@@ -49,22 +44,21 @@ intersphinx_mapping = {
     'pandas': ('https://pandas.pydata.org/docs/', None),
 }
 
-# Add autodoc settings to handle duplicates
+# Autodoc configuration
 autodoc_default_options = {
     'no-index': True,
     'members': True,
     'member-order': 'bysource',
     'show-inheritance': True,
-    'undoc-members': True
+    'undoc-members': True,
 }
 
-# -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
+# -- HTML output options -----------------------------------------------------
 
 html_theme = 'sphinx_rtd_theme'
 
 html_theme_options = {
-    'navigation_depth': 3,          # Max depth of the Table of Contents
+    'navigation_depth': 3,
     'titles_only': False,
     'collapse_navigation': False,
     'sticky_navigation': True,
@@ -76,22 +70,17 @@ html_theme_options = {
 
 html_static_path = ['_static']
 
-# Document title
 html_title = "MCNPy Documentation"
 html_short_title = "MCNPy"
 
-# Sidebar customization
 html_sidebars = {
     '**': [
-        'globaltoc.html',  # Global Table of Contents
-        'searchbox.html',  # Search Box
-        'relations.html',  # Next/Previous Links
+        'globaltoc.html',
+        'searchbox.html',
+        'relations.html',
     ]
 }
 
-
-
-# -- Global variables for .rst files -------------------------------------------
 rst_prolog = f"""
 .. |version| replace:: {LIBRARY_VERSION}
 """
