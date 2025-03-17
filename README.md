@@ -1,6 +1,6 @@
 # MCNPy
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/monleon96/MCNPy)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](https://github.com/monleon96/MCNPy)
 [![Documentation Status](https://readthedocs.org/projects/mcnpy/badge/?version=latest)](https://mcnpy.readthedocs.io/en/latest/?badge=latest)
 
 A Python package for working with MCNP input and output files. MCNPy provides a lightweight alternative to mcnptools, offering essential functionality for parsing, analyzing, and manipulating MCNP files in Python.

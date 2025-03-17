@@ -1,7 +1,7 @@
 MCNPy Documentation
 ===================
 
-.. image:: https://img.shields.io/badge/version-0.2.0-blue.svg
+.. image:: https://img.shields.io/badge/version-0.2.1-blue.svg
    :target: https://github.com/monleon96/MCNPy
    :alt: Version
 
