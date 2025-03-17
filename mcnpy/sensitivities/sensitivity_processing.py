@@ -9,19 +9,19 @@ import numpy as np
 from mcnpy.input.parse_input import read_mcnp
 from mcnpy.mctal.parse_mctal import read_mctal
 from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL, MT_TO_REACTION
-from mcnpy.sensitivities.sensitivity import SensitivityData, Coefficients, TaylorRatio
+from mcnpy.sensitivities.sensitivity import SensitivityData, Coefficients, TaylorCoefficients
 from mcnpy.sensitivities.sdf import SDFData, SDFReactionData
 import math
 import matplotlib.pyplot as plt
 
 
-def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int, label: str) -> SensitivityData:
+def compute_sensitivity(inputfile: str, mctalfile: str, tally: int, zaid: int, label: str) -> SensitivityData:
     """Compute sensitivity coefficients from MCNP input and output files.
 
-    :param input_path: Path to MCNP input file containing the PERT cards
-    :type input_path: str
-    :param mctal_path: Path to MCNP MCTAL output file
-    :type mctal_path: str
+    :param inputfile: Path to MCNP input file containing the PERT cards
+    :type inputfile: str
+    :param mctalfile: Path to MCNP MCTAL output file
+    :type mctalfile: str
     :param tally: Tally number to analyze
     :type tally: int
     :param zaid: ZAID of the nuclide being perturbed
@@ -31,8 +31,8 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
     :returns: Object containing computed sensitivity coefficients
     :rtype: SensitivityData
     """
-    input = read_mcnp(input_path)
-    mctal = read_mctal(mctal_path)
+    input = read_mcnp(inputfile)
+    mctal = read_mctal(mctalfile)
     
     pert_energies = input.perturbation.pert_energies
     reactions = input.perturbation.reactions
@@ -53,11 +53,11 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
     
     # Prepare all the data first before creating the SensitivityData object
     full_data = {}
-    ratios = {}  # Store Taylor ratios by energy and reaction
+    coefficients = {}  # Store Taylor coefficients by energy and reaction
 
     for i in range(len(energy)):            # Loop over detector energies
         energy_data = {}
-        ratio_data = {}
+        coeff_data = {}
         
         # Calculate energy boundaries for the energy string
         if i == 0:
@@ -118,7 +118,7 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
                     else:
                         ratio_values.append(float('nan'))
                 
-                ratio_data[rxn] = TaylorRatio(
+                coeff_data[rxn] = TaylorCoefficients(
                     energy=energy_str,
                     reaction=rxn,
                     pert_energies=pert_energies,
@@ -130,13 +130,13 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
                 )
         
         full_data[energy_str] = energy_data
-        if ratio_data:  # Only add if there are any ratios
-            ratios[energy_str] = ratio_data
+        if coeff_data:  # Only add if there are any coefficients
+            coefficients[energy_str] = coeff_data
 
     # Process integral results if available
     if mctal.tally[tally].integral_result is not None:
         integral_data = {}
-        integral_ratio_data = {}
+        integral_coeff_data = {}
         integral_r0 = mctal.tally[tally].integral_result
         integral_e0 = mctal.tally[tally].integral_error
         
@@ -189,7 +189,7 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
                     else:
                         ratio_values_int.append(float('nan'))
                 
-                integral_ratio_data[rxn] = TaylorRatio(
+                integral_coeff_data[rxn] = TaylorCoefficients(
                     energy="integral",
                     reaction=rxn,
                     pert_energies=pert_energies,
@@ -201,8 +201,8 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
                 )
         
         full_data["integral"] = integral_data
-        if integral_ratio_data:
-            ratios["integral"] = integral_ratio_data
+        if integral_coeff_data:
+            coefficients["integral"] = integral_coeff_data
     
     # Create SensitivityData object after all data is prepared
     return SensitivityData(
@@ -212,7 +212,7 @@ def compute_sensitivity(input_path: str, mctal_path: str, tally: int, zaid: int,
         zaid=zaid,
         label=label,
         data=full_data,
-        ratios=ratios
+        coefficients=coefficients
     )
 
 

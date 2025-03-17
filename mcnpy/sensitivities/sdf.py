@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple, Union
 import os
 from mcnpy._constants import MT_TO_REACTION, ATOMIC_NUMBER_TO_SYMBOL
 from mcnpy.sensitivities.sensitivity import SensitivityData
+from mcnpy.utils.energy_grids import _identify_energy_grid
 
 
 @dataclass
@@ -123,37 +124,6 @@ class SDFData:
     e0: float = None
     data: List[SDFReactionData] = field(default_factory=list)
 
-    def __str__(self) -> str:
-        """Provide a concise human-readable summary of the SDFData.
-        
-        :returns: Simple summary of SDFData contents
-        :rtype: str
-        """
-        ngroups = len(self.pert_energies) - 1
-        nprofiles = len(self.data)
-        
-        # Count unique nuclides and organize by nuclide
-        nuclide_reactions = {}
-        for react in self.data:
-            if react.nuclide not in nuclide_reactions:
-                nuclide_reactions[react.nuclide] = []
-            nuclide_reactions[react.nuclide].append((react.reaction_name, react.mt))
-        
-        # Build basic summary
-        summary = [
-            f"SDF: {self.title} ({self.energy})",
-            f"Response: {self.r0:.4E} ± {self.e0:.4E}",
-            f"Energy groups: {ngroups}, Profiles: {nprofiles}",
-            f"Nuclides: {len(nuclide_reactions)}",
-        ]
-        
-        # List nuclides and their reactions
-        for nuclide, reactions in nuclide_reactions.items():
-            reaction_str = ", ".join([f"{name}(MT={mt})" for name, mt in reactions])
-            summary.append(f"  {nuclide}: {reaction_str}")
-        
-        return "\n".join(summary)
-
     def __repr__(self) -> str:
         """Returns a detailed formatted string representation of the SDF data.
         
@@ -177,6 +147,12 @@ class SDFData:
         info_lines = []
         info_lines.append(f"{'Response value:':{label_width}} {self.r0:.6e} ± {self.e0:.6e}")
         info_lines.append(f"{'Energy groups:':{label_width}} {len(self.pert_energies) - 1}")
+        
+        # Add energy grid structure identification
+        grid_name = _identify_energy_grid(self.pert_energies)
+        if grid_name:
+            info_lines.append(f"{'Energy structure:':{label_width}} {grid_name}")
+            
         info_lines.append(f"{'Sensitivity profiles:':{label_width}} {len(self.data)}")
         
         # Count unique nuclides
@@ -298,6 +274,9 @@ class SDFData:
             # using the sorted data
             for reaction in sorted_data:
                 file.write(self._format_reaction_data(reaction))
+        
+        # Add print message indicating where the file was saved
+        print(f"SDF file saved successfully: {filepath}")
 
     def _format_reaction_data(self, reaction: SDFReactionData) -> str:
         """

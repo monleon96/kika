@@ -9,8 +9,8 @@ from mcnpy.utils.energy_grids import _identify_energy_grid
 
 
 @dataclass
-class TaylorRatio:
-    """Container for Taylor series expansion ratios between second and first-order coefficients.
+class TaylorCoefficients:
+    """Container for Taylor series expansion coefficients.
     
     :ivar energy: Energy range string in format "lower_upper" (e.g., "0.00e+00_1.00e-01")
     :type energy: str
@@ -141,18 +141,18 @@ class TaylorRatio:
         return ax
     
     def __repr__(self):
-        """Returns a formatted string representation of the Taylor ratio data.
+        """Returns a formatted string representation of the Taylor coefficient data.
         
         This method is called when the object is evaluated in interactive environments
         like Jupyter notebooks or the Python interpreter.
         
-        :return: Formatted string representation of the Taylor ratio data
+        :return: Formatted string representation of the Taylor coefficient data
         :rtype: str
         """
         # Create a visually appealing header with a border
         header_width = 60
         header = "=" * header_width + "\n"
-        header += f"{'Taylor Ratio Data - MT ' + str(self.reaction):^{header_width}}\n"
+        header += f"{'Taylor Coefficient Data - MT ' + str(self.reaction):^{header_width}}\n"
         header += "=" * header_width + "\n\n"
         
         # Create aligned key-value pairs with consistent width
@@ -240,8 +240,8 @@ class SensitivityData:
     :type tally_name: str
     :ivar data: Nested dictionary containing sensitivity coefficients organized by energy and reaction number
     :type data: Dict[str, Dict[int, Coefficients]]
-    :ivar ratios: Dictionary containing Taylor series ratios organized by energy and reaction number
-    :type ratios: Dict[str, Dict[int, TaylorRatio]]
+    :ivar coefficients: Dictionary containing Taylor series coefficients organized by energy and reaction number
+    :type coefficients: Dict[str, Dict[int, TaylorCoefficients]]
     :ivar lethargy: List of lethargy intervals between perturbation energies
     :type lethargy: List[float]
     :ivar energies: List of energy values used as keys in the data dictionary
@@ -257,7 +257,7 @@ class SensitivityData:
     label: str
     tally_name: str = None
     data: Dict[str, Dict[int, 'Coefficients']] = None
-    ratios: Dict[str, Dict[int, TaylorRatio]] = field(default_factory=dict)
+    coefficients: Dict[str, Dict[int, TaylorCoefficients]] = field(default_factory=dict)
     lethargy: List[float] = field(init=False, repr=False)
     energies: List[str] = field(init=False, repr=False)
     reactions: List[int] = field(init=False, repr=False)
@@ -385,27 +385,27 @@ class SensitivityData:
         :type reaction: Union[List[int], int], optional
         :param top_n: Number of top absolute ratios to plot with labels (0 means plot all)
         :type top_n: int, optional
-        :raises ValueError: If sensitivity data does not contain Taylor ratios
+        :raises ValueError: If sensitivity data does not contain Taylor coefficients
         :raises ValueError: If specified energies are not found in the data
         """
-        if not self.ratios:
-            raise ValueError("Taylor ratios are required for ratio plots. Please recompute sensitivity with include_second_order=True.")
+        if not self.coefficients:
+            raise ValueError("Taylor coefficients are required for ratio plots. Please recompute sensitivity with include_second_order=True.")
             
         # If no energy specified, use all energies
         if energy is None:
-            energies = list(self.ratios.keys())
+            energies = list(self.coefficients.keys())
         else:
             # Ensure energy is always a list
             energies = [energy] if not isinstance(energy, list) else energy
             # Validate all energies exist in data
-            invalid_energies = [e for e in energies if e not in self.ratios]
+            invalid_energies = [e for e in energies if e not in self.coefficients]
             if invalid_energies:
-                raise ValueError(f"Energies {invalid_energies} not found in ratio data.")
+                raise ValueError(f"Energies {invalid_energies} not found in coefficient data.")
 
         # Ensure reactions is always a list
         if reaction is None:
             # Get unique reactions from all energy data
-            reaction = list(set().union(*[d.keys() for d in self.ratios.values()]))
+            reaction = list(set().union(*[d.keys() for d in self.coefficients.values()]))
             # Sort reactions in ascending numerical order
             reaction.sort()
         elif not isinstance(reaction, list):
@@ -413,7 +413,7 @@ class SensitivityData:
 
         # Create a separate figure for each energy
         for e in energies:
-            rxn_dict = self.ratios[e]
+            rxn_dict = self.coefficients[e]
             n = len(reaction)
             
             # Use a single Axes if only one reaction
@@ -449,9 +449,9 @@ class SensitivityData:
                     ax.text(0.5, 0.5, f"Reaction {rxn} not found", ha='center', va='center')
                     ax.axis('off')
                 else:
-                    # Get the TaylorRatio object and plot it
-                    ratio_obj = rxn_dict[rxn]
-                    ratio_obj.plot(ax=ax, title=f"MT {rxn}", top_n=top_n)
+                    # Get the TaylorCoefficients object and plot it
+                    coeff_obj = rxn_dict[rxn]
+                    coeff_obj.plot(ax=ax, title=f"MT {rxn}", top_n=top_n)
 
             # Hide any extra subplots
             for j in range(n, len(axes)):
@@ -555,11 +555,11 @@ class SensitivityData:
             
         info_lines.append(f"{'Reactions available:':{label_width}} {', '.join(map(str, self.reactions))}")
         
-        # Add information about Taylor ratios if available
-        if self.ratios:
-            info_lines.append(f"{'Linearity ratios available:':{label_width}} Yes")
+        # Add information about Taylor coefficients if available
+        if self.coefficients:
+            info_lines.append(f"{'Taylor coefficients available:':{label_width}} Yes")
         else:
-            info_lines.append(f"{'Linearity ratios available:':{label_width}} No")
+            info_lines.append(f"{'Taylor coefficients available:':{label_width}} No")
         
         stats = "\n".join(info_lines)
         
@@ -579,7 +579,7 @@ class SensitivityData:
         # Add an empty line before the footer with available methods
         footer = "\n\nAvailable methods:\n"
         footer += "- .plot_sensitivity(energy=None, reaction=None, xlim=None) - Plot sensitivity profiles\n"
-        if self.ratios:
+        if self.coefficients:
             footer += "- .plot_ratios(energy=None, reaction=None, p_range=None) - Plot Taylor ratio nonlinearity factors\n"
         footer += "- .to_dataframe() - Get full data as pandas DataFrame\n"
         
@@ -588,10 +588,10 @@ class SensitivityData:
         examples += "- .data['0.00e+00_1.00e-01'][1] - Get coefficients for energy bin 0-0.1 MeV, reaction 1\n"
         if "integral" in self.energies:
             examples += "- .data['integral'][2] - Get integral coefficients for reaction 2\n"
-        if self.ratios:
-            energy_key = next(iter(self.ratios.keys()))
-            rxn_key = next(iter(self.ratios[energy_key].keys()))
-            examples += f"- .ratios['{energy_key}'][{rxn_key}] - Get Taylor ratio data for energy bin, reaction {rxn_key}\n"
+        if self.coefficients:
+            energy_key = next(iter(self.coefficients.keys()))
+            rxn_key = next(iter(self.coefficients[energy_key].keys()))
+            examples += f"- .coefficients['{energy_key}'][{rxn_key}] - Get Taylor coefficient data for energy bin, reaction {rxn_key}\n"
         
         # Combine all sections
         return header + stats + energy_info + footer + examples
@@ -629,28 +629,27 @@ class SensitivityData:
         :type e_bins: List[int], optional
         :param n_sigma: Number of standard deviations to show in error bands
         :type n_sigma: float, optional
-        :raises ValueError: If sensitivity data does not contain Taylor ratios
+        :raises ValueError: If sensitivity data does not contain Taylor coefficients
         :raises ValueError: If specified energies are not found in the data
         """
-        if not self.ratios:
-            raise ValueError("Taylor ratios are required for perturbed response plots. "
-                            "Please recompute sensitivity with include_second_order=True.")
+        if not self.coefficients:
+            raise ValueError("Taylor coefficients for order 1 and 2 are required for perturbed response plots. ")
             
         # If no energy specified, use all energies
         if energy is None:
-            energies = list(self.ratios.keys())
+            energies = list(self.coefficients.keys())
         else:
             # Ensure energy is always a list
             energies = [energy] if not isinstance(energy, list) else energy
             # Validate all energies exist in data
-            invalid_energies = [e for e in energies if e not in self.ratios]
+            invalid_energies = [e for e in energies if e not in self.coefficients]
             if invalid_energies:
-                raise ValueError(f"Energies {invalid_energies} not found in ratio data.")
+                raise ValueError(f"Energies {invalid_energies} not found in coefficient data.")
 
         # Ensure reactions is always a list
         if reaction is None:
             # Get unique reactions from all energy data
-            reaction = list(set().union(*[d.keys() for d in self.ratios.values()]))
+            reaction = list(set().union(*[d.keys() for d in self.coefficients.values()]))
             # Sort reactions in ascending numerical order
             reaction.sort()
         elif not isinstance(reaction, list):
@@ -667,16 +666,16 @@ class SensitivityData:
         # Create a separate figure for each energy
         for e in energies:
             for rxn in reaction:
-                if rxn not in self.ratios[e]:
+                if rxn not in self.coefficients[e]:
                     # Skip if reaction not available for this energy
                     continue
                 
                 # Get Taylor coefficients and their errors
-                ratio_obj = self.ratios[e][rxn]
-                c1_values = ratio_obj.c1
-                c2_values = ratio_obj.c2
-                c1_errors = ratio_obj.c1_errors
-                c2_errors = ratio_obj.c2_errors
+                coeff_obj = self.coefficients[e][rxn]
+                c1_values = coeff_obj.c1
+                c2_values = coeff_obj.c2
+                c1_errors = coeff_obj.c1_errors
+                c2_errors = coeff_obj.c2_errors
                 r0 = self.data[e][rxn].r0
                 e0_relative = self.data[e][rxn].e0  # Unperturbed error (in relative form)
                 e0_abs = r0 * e0_relative  # Convert to absolute error
@@ -748,8 +747,8 @@ class SensitivityData:
                     second_order_err *= n_sigma
                     
                     # Get energy bin boundaries for title
-                    e_low = ratio_obj.pert_energies[bin_idx]
-                    e_high = ratio_obj.pert_energies[bin_idx+1]
+                    e_low = coeff_obj.pert_energies[bin_idx]
+                    e_high = coeff_obj.pert_energies[bin_idx+1]
                     
                     # Set subplot title
                     ax.set_title(f"Perturbation Energy Bin: {e_low:.2e} - {e_high:.2e} MeV", fontsize=12)
@@ -931,7 +930,9 @@ class Coefficients:
         info_lines.append(f"Number of perturbation bins: {len(self.pert_energies) - 1}")
         
         if self.r0 is not None:
-            info_lines.append(f"Unperturbed result (R₀): {self.r0:.6e} ± {self.e0:.6e}")
+            # Display the unperturbed result with relative error, showing it's relative
+            # by using percentage notation
+            info_lines.append(f"Unperturbed result (R₀): {self.r0:.6e} ± {self.e0*100:.4f}% (relative)")
         
         info = "\n".join(info_lines)
         

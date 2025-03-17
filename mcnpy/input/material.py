@@ -35,8 +35,8 @@ class Materials:
             material.to_atomic_fraction()
         return self
     
-    def __repr__(self) -> str:
-        """Return a string representation of all materials.
+    def __str__(self) -> str:
+        """Return a detailed string representation of all materials.
         
         :returns: String representation of all materials
         :rtype: str
@@ -53,32 +53,36 @@ class Materials:
         
         return header + title + header + '\n' + materials_repr
     
-    def print_summary(self) -> None:
-        """Print a detailed summary of all materials in the collection.
+    def __repr__(self) -> str:
+        """Returns a formatted summary of the materials collection.
         
-        Displays formatted information about all materials, including
-        material IDs, nuclide counts, fraction types, and libraries.
+        This method is called when the object is evaluated in interactive environments
+        like Jupyter notebooks or the Python interpreter.
+        
+        :returns: Concise representation of the materials collection
+        :rtype: str
         """
-        if not self.mat:
-            print("Materials collection is empty.")
-            return
-        
-        # Create a header with border
+        # Create a visually appealing header with a border
         header_width = 60
-        print("=" * header_width)
-        print(f"{'MCNP MATERIALS COLLECTION':^{header_width}}")
-        print("=" * header_width)
-        print(f"\nTotal Materials: {len(self.mat)}\n")
+        header = "=" * header_width + "\n"
+        header += f"{'MCNP Materials Collection':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
         
-        # Material summary table
-        if self.mat:
+        # Materials count
+        materials_count = len(self.mat)
+        info = f"Total Materials: {materials_count}\n\n"
+        
+        # Show table of materials and nuclide counts if we have materials
+        table = ""
+        if materials_count > 0:
             table_width = 60
-            print("-" * table_width)
-            print(f"{'ID':^10}|{'Nuclides':^15}|{'Type':^15}|{'Libraries':^18}")
-            print("-" * table_width)
+            table += "-" * table_width + "\n"
+            table += f"{'ID':^10}|{'Nuclides':^15}|{'Type':^15}|{'Libraries':^18}\n"
+            table += "-" * table_width + "\n"
             
-            for mat_id, material in self.mat.items():
-                # Count nuclides
+            # Sort material IDs for consistent display
+            for mat_id in sorted(self.mat.keys()):
+                material = self.mat[mat_id]
                 nuclide_count = len(material.nuclide)
                 
                 # Determine if using weight or atomic fractions
@@ -92,12 +96,31 @@ class Materials:
                     libs.append(material.plib)
                 lib_str = ", ".join(libs) if libs else "default"
                 
-                print(f"{mat_id:^10}|{nuclide_count:^15}|{frac_type:^15}|{lib_str:^18}")
+                table += f"{mat_id:^10}|{nuclide_count:^15}|{frac_type:^15}|{lib_str:^18}\n"
             
-            print("-" * table_width + "\n")
+            table += "-" * table_width + "\n\n"
         
-        # Add footer with usage hint
-        print("\nTo see individual material details, access the specific material object via .mat[id]")
+        # Available methods section
+        methods = "Available methods:\n"
+        methods += "- .to_weight_fractions() - Convert all materials to weight fractions\n"
+        methods += "- .to_atomic_fractions() - Convert all materials to atomic fractions\n"
+        
+        # Examples of accessing data section
+        examples = "\nExamples of accessing data:\n"
+        examples += "- .mat[material_id] - Access a specific material\n"
+        
+        return header + info + table + methods + examples
+    
+    def add_material(self, material: 'Mat') -> None:
+        """Add a material to the collection.
+        
+        :param material: Material object to add
+        :type material: Mat
+        :raises ValueError: If material ID already exists in collection
+        """
+        if material.id in self.mat:
+            raise ValueError(f"Material ID {material.id} already exists in collection")
+        self.mat[material.id] = material
 
 @dataclass
 class Nuclide:

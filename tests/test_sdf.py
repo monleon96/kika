@@ -1,7 +1,5 @@
 import pytest
 import mcnpy
-from mcnpy.sensitivities.sensitivity import compute_sensitivity
-from mcnpy.sensitivities.sdf import create_sdf_data
 
 
 def test_sdf():

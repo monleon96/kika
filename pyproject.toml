@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mcnpy"
-version = "0.1.3"
+version = "0.2.0"
 description = ""
 authors = ["Juan Antonio Monleon de la Lluvia <juanmonleon96@gmail.com>"]
 license = "GNU General Public License v3.0"

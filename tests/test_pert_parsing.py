@@ -9,15 +9,15 @@ def test_input_parsing_single_card(tmp_path):
     file.write_text(content)
     
     inst = read_mcnp(str(file))
-    pert = inst.pert.perturbation.get(1)
-    assert pert is not None
-    assert pert.particle == "n"
-    assert pert.cell == [1, 2, 3]
-    assert pert.material == 5
-    assert pert.rho == 0.95
-    assert pert.method == 2
-    assert pert.reaction == 101
-    assert pert.energy == (0.0, 10.0)
+    perturbation = inst.perturbation.pert.get(1)
+    assert perturbation is not None
+    assert perturbation.particle == "n"
+    assert perturbation.cell == [1, 2, 3]
+    assert perturbation.material == 5
+    assert perturbation.rho == 0.95
+    assert perturbation.method == 2
+    assert perturbation.reaction == 101
+    assert perturbation.energy == (0.0, 10.0)
 
 def test_input_parsing_multiline_card(tmp_path):
     # Test a PERT card spanning multiple lines with '&' continuation.
@@ -30,15 +30,15 @@ def test_input_parsing_multiline_card(tmp_path):
     file.write_text(content)
     
     inst = read_mcnp(str(file))
-    pert = inst.pert.perturbation.get(2)
-    assert pert is not None
-    assert pert.particle == "f"
-    assert pert.cell == [1, 2, 3]
-    assert pert.material == 5
-    assert pert.rho == 1.0
-    assert pert.method == 2
-    assert pert.reaction == 102
-    assert pert.energy == (0.5, 9.5)
+    perturbation = inst.perturbation.pert.get(2)
+    assert perturbation is not None
+    assert perturbation.particle == "f"
+    assert perturbation.cell == [1, 2, 3]
+    assert perturbation.material == 5
+    assert perturbation.rho == 1.0
+    assert perturbation.method == 2
+    assert perturbation.reaction == 102
+    assert perturbation.energy == (0.5, 9.5)
 
 def test_PERT_parsing_valid():
     # Test direct parsing of a valid PERT card.
