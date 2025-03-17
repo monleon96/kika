@@ -324,15 +324,15 @@ def plot_sens_comparison(sens_list: List[SensitivityData],
 
 
 def create_sdf_data(
-    sensitivity_data_list: Union[List[SensitivityData], List[Tuple[SensitivityData, List[int]]]], 
+    sens_list: Union[List[SensitivityData], List[Tuple[SensitivityData, List[int]]]], 
     energy: str,
     title: str,
     response_values: Tuple[float, float] = None
     ) -> SDFData:
     """Create a SDFData object from a list of SensitivityData objects.
     
-    :param sensitivity_data_list: List of SensitivityData objects or tuples of (SensitivityData, reactions_list)
-    :type sensitivity_data_list: Union[List[SensitivityData], List[Tuple[SensitivityData, List[int]]]]
+    :param sens_list: List of SensitivityData objects or tuples of (SensitivityData, reactions_list)
+    :type sens_list: Union[List[SensitivityData], List[Tuple[SensitivityData, List[int]]]]
     :param energy: Energy value to use for sensitivity data
     :type energy: str
     :param title: Title for the SDF dataset
@@ -349,21 +349,21 @@ def create_sdf_data(
     :raises ValueError: If r0 and e0 values don't match across sensitivity data objects and no response_values are provided
     """
     # Check if we have a list of SensitivityData objects or tuples
-    has_tuples = any(isinstance(item, tuple) for item in sensitivity_data_list)
+    has_tuples = any(isinstance(item, tuple) for item in sens_list)
     
     # Extract SensitivityData objects and reaction filters
     sens_data = []
     reaction_filters = []
     
     if has_tuples:
-        for item in sensitivity_data_list:
+        for item in sens_list:
             if not isinstance(item, tuple) or len(item) != 2:
                 raise ValueError("Expected tuple of (SensitivityData, List[int])")
             sens_obj, reactions = item
             sens_data.append(sens_obj)
             reaction_filters.append(reactions)
     else:
-        sens_data = sensitivity_data_list
+        sens_data = sens_list
         # No reaction filters means use all reactions for each SensitivityData
         reaction_filters = [None] * len(sens_data)
     

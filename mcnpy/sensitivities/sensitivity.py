@@ -555,11 +555,20 @@ class SensitivityData:
             
         info_lines.append(f"{'Reactions available:':{label_width}} {', '.join(map(str, self.reactions))}")
         
-        # Add information about Taylor coefficients if available
+        # Check if any Taylor coefficients contain valid second-order data (c2)
+        has_second_order = False
         if self.coefficients:
-            info_lines.append(f"{'Taylor coefficients available:':{label_width}} Yes")
+            for energy_data in self.coefficients.values():
+                for coeff_obj in energy_data.values():
+                    if hasattr(coeff_obj, 'c2') and any(c2 != 0 for c2 in coeff_obj.c2 if not np.isnan(c2)):
+                        has_second_order = True
+                        break
+                if has_second_order:
+                    break
+            
+            info_lines.append(f"{'Second Order data available:':{label_width}} {has_second_order}")
         else:
-            info_lines.append(f"{'Taylor coefficients available:':{label_width}} No")
+            info_lines.append(f"{'Second Order data available:':{label_width}} No")
         
         stats = "\n".join(info_lines)
         
@@ -579,15 +588,33 @@ class SensitivityData:
         # Add an empty line before the footer with available methods
         footer = "\n\nAvailable methods:\n"
         footer += "- .plot_sensitivity(energy=None, reaction=None, xlim=None) - Plot sensitivity profiles\n"
-        if self.coefficients:
+        if has_second_order:
             footer += "- .plot_ratios(energy=None, reaction=None, p_range=None) - Plot Taylor ratio nonlinearity factors\n"
         footer += "- .to_dataframe() - Get full data as pandas DataFrame\n"
         
         # Add examples of accessing data
         examples = "\nExamples of accessing data:\n"
-        examples += "- .data['0.00e+00_1.00e-01'][1] - Get coefficients for energy bin 0-0.1 MeV, reaction 1\n"
-        if "integral" in self.energies:
-            examples += "- .data['integral'][2] - Get integral coefficients for reaction 2\n"
+        
+        # Get the first available energy bin or integral
+        first_energy = next((e for e in self.energies if e != "integral"), "integral" if "integral" in self.energies else None)
+        
+        # Get the first available reaction if any
+        first_reaction = self.reactions[0] if self.reactions else None
+        
+        if first_energy is not None and first_reaction is not None:
+            examples += f"- .data['{first_energy}'][{first_reaction}] - Get coefficients for "
+            if first_energy == "integral":
+                examples += "integral result"
+            else:
+                examples += f"energy bin {first_energy}"
+            examples += f", reaction {first_reaction}\n"
+        
+        # If we have integral results and at least two reactions, show second example
+        if "integral" in self.energies and len(self.reactions) > 1:
+            second_reaction = self.reactions[1]
+            examples += f"- .data['integral'][{second_reaction}] - Get integral coefficients for reaction {second_reaction}\n"
+        
+        # Show Taylor coefficients example if available
         if self.coefficients:
             energy_key = next(iter(self.coefficients.keys()))
             rxn_key = next(iter(self.coefficients[energy_key].keys()))
@@ -604,7 +631,8 @@ class SensitivityData:
                             top_n: int = 3,
                             plot_type: str = 'comparative',
                             e_bins: List[int] = None,
-                            n_sigma: float = 1.0):
+                            n_sigma: float = 1.0,
+                            print_coefficients: bool = False):
         """Plot perturbed response as a function of perturbation magnitude.
         
         Compares first-order approximation R(p) = R0 + c1*p with 
@@ -629,6 +657,8 @@ class SensitivityData:
         :type e_bins: List[int], optional
         :param n_sigma: Number of standard deviations to show in error bands
         :type n_sigma: float, optional
+        :param print_coefficients: Whether to print detailed coefficient info to console instead of on plot
+        :type print_coefficients: bool, optional
         :raises ValueError: If sensitivity data does not contain Taylor coefficients
         :raises ValueError: If specified energies are not found in the data
         """
@@ -727,10 +757,12 @@ class SensitivityData:
                     # Get bin-specific coefficients and errors
                     c1 = c1_values[bin_idx]
                     c2 = c2_values[bin_idx]
+                    c1_err_rel = c1_errors[bin_idx]  # Relative errors
+                    c2_err_rel = c2_errors[bin_idx]  # Relative errors
                     
                     # Convert relative errors to absolute errors
-                    c1_err_abs = c1 * c1_errors[bin_idx]  # Convert relative to absolute error
-                    c2_err_abs = c2 * c2_errors[bin_idx]  # Convert relative to absolute error
+                    c1_err_abs = c1 * c1_err_rel  # Convert relative to absolute error
+                    c2_err_abs = c2 * c2_err_rel  # Convert relative to absolute error
                     
                     # Calculate first and second order responses
                     first_order = r0 + c1 * p_values
@@ -753,6 +785,18 @@ class SensitivityData:
                     # Set subplot title
                     ax.set_title(f"Perturbation Energy Bin: {e_low:.2e} - {e_high:.2e} MeV", fontsize=12)
                     
+                    # If using print statements for coefficient details
+                    if print_coefficients:
+                        print(f"\n--- Energy Bin: {e_low:.2e} - {e_high:.2e} MeV ---")
+                        print(f"R₀ = {r0:.4e} ± {e0_relative*100:.2f}% (rel) = {r0:.4e} ± {e0_abs:.4e} (abs)")
+                        print(f"c₁ = {c1:.4e} ± {c1_err_rel*100:.2f}% (rel) = {c1:.4e} ± {c1_err_abs:.4e} (abs)")
+                        print(f"c₂ = {c2:.4e} ± {c2_err_rel*100:.2f}% (rel) = {c2:.4e} ± {c2_err_abs:.4e} (abs)")
+                        print(f"c₂/c₁ = {c2/c1 if c1 != 0 else float('nan'):.4e}")
+                        max_p_abs = max(abs(p_range[0]), abs(p_range[1]))
+                        nonlin = (c2 * (max_p_abs/100)) / c1 * 100 if c1 != 0 else float('nan')
+                        print(f"Nonlinearity at {max_p_abs}%: {nonlin:.2f}%")
+                        print("-------------------------------------------")
+                    
                     if plot_type == 'comparative':
                         # Plot both approximations with error bands
                         # First order (blue)
@@ -771,17 +815,24 @@ class SensitivityData:
                                       second_order + second_order_err, 
                                       color='red', alpha=0.2)
                         
-                        # Reference line for unperturbed value
-                        ax.axhline(y=r0, color='k', linestyle='-', alpha=0.3, 
-                                  label=f"Unperturbed (R₀ = {r0:.4e})")
+                        # Reference line for unperturbed value (remove error band)
+                        ax.axhline(y=r0, color='k', linestyle='-', alpha=0.5, 
+                                  label=f"Unperturbed (R₀ = {r0:.4e} ± {e0_relative*100:.2f}%)")
                         
-                        # Calculate and display nonlinearity metric
-                        max_p_abs = max(abs(p_range[0]), abs(p_range[1]))
-                        nonlin = (c2 * (max_p_abs/100)) / c1 * 100 if c1 != 0 else float('nan')
-                        ax.text(0.02, 0.95, 
-                              f"Ratio (c₂·p/c₁) at {max_p_abs}%: {nonlin:.2f}% | {n_sigma}σ error bands", 
-                              transform=ax.transAxes, fontsize=10, 
-                              bbox=dict(facecolor='white', alpha=0.7))
+                        # Display coefficient info in a more compact format if not printing
+                        if not print_coefficients:
+                            max_p_abs = max(abs(p_range[0]), abs(p_range[1]))
+                            nonlin = (c2 * (max_p_abs/100)) / c1 * 100 if c1 != 0 else float('nan')
+                            
+                            # Format the text box with stacked coefficient information
+                            coeff_text = (f"R₀ = {r0:.4e} ± {e0_relative*100:.1f}%\n"
+                                        f"c₁ = {c1:.4e} ± {c1_err_rel*100:.1f}%\n"
+                                        f"c₂ = {c2:.4e} ± {c2_err_rel*100:.1f}%\n"
+                                        f"Nonlinearity at {max_p_abs}%: {nonlin:.2f}%")
+                            
+                            # Position text box in upper left with vertical stacking
+                            ax.text(0.02, 0.98, coeff_text, transform=ax.transAxes, fontsize=9,
+                                  va='top', ha='left', bbox=dict(facecolor='white', alpha=0.7))
                         
                         ylabel = "Response"
                     
@@ -804,11 +855,17 @@ class SensitivityData:
                         
                         ax.axhline(y=0, color='k', linestyle='-', alpha=0.3)
                         
-                        # Calculate and display coefficient values
-                        ax.text(0.02, 0.95, 
-                               f"c₁ = {c1:.4e}, c₂ = {c2:.4e}, c₂/c₁ = {c2/c1 if c1 != 0 else float('nan'):.4e} | {n_sigma}σ error bands", 
-                               transform=ax.transAxes, fontsize=10,
-                               bbox=dict(facecolor='white', alpha=0.7))
+                        # Display coefficient values in compact format if not printing
+                        if not print_coefficients:
+                            # Format the text box with stacked coefficient information
+                            coeff_text = (f"R₀ = {r0:.4e} ± {e0_relative*100:.1f}%\n"
+                                        f"c₁ = {c1:.4e} ± {c1_err_rel*100:.1f}%\n"
+                                        f"c₂ = {c2:.4e} ± {c2_err_rel*100:.1f}%\n"
+                                        f"c₂/c₁ = {c2/c1 if c1 != 0 else float('nan'):.4e}")
+                            
+                            # Position text box in upper left with vertical stacking
+                            ax.text(0.02, 0.98, coeff_text, transform=ax.transAxes, fontsize=9,
+                                  va='top', ha='left', bbox=dict(facecolor='white', alpha=0.7))
                         
                         ylabel = "Difference between approximations (%)"
                     
@@ -957,7 +1014,7 @@ class Coefficients:
             
             # Show last few values
             for i in range(max(n_preview, n_values - n_preview), n_values):
-                e_low = f"{self.pert_energies[i]:.3e}"
+                e_low = f"{self.pert_energies[i]::.3e}"
                 e_high = f"{self.pert_energies[i+1]:.3e}"
                 data_preview += f"{e_low}-{e_high:^6} | {self.values[i]:15.6e} | {self.errors[i]:12.6f}\n"
         

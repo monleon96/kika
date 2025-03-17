@@ -70,7 +70,7 @@ class Mctal:
         # Create a visually appealing header with a border
         header_width = 60
         header = "=" * header_width + "\n"
-        header += f"{'MCNP MCTAL File Summary':^{header_width}}\n"
+        header += f"{'MCTAL File Summary':^{header_width}}\n"
         header += "=" * header_width + "\n\n"
         
         # Create aligned key-value pairs with consistent width

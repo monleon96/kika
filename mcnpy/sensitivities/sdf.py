@@ -70,10 +70,6 @@ class SDFReactionData:
         info_lines.append(f"{'Reaction:':{label_width}} {self.reaction_name} (MT {self.mt})")
         info_lines.append(f"{'Energy groups:':{label_width}} {len(self.sensitivity)}")
         
-        # Calculate total sensitivity
-        total_sens = sum(self.sensitivity)
-        info_lines.append(f"{'Total sensitivity:':{label_width}} {total_sens:.6e}")
-        
         stats = "\n".join(info_lines)
         
         # Data preview - show first few and last few sensitivity values
@@ -145,7 +141,7 @@ class SDFData:
         
         # Basic information section
         info_lines = []
-        info_lines.append(f"{'Response value:':{label_width}} {self.r0:.6e} ± {self.e0:.6e}")
+        info_lines.append(f"{'Response value:':{label_width}} {self.r0:.6e} ± {self.e0*100:.2f}% (rel)")
         info_lines.append(f"{'Energy groups:':{label_width}} {len(self.pert_energies) - 1}")
         
         # Add energy grid structure identification
@@ -296,14 +292,9 @@ class SDFData:
         block += "      0      0\n"
         block += "  0.000000E+00  0.000000E+00      0      0\n"
         
-        # Calculate total sensitivity and error - proper error propagation
-        total_sens = sum(reaction.sensitivity)
-        
-        # Convert relative errors to absolute errors, square them, sum them, and take the square root
-        absolute_errors = [sens * err for sens, err in zip(reaction.sensitivity, reaction.error)]
-        total_err = (sum(err**2 for err in absolute_errors))**0.5
+        # Use 0.0 for total sensitivity instead of calculating it incorrectly
             
-        block += f"{total_sens: >14.6E}{total_err: >14.6E}  0.000000E+00  0.000000E+00  0.000000E+00\n"
+        block += f"  0.000000E+00  0.000000E+00  0.000000E+00  0.000000E+00  0.000000E+00\n"
         
         # Reverse sensitivity and error arrays to match the descending energy order
         reversed_sensitivity = list(reversed(reaction.sensitivity))
