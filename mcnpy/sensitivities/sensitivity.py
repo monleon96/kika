@@ -129,7 +129,7 @@ class TaylorCoefficients:
             ax.set_title(f"MT {self.reaction} - {self.energy} MeV", fontsize=14)
         
         ax.set_xlabel("Perturbation (%)", fontsize=12)
-        ax.set_ylabel("Nonlinearity Factor (%)", fontsize=12)
+        ax.set_ylabel("Ratio (c2*p/c1) (%)", fontsize=12)
         ax.grid(True, alpha=0.3)
         
         # Add legend only if we have any top ratios
@@ -589,7 +589,8 @@ class SensitivityData:
         footer = "\n\nAvailable methods:\n"
         footer += "- .plot_sensitivity(energy=None, reaction=None, xlim=None) - Plot sensitivity profiles\n"
         if has_second_order:
-            footer += "- .plot_ratios(energy=None, reaction=None, p_range=None) - Plot Taylor ratio nonlinearity factors\n"
+            footer += "- .plot_perturbed_response(energy=None, reaction=None) - Plot response comparison of 1st vs 2nd order\n"
+            footer += "- .plot_second_order_contribution(energy=None, reaction=None) - Plot second order term contribution\n"
         footer += "- .to_dataframe() - Get full data as pandas DataFrame\n"
         
         # Add examples of accessing data
@@ -629,7 +630,6 @@ class SensitivityData:
                             p_range: tuple = (-20, 20),
                             n_points: int = 100, 
                             top_n: int = 3,
-                            plot_type: str = 'comparative',
                             e_bins: List[int] = None,
                             n_sigma: float = 1.0,
                             print_coefficients: bool = False):
@@ -649,9 +649,6 @@ class SensitivityData:
         :param top_n: Number of perturbation energy bins with highest nonlinearity to show.
                     If 0, shows all bins.
         :type top_n: int, optional
-        :param plot_type: Type of plot: 'comparative' (1st vs. 1st+2nd order) or 
-                         'difference' (difference between approximations)
-        :type plot_type: str, optional
         :param e_bins: Specific indices of perturbation energy bins to plot.
                       Overrides top_n if provided.
         :type e_bins: List[int], optional
@@ -661,6 +658,68 @@ class SensitivityData:
         :type print_coefficients: bool, optional
         :raises ValueError: If sensitivity data does not contain Taylor coefficients
         :raises ValueError: If specified energies are not found in the data
+        """
+        # Use internal helper method to handle the common parts of plotting
+        return self._plot_perturbed_data(energy, reaction, p_range, n_points, top_n, 
+                                        'comparative', e_bins, n_sigma, print_coefficients)
+    
+    def plot_second_order_contribution(self, 
+                            energy: Union[str, List[str]] = None, 
+                            reaction: Union[List[int], int] = None,
+                            p_range: tuple = (-20, 20),
+                            n_points: int = 100, 
+                            top_n: int = 3,
+                            e_bins: List[int] = None,
+                            n_sigma: float = 1.0,
+                            print_coefficients: bool = False):
+        """Plot the contribution of second-order term as percentage of the total response.
+        
+        This shows how much of the total second-order response comes from the second-order term (c2*p²),
+        which indicates the error introduced when using only first-order approximation.
+        
+        :param energy: Energy string(s) to plot. If None, plots all energies
+        :type energy: Union[str, List[str]], optional
+        :param reaction: Reaction number(s) to plot. If None, plots all reactions
+        :type reaction: Union[List[int], int], optional
+        :param p_range: Range of perturbation magnitudes as (min%, max%) in percent
+        :type p_range: tuple, optional
+        :param n_points: Number of points to evaluate for plotting
+        :type n_points: int, optional
+        :param top_n: Number of perturbation energy bins with highest second-order contribution to show.
+                    If 0, shows all bins.
+        :type top_n: int, optional
+        :param e_bins: Specific indices of perturbation energy bins to plot.
+                      Overrides top_n if provided.
+        :type e_bins: List[int], optional
+        :param n_sigma: Number of standard deviations to show in error bands
+        :type n_sigma: float, optional
+        :param print_coefficients: Whether to print detailed coefficient info to console instead of on plot
+        :type print_coefficients: bool, optional
+        :raises ValueError: If sensitivity data does not contain Taylor coefficients
+        :raises ValueError: If specified energies are not found in the data
+        """
+        # Use internal helper method with 'difference' plot type
+        return self._plot_perturbed_data(energy, reaction, p_range, n_points, top_n, 
+                                        'difference', e_bins, n_sigma, print_coefficients)
+    
+    def _plot_perturbed_data(self, 
+                            energy: Union[str, List[str]] = None, 
+                            reaction: Union[List[int], int] = None,
+                            p_range: tuple = (-20, 20),
+                            n_points: int = 100, 
+                            top_n: int = 3,
+                            plot_type: str = 'comparative',
+                            e_bins: List[int] = None,
+                            n_sigma: float = 1.0,
+                            print_coefficients: bool = False):
+        """Internal helper method that handles perturbed response plotting.
+        
+        This method is used by both plot_perturbed_response and plot_second_order_contribution
+        to avoid code duplication.
+        
+        :param plot_type: Type of plot: 'comparative' (1st vs. 1st+2nd order) or 
+                         'difference' (second-order term contribution)
+        :type plot_type: str
         """
         if not self.coefficients:
             raise ValueError("Taylor coefficients for order 1 and 2 are required for perturbed response plots. ")
@@ -717,13 +776,30 @@ class SensitivityData:
                     # Use specific bins if provided
                     selected_bins = [i for i in e_bins if i < n_bins]
                 elif top_n > 0:
-                    # Calculate nonlinearity metric for each bin (use maximum p in range)
+                    # Use maximum perturbation for selection
                     max_p = max(abs(p_range[0]), abs(p_range[1])) / 100.0
-                    nonlinearity = np.array([abs((c2_values[i] * max_p) / c1_values[i]) 
-                                           if c1_values[i] != 0 else 0 
-                                           for i in range(n_bins)])
-                    # Get indices of top_n bins with highest nonlinearity
-                    selected_bins = np.argsort(nonlinearity)[-top_n:]
+                    
+                    # Calculate the difference metric at max_p for each bin
+                    differences = []
+                    for i in range(n_bins):
+                        c1 = c1_values[i]
+                        c2 = c2_values[i]
+                        
+                        # Calculate first and second order at max perturbation
+                        first_order = r0 + c1 * max_p
+                        second_order = r0 + c1 * max_p + c2 * (max_p**2)
+                        
+                        # Calculate percentage contribution of second order term
+                        if abs(second_order) > 1e-10:  # Avoid division by zero
+                            diff = abs((c2 * max_p**2) / second_order) * 100
+                        else:
+                            diff = 0
+                        
+                        differences.append(diff)
+                    
+                    # Get indices of top_n bins with highest difference
+                    # Sort in descending order of difference magnitude
+                    selected_bins = np.argsort(differences)[-top_n:][::-1]  # Reverse to get descending order
                 else:
                     # Use all bins
                     selected_bins = list(range(n_bins))
@@ -735,7 +811,7 @@ class SensitivityData:
                 # Create figure with one row per selected energy bin
                 n_selected = len(selected_bins)
                 fig, axes = plt.subplots(n_selected, 1, figsize=(10, 4 * n_selected), 
-                                       sharex=True, squeeze=False)
+                                       squeeze=False)  # Removed sharex=True
                 axes = axes.flatten()
                 
                 # Set main title
@@ -794,7 +870,7 @@ class SensitivityData:
                         print(f"c₂/c₁ = {c2/c1 if c1 != 0 else float('nan'):.4e}")
                         max_p_abs = max(abs(p_range[0]), abs(p_range[1]))
                         nonlin = (c2 * (max_p_abs/100)) / c1 * 100 if c1 != 0 else float('nan')
-                        print(f"Nonlinearity at {max_p_abs}%: {nonlin:.2f}%")
+                        print(f"Ratio (c2*p/c1) at {max_p_abs}%: {nonlin:.2f}%")
                         print("-------------------------------------------")
                     
                     if plot_type == 'comparative':
@@ -828,7 +904,7 @@ class SensitivityData:
                             coeff_text = (f"R₀ = {r0:.4e} ± {e0_relative*100:.1f}%\n"
                                         f"c₁ = {c1:.4e} ± {c1_err_rel*100:.1f}%\n"
                                         f"c₂ = {c2:.4e} ± {c2_err_rel*100:.1f}%\n"
-                                        f"Nonlinearity at {max_p_abs}%: {nonlin:.2f}%")
+                                        f"Ratio (c2*p/c1) at {max_p_abs}%: {nonlin:.2f}%")
                             
                             # Position text box in upper left with vertical stacking
                             ax.text(0.02, 0.98, coeff_text, transform=ax.transAxes, fontsize=9,
@@ -837,14 +913,17 @@ class SensitivityData:
                         ylabel = "Response"
                     
                     else:  # 'difference'
-                        # Plot difference between approximations
-                        diff = ((second_order - first_order) / r0) * 100  # percent difference
+                        # Plot percentage error of using first-order instead of second-order
+                        # Calculate the contribution of second-order term relative to full second-order approximation
+                        diff = (c2 * p_values**2 / second_order) * 100  # percentage of second-order term
                         
-                        # Calculate error in the difference
-                        # We need the absolute error of the difference between approximations
-                        # For the difference (second_order - first_order), r0 error doesn't affect the difference
-                        # The error is from the c2*p² term
-                        diff_err = np.abs((c2_err_abs * p_values**2) / r0 * 100)
+                        # Calculate error in this percentage
+                        # Error propagation for (c2*p²)/second_order
+                        # We need to consider errors in both c2 and the full second-order approximation
+                        second_order_err_rel = second_order_err / second_order  # Relative error in second-order approx
+                        # Error propagation for division: rel_error_result² = rel_error_numerator² + rel_error_denominator²
+                        diff_err_rel = np.sqrt((c2_err_rel)**2 + (second_order_err_rel)**2)
+                        diff_err = np.abs(diff * diff_err_rel)  # Convert to absolute error
                         diff_err *= n_sigma
                         
                         ax.plot(p_values * 100, diff, 'g-', linewidth=2)
@@ -867,21 +946,23 @@ class SensitivityData:
                             ax.text(0.02, 0.98, coeff_text, transform=ax.transAxes, fontsize=9,
                                   va='top', ha='left', bbox=dict(facecolor='white', alpha=0.7))
                         
-                        ylabel = "Difference between approximations (%)"
+                        # More descriptive y-axis label
+                        ylabel = "Second-order term contribution (%)"
                     
                     ax.set_ylabel(ylabel)
                     ax.grid(True, alpha=0.3)
                     
-                    # Only add x-label to bottom plot
-                    if i == len(selected_bins) - 1:
-                        ax.set_xlabel("Perturbation Magnitude (%)")
-                    
-                    if plot_type == 'comparative':
-                        ax.legend(loc='upper right')
+                    # Add xticks to all subplots (not just the bottom one)
+                    # Calculate nice tick positions based on the p_range
+                    tick_step = 5  # Default step size of 5%
+                    min_tick = math.ceil(p_range[0] / tick_step) * tick_step
+                    max_tick = math.floor(p_range[1] / tick_step) * tick_step
+                    ticks = np.arange(min_tick, max_tick + tick_step, tick_step)
+                    ax.set_xticks(ticks)
+                    ax.set_xlabel("Perturbation Magnitude (%)")  # Add xlabel to all plots
                 
                 plt.tight_layout()
                 plt.show()
-
 
 @dataclass
 class Coefficients:
