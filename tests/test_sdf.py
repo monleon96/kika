@@ -1,9 +1,13 @@
 import pytest
 import mcnpy
+import os
 
 
 def test_sdf():
 
+    # Generated filename
+    test_file_name = 'test_1.00e+00_3.00e+00.sdf'
+    
     try:
         reference_sdf_path = 'tests/data/sdf/ref_1.00e+00_3.00e+00.sdf'
 
@@ -44,7 +48,7 @@ def test_sdf():
         sdf_data.write_file()
 
         # Check that files have the same content line by line
-        with open(reference_sdf_path, 'r') as f1, open('test_1.00e+00_3.00e+00.sdf', 'r') as f2:
+        with open(reference_sdf_path, 'r') as f1, open(test_file_name, 'r') as f2:
             ref_lines = f1.readlines()
             test_lines = f2.readlines()
             
@@ -63,3 +67,7 @@ def test_sdf():
         pytest.fail(f"Assertion failed: {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error: {e}")
+    finally:
+        # Clean up - delete the generated file after test completes
+        if os.path.exists(test_file_name):
+            os.remove(test_file_name)

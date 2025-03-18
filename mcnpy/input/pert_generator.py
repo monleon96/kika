@@ -20,7 +20,7 @@ def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=N
     :param material_number: Material ID number to be perturbed
     :type material_number: int
     :param density: Density of the original material. If positive, interpreted as atoms/barn-cm,
-                   if negative, interpreted as g/cm³
+                    if negative, interpreted as g/cm³
     :type density: float
     :param nuclide: ZAID of the nuclide to be perturbed
     :type nuclide: int
@@ -53,90 +53,90 @@ def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=N
     new_material_id = pert_mat_id if pert_mat_id is not None else material_number * 100 + 1
     perturbed_material = original_material.copy(new_material_id)
     
-    # Determine if original material uses weight fractions
-    has_weight_fractions = any(nuclide.fraction < 0 for nuclide in perturbed_material.nuclide.values())
+    # Determine if original material uses weight fractions (negative fractions indicate weight fractions)
+    has_weight_fractions = any(nuclide_obj.fraction < 0 for nuclide_obj in perturbed_material.nuclide.values())
     
     # Ensure the material is in atomic fractions format for perturbation
     if has_weight_fractions:
         perturbed_material.to_atomic_fraction()
     
-    # Calculate the sum of all fractions in the perturbed material (should be 1.0 if already normalized)
-    total_fraction = sum(nuclide.fraction for nuclide in perturbed_material.nuclide.values())
-    
-    # Normalize the perturbed material composition to start with a normalized composition
-    if abs(total_fraction - 1.0) > 1e-6:  # Check if normalization is needed
+    # Normalize the perturbed material composition (if needed)
+    total_fraction = sum(nuclide_obj.fraction for nuclide_obj in perturbed_material.nuclide.values())
+    if abs(total_fraction - 1.0) > 1e-6:
         normalization_factor = 1.0 / total_fraction
         for zaid in perturbed_material.nuclide:
             perturbed_material.nuclide[zaid].fraction *= normalization_factor
     
-    # Now apply 100% perturbation to the specified nuclide (after normalization)
+    # Apply 100% perturbation to the specified nuclide (after normalization)
     perturbed_material.nuclide[nuclide].fraction *= 2.0
     
-    # Calculate the sum of all fractions after perturbation
-    new_total = sum(nuclide.fraction for nuclide in perturbed_material.nuclide.values())
+    # Sum of fractions after perturbation (may not be normalized)
+    new_total = sum(nuclide_obj.fraction for nuclide_obj in perturbed_material.nuclide.values())
     
-    # Determine if density is in atoms/barn-cm or g/cm³
-    is_atomic_density = density >= 0
-    abs_density = abs(density)
-    
-    # Calculate average atomic mass for the material
+    # --------------------------------------------------
+    # Compute average atomic mass for the original material
+    # --------------------------------------------------
     avg_atomic_mass = 0.0
-    for zaid, nuclide_obj in original_material.nuclide.items():
-        # Ensure we're working with positive fractions for the calculation
-        fraction = abs(nuclide_obj.fraction)
-        if has_weight_fractions:
-            # Convert weight fraction to atomic fraction for density calculations
-            atomic_number = zaid // 1000
-            mass_number = zaid % 1000
-            isotope_key = atomic_number * 1000 + mass_number
-            atomic_mass = ATOMIC_MASS.get(isotope_key, float(mass_number) if mass_number > 0 else 1.0)
-            fraction = fraction / atomic_mass  # Convert weight to atomic
-            
-        # Normalize to get proper weighting
-        fraction = fraction / total_fraction
-        
-        # Get atomic mass
+    if has_weight_fractions:
+        # For weight fractions: convert using X_i = (w_i/A_i)/sum(w_j/A_j)
+        sum_w_over_A = 0.0
+        for zaid, nuclide_obj in original_material.nuclide.items():
+            fraction = abs(nuclide_obj.fraction)
+            # Get atomic mass from dictionary or approximate
+            if zaid in ATOMIC_MASS:
+                atomic_mass = ATOMIC_MASS[zaid]
+            else:
+                atomic_number = zaid // 1000
+                mass_number = zaid % 1000
+                atomic_mass = float(mass_number) if mass_number > 0 else 1.0
+                print(f"WARNING: Atomic mass not found for nuclide {zaid}. Using mass number {mass_number} as an approximation.")
+            sum_w_over_A += fraction / atomic_mass
+        avg_atomic_mass = 1.0 / sum_w_over_A
+    else:
+        # For atomic fractions: normalize and compute the weighted average
+        total_original = sum(nuclide_obj.fraction for nuclide_obj in original_material.nuclide.values())
+        for zaid, nuclide_obj in original_material.nuclide.items():
+            fraction = nuclide_obj.fraction / total_original
+            if zaid in ATOMIC_MASS:
+                atomic_mass = ATOMIC_MASS[zaid]
+            else:
+                atomic_number = zaid // 1000
+                mass_number = zaid % 1000
+                atomic_mass = float(mass_number) if mass_number > 0 else 1.0
+                print(f"WARNING: Atomic mass not found for nuclide {zaid}. Using mass number {mass_number} as an approximation.")
+            avg_atomic_mass += fraction * atomic_mass
+    
+    # --------------------------------------------------
+    # Convert between atomic density and mass density using avg_atomic_mass
+    # --------------------------------------------------
+    abs_density = abs(density)
+    if density < 0:
+        # Input density is in g/cm³ (mass density)
+        mass_density = abs_density
+        # Convert to atomic density: (g/cm³) * (N_AVOGADRO / avg_atomic_mass) * 1e-24
+        atomic_density = mass_density * N_AVOGADRO / avg_atomic_mass * 1e-24
+    else:
+        # Input density is in atoms/barn-cm (atomic density)
+        atomic_density = abs_density
+        # Convert to mass density: (atoms/barn-cm) * (avg_atomic_mass / N_AVOGADRO) * 1e24
+        mass_density = atomic_density * avg_atomic_mass / N_AVOGADRO * 1e24
+    
+    # Calculate new densities after perturbation
+    new_atomic_density = atomic_density * new_total  # because the nuclide fraction increased
+    # Recalculate average atomic mass for perturbed material
+    new_avg_atomic_mass = 0.0
+    # Use normalized fractions for the calculation
+    for zaid, nuclide_obj in perturbed_material.nuclide.items():
+        fraction = nuclide_obj.fraction / new_total
         if zaid in ATOMIC_MASS:
             atomic_mass = ATOMIC_MASS[zaid]
         else:
-            # Approximate mass if not found in the dictionary
             atomic_number = zaid // 1000
             mass_number = zaid % 1000
             atomic_mass = float(mass_number) if mass_number > 0 else 1.0
-            print(f"WARNING: Atomic mass not found for nuclide {zaid}. Using mass number {mass_number} as an approximation.")
-        
-        avg_atomic_mass += fraction * atomic_mass
-    
-    # Convert between atomic density and mass density
-    if is_atomic_density:
-        # Input is atoms/barn-cm
-        atomic_density = abs_density
-        # Convert to g/cm³: (atoms/barn-cm) * avg_atomic_mass / N_AVOGADRO * 1e24
-        # 1e24 factor: 1 barn = 1e-24 cm²
-        mass_density = atomic_density * avg_atomic_mass / N_AVOGADRO * 1e24
-    else:
-        # Input is g/cm³
-        mass_density = abs_density
-        # Convert to atoms/barn-cm: (g/cm³) * N_AVOGADRO / avg_atomic_mass * 1e-24
-        atomic_density = mass_density * N_AVOGADRO / avg_atomic_mass * 1e-24
-    
-    # Calculate new densities after perturbation
-    new_atomic_density = atomic_density * new_total
-    
-    # Recalculate average atomic mass for perturbed material
-    new_avg_atomic_mass = 0.0
-    for zaid, nuclide_obj in perturbed_material.nuclide.items():
-        fraction = nuclide_obj.fraction  # Already normalized
-        if zaid in ATOMIC_MASS:
-            atomic_mass = ATOMIC_MASS[zaid]
-        else:
-            atomic_number = zaid // 1000
-            mass_number = zaid % 1000
-            atomic_mass = float(mass_number)
-        
         new_avg_atomic_mass += fraction * atomic_mass
     
-    # Calculate new mass density
+    # Calculate new mass density based on perturbed composition
     new_mass_density = new_atomic_density * new_avg_atomic_mass / N_AVOGADRO * 1e24
     
     # Re-normalize the perturbed material to maintain sum = 1.0
@@ -147,15 +147,15 @@ def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=N
     # Determine output format based on parameter or original material format
     if format is None:
         # Use the same format as the original material
-        if has_weight_fractions and not any(nuclide.fraction < 0 for nuclide in perturbed_material.nuclide.values()):
+        if has_weight_fractions and not any(nuclide_obj.fraction < 0 for nuclide_obj in perturbed_material.nuclide.values()):
             # Original was in weight fractions but perturbed is now in atomic, so convert back
             perturbed_material.to_weight_fraction()
     elif format.lower() == 'weight':
         # Convert to weight fractions if not already
-        if not any(nuclide.fraction < 0 for nuclide in perturbed_material.nuclide.values()):
+        if not any(nuclide_obj.fraction < 0 for nuclide_obj in perturbed_material.nuclide.values()):
             perturbed_material.to_weight_fraction()
     elif format.lower() == 'atomic':
-        # Ensure using atomic fractions (already done during perturbation)
+        # Already in atomic fractions
         pass
     else:
         print(f"WARNING: Unrecognized format '{format}'. Using atomic fractions.")
@@ -168,12 +168,8 @@ def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=N
     perturbed_material_str = perturbed_material.__str__()
     
     # Generate density information for comments
-    if is_atomic_density:
-        density_str = f"c Density: {atomic_density:.6e} atoms/barn-cm | {mass_density:.6e} g/cm³\n"
-        new_density_str = f"c Density: {new_atomic_density:.6e} atoms/barn-cm | {new_mass_density:.6e} g/cm³\n"
-    else:
-        density_str = f"c Density: {mass_density:.6e} g/cm³ | {atomic_density:.6e} atoms/barn-cm\n"
-        new_density_str = f"c Density: {new_mass_density:.6e} g/cm³ | {new_atomic_density:.6e} atoms/barn-cm\n"
+    density_str = f"c Density: -{mass_density:.6e} g/cm³ | {atomic_density:.6e} atoms/barn-cm\n"
+    new_density_str = f"c Density: -{new_mass_density:.6e} g/cm³ | {new_atomic_density:.6e} atoms/barn-cm\n"
     
     # Generate separators and headers
     header_orig = f"c Original material being perturbed - rewritten by MCNPy\n{density_str}"
@@ -263,13 +259,8 @@ def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=N
     print(f"- Original material: {material_number}")
     print(f"- Perturbed material ID: {new_material_id}")
     print(f"- Perturbed nuclide: {nuclide}")
-    
-    if is_atomic_density:
-        print(f"- Original density: {atomic_density:.6e} atoms/barn-cm | {mass_density:.6e} g/cm³")
-        print(f"- Perturbed density: {new_atomic_density:.6e} atoms/barn-cm | {new_mass_density:.6e} g/cm³")
-    else:
-        print(f"- Original density: {mass_density:.6e} g/cm³ | {atomic_density:.6e} atoms/barn-cm")
-        print(f"- Perturbed density: {new_mass_density:.6e} g/cm³ | {new_atomic_density:.6e} atoms/barn-cm")
+    print(f"- Original density: -{mass_density:.6e} g/cm³ | {atomic_density:.6e} atoms/barn-cm")
+    print(f"- Perturbed density: -{new_mass_density:.6e} g/cm³ | {new_atomic_density:.6e} atoms/barn-cm")
     
     print(f"\nSuccess! Material written to: {final_path}")
     

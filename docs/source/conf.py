@@ -1,25 +1,18 @@
 import datetime
 import os
 import sys
-
-# Add the repository root directory to sys.path
 sys.path.insert(0, os.path.abspath('../..'))
 
 # Attempt safe import
-try:
-    from mcnpy._config import LIBRARY_VERSION, AUTHOR
-except ImportError:
-    LIBRARY_VERSION = "unknown"
-    AUTHOR = "unknown"
-    print("WARNING: Could not import LIBRARY_VERSION or AUTHOR from mcnpy._config.")
+from mcnpy._config import LIBRARY_VERSION, AUTHOR
 
+# -- Project information -----------------------------------------------------
 project = 'MCNPy'
 copyright = f"{datetime.datetime.now().year}, {AUTHOR}"
 author = AUTHOR
 release = LIBRARY_VERSION
 
 # -- General configuration ---------------------------------------------------
-
 extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.napoleon',

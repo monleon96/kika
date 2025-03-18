@@ -137,16 +137,14 @@ MCNPy can analyze nonlinearity in sensitivity coefficients using Taylor coeffici
            reaction=[2],
            p_range=(-20, 20),  # Perturbation range in percent
            top_n=3,  # Show top 3 energy bins with highest nonlinearity
-           plot_type='comparative'  # Compare first-order and second-order approximations
        )
        
        # Show the difference between approximations
-       sensitivity.plot_perturbed_response(
+       sensitivity.plot_second_order_contribution(
            energy=sensitivity.energies[2],
            reaction=[2],
            p_range=(-10, 10),
            top_n=3,
-           plot_type='difference'
        )
    else:
        print("No Taylor coefficient data available. Second-order perturbations were not calculated.")
