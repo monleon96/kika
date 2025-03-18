@@ -4,13 +4,13 @@ import sys
 sys.path.insert(0, os.path.abspath('../..'))
 
 # Attempt safe import
-from mcnpy._config import LIBRARY_VERSION, AUTHOR
+#from mcnpy._config import LIBRARY_VERSION, AUTHOR
 
 # -- Project information -----------------------------------------------------
 project = 'MCNPy'
-copyright = f"{datetime.datetime.now().year}, {AUTHOR}"
-author = AUTHOR
-release = LIBRARY_VERSION
+copyright = f"{datetime.datetime.now().year}, Juan Antonio Monleon de la Lluvia <juanmonleon96@gmail.com>"
+author = "Juan Antonio Monleon de la Lluvia <juanmonleon96@gmail.com>"
+release = "0.2.3"
 
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -75,5 +75,5 @@ html_sidebars = {
 }
 
 rst_prolog = f"""
-.. |version| replace:: {LIBRARY_VERSION}
+.. |version| replace:: "0.2.3"
 """
