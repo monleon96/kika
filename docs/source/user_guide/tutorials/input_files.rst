@@ -101,6 +101,43 @@ MCNPy allows converting between these formats:
    materials.to_atomic_fractions()  # Convert all to atomic fractions
    materials.to_weight_fractions()  # Convert all to weight fractions
 
+Converting Natural Elements to Isotopes
+---------------------------------------
+
+MCNPy provides functionality to convert materials containing natural elements (ZAIDs ending in '00') 
+into their constituent isotopes based on natural abundances:
+
+.. code-block:: python
+
+   # Create a material with natural elements
+   natural_mat = mcnpy.input.material.Mat(id=200, nlib="80c")
+   
+   # Add natural carbon (ZAID 6000)
+   natural_mat.add_nuclide(zaid=6000, fraction=0.5)
+   
+   # Add natural oxygen (ZAID 8000)
+   natural_mat.add_nuclide(zaid=8000, fraction=0.5)
+   
+   print("Material with natural elements:")
+   print(natural_mat)
+   
+   # Convert all natural elements to isotopes
+   natural_mat.convert_natural_elements()
+   
+   print("Material after converting natural elements to isotopes:")
+   print(natural_mat)
+   
+   # You can also convert only specific natural elements:
+   another_mat = mcnpy.input.material.Mat(id=300, nlib="80c")
+   another_mat.add_nuclide(zaid=6000, fraction=0.3)  # Natural carbon
+   another_mat.add_nuclide(zaid=8000, fraction=0.7)  # Natural oxygen
+   
+   # Convert only carbon to isotopes
+   another_mat.convert_natural_elements(zaid_to_expand=6000)
+   
+   print("Material after converting only carbon to isotopes:")
+   print(another_mat)
+
 Creating New Materials
 ----------------------
 

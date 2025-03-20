@@ -1,5 +1,6 @@
 import os
-from .parse_input import read_mcnp, _read_material
+from .parse_input import read_mcnp
+from .parse_materials import read_material
 from mcnpy._constants import MCNPY_HEADER, MCNPY_FOOTER, ATOMIC_MASS, N_AVOGADRO
 
 
@@ -199,7 +200,7 @@ def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=N
             raise ValueError(f"Could not locate material {material_number} in input file")
 
         # Use _read_material to determine the end of the material block
-        _, next_position = _read_material(lines, original_position)
+        _, next_position = read_material(lines, original_position)
         
         # Remove the original material lines from the file
         del lines[original_position:next_position]
