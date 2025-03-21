@@ -1,13 +1,15 @@
 import pytest
+import numpy as np
+import pandas as pd
 from mcnpy.mctal.parse_mctal import read_mctal
 
 def test_mctal_parsing():
     
-    filename = "tests/data/mctal/PWRSphere_F4_test.m"
+    filename = "tests/data/mctal/mctalfile_test_1.m"
 
     try:
         # Parse file (set pert=False to avoid TallyPert parsing)
-        mctal = read_mctal(filename, tally_ids=[4,14], tfc=True, pert=False)
+        mctal = read_mctal(filename)
 
         # --- Test #sym:MCTAL variables ---
         # Header values
@@ -68,11 +70,11 @@ def test_mctal_parsing():
 
 def test_mctal_pert_parsing():
     
-    filename = "tests/data/pert/PWRSphere_F4_PERT_test.m"
+    filename = "tests/data/pert/mctalfile_PERT_test_1.m"
 
     try:
         # Parse file (set pert=False to avoid TallyPert parsing)
-        mctal = read_mctal(filename, tally_ids=[4], tfc=True, pert=True)
+        mctal = read_mctal(filename)
 
         # --- Test #sym:MCTAL variables ---
         # Header values
@@ -112,3 +114,316 @@ def test_mctal_pert_parsing():
         pytest.fail(f"Invalid data in MCTAL file: {str(e)}")
     except Exception as e:
         pytest.fail(f"Unexpected error parsing MCTAL file: {str(e)}")
+
+
+def test_mctal_multidim_parsing():
+
+    filename = "tests/data/mctal/mctalfile_test_2.m"
+
+    try:
+        # Parse file (set pert=False to avoid TallyPert parsing)
+        mctal = read_mctal(filename)
+
+        # --- Test #sym:MCTAL variables ---
+        # Header values
+        assert mctal.code_name == "mcnp6"  
+        assert mctal.ver == "6"              
+        assert mctal.probid == "03/21/25 09:04:37"        
+        assert mctal.knod == 2              
+        assert mctal.nps == 110079                
+        assert mctal.rnr == 70134725                
+
+        # Problem ID
+        assert mctal.problem_id == "Example 3 MODEL"  
+
+        # Tally header info
+        assert mctal.ntal == 33              
+        assert mctal.npert == 0             
+        assert mctal.tally_numbers == [10014, 10024, 10034, 10044, 10054, 10064, 10074, 10084, 10094, 10104, 10114, 10124, 10134, 10144, 10154, 10164, 10174, 10184, 10194, 10204, 10214, 10224, 10234, 10244, 10254, 10264, 10274, 10284, 10294, 10304, 20014, 20024, 20234] 
+
+        # --- Test #sym:Tally 10014 variables ---
+        tally = mctal.tally.get(10014)
+        assert mctal.tally.get(4) is None, "Tally 4 not found"
+        assert tally.tally_id == 10014         
+        assert tally.name == "Reaction rate 58Ni(n,p)  (Vol.) in (-1,+2)"         
+        assert tally.energies == [0.1, 1.0, 3.0, 20.0]  
+        assert tally.results == [0.0, 150578.0, 8901150.0, 51558600.0, 0.0, 111063.0, 66178300.0, 0.0, 0.0, 214811.0, 26666300.0, 104354000.0, 0.0, 173543.0, 43900100.0, 39612000.0, 0.0, 115372.0, 70412600.0, 177830000.0, 0.0, 74983.1, 33045500.0, 60255200.0, 0.0, 92540.3, 42515400.0, 56592200.0]   
+        assert tally.errors == [0.0, 0.7105, 0.5135, 0.7182, 0.0, 0.7287, 0.6156, 0.0, 0.0, 0.3045, 0.3549, 0.3315, 0.0, 0.6447, 0.6623, 0.7261, 0.0, 0.3534, 0.3141, 0.3591, 0.0, 0.9804, 0.7646, 1.0, 0.0, 0.6652, 0.4196, 0.7575]     
+        
+        # Get the integral energy data
+        integral_data = tally.get_integral_energy_data()
+        
+        # Expected result values
+        expected_results = np.array([
+            [[6.06103e+07]],
+            [[6.62893e+07]],
+            [[1.31235e+08]],
+            [[8.36857e+07]],
+            [[2.48358e+08]],
+            [[9.33757e+07]],
+            [[9.92002e+07]]
+        ])
+        
+        # Expected error values
+        expected_errors = np.array([
+            [[0.6156]],
+            [[0.6146]],
+            [[0.283]],
+            [[0.4887]],
+            [[0.2721]],
+            [[0.6997]],
+            [[0.4681]]
+        ])
+        
+        # Check that results match expected values
+        assert 'Result' in integral_data
+        assert 'Error' in integral_data
+        assert np.allclose(integral_data['Result'], expected_results.reshape(integral_data['Result'].shape))
+        assert np.allclose(integral_data['Error'], expected_errors.reshape(integral_data['Error'].shape))
+        
+        assert tally.get_dimensions() == {'cell': 1, 'segment': 7, 'multiplier': 1, 'energy': 4}
+        
+        # Test slices using np.allclose for float comparison
+        slice_result, slice_error = tally.get_slice(energy=1, segment=1)
+        assert np.allclose(slice_result, np.array([[111063.]]))
+        assert np.allclose(slice_error, np.array([[0.7287]]))
+        
+        slice_result, slice_error = tally.get_slice(segment=2)
+        expected_slice_result = np.array([[[0.00000e+00, 2.14811e+05, 2.66663e+07, 1.04354e+08]]])
+        expected_slice_error = np.array([[[0.0, 0.3045, 0.3549, 0.3315]]])
+        assert np.allclose(slice_result, expected_slice_result)
+        assert np.allclose(slice_error, expected_slice_error)
+        
+        assert tally.tfc_nps == [110079]
+        assert tally.tfc_results == [99200200.0]
+        assert tally.tfc_errors == [0.468054]
+        assert tally.perturbation == {}
+
+    except FileNotFoundError:
+        pytest.fail(f"Test file not found: {filename}")
+    except ValueError as e:
+        pytest.fail(f"Invalid data in MCTAL file: {str(e)}")
+    except Exception as e:
+        pytest.fail(f"Unexpected error parsing MCTAL file: {str(e)}")
+
+
+def test_to_dataframe():
+    """Test the to_dataframe method for simple and multidimensional tallies."""
+    
+    # Test with simple tally (energy-only)
+    filename = "tests/data/mctal/mctalfile_test_1.m"
+    try:
+        mctal = read_mctal(filename)
+        
+        # Test tally 4 (with energy bins)
+        tally = mctal.tally.get(4)
+        df = tally.to_dataframe()
+        
+        # Check dataframe structure
+        assert isinstance(df, pd.DataFrame)
+        assert list(df.columns) == ['Energy', 'Result', 'Error']
+        assert len(df) == 3  # 3 energy bins
+        
+        # Check values
+        assert np.allclose(df['Energy'].values, [0.1, 1.0, 3.0])
+        assert np.allclose(df['Result'].values, [2.95887e-09, 8.25405e-09, 8.62196e-10])
+        assert np.allclose(df['Error'].values, [0.1038, 0.0765, 0.1932])
+        
+        # Test tally 14 (no energy bins)
+        tally = mctal.tally.get(14)
+        df = tally.to_dataframe()
+        
+        # Check dataframe structure
+        assert isinstance(df, pd.DataFrame)
+        assert 'Result' in df.columns
+        assert 'Error' in df.columns
+        assert len(df) == 1  # Single result
+        
+        # Check values
+        assert np.isclose(df['Result'].values[0], 1.35263e-05)
+        assert np.isclose(df['Error'].values[0], 0.0023)
+        
+    except FileNotFoundError:
+        pytest.fail(f"Test file not found: {filename}")
+
+    # Test with multidimensional tally
+    filename = "tests/data/mctal/mctalfile_test_2.m"
+    try:
+        mctal = read_mctal(filename)
+        tally = mctal.tally.get(10014)
+        
+        # Get the dataframe
+        df = tally.to_dataframe()
+        
+        # Check dataframe structure
+        assert isinstance(df, pd.DataFrame)
+        assert set(['Cell', 'Segment', 'Multiplier', 'Energy', 'Result', 'Error']).issubset(set(df.columns))
+        
+        # Check dimensions
+        dimensions = tally.get_dimensions()
+        expected_rows = dimensions['cell'] * dimensions['segment'] * dimensions['multiplier'] * dimensions['energy']
+        assert len(df) == expected_rows
+        
+        # Verify some values from different segments
+        segment0_energy1 = df[(df['Segment'] == 0) & (df['Energy'] == 1.0)]
+        assert len(segment0_energy1) == 1
+        assert np.isclose(segment0_energy1['Result'].values[0], 150578.0)
+        assert np.isclose(segment0_energy1['Error'].values[0], 0.7105)
+        
+        segment1_energy1 = df[(df['Segment'] == 1) & (df['Energy'] == 1.0)]
+        assert len(segment1_energy1) == 1
+        assert np.isclose(segment1_energy1['Result'].values[0], 111063.0)
+        assert np.isclose(segment1_energy1['Error'].values[0], 0.7287)
+        
+    except FileNotFoundError:
+        pytest.fail(f"Test file not found: {filename}")
+        
+    # Test with perturbation data
+    filename = "tests/data/pert/mctalfile_PERT_test_1.m"
+    try:
+        mctal = read_mctal(filename)
+        
+        # Test perturbation to_dataframe
+        tally = mctal.tally.get(4)
+        pert = tally.perturbation[174]
+        df = pert.to_dataframe()
+        
+        # Check dataframe structure
+        assert isinstance(df, pd.DataFrame)
+        assert list(df.columns) == ['Energy', 'Result', 'Error']
+        assert len(df) == 3  # 3 energy bins
+        
+        # Check specific values
+        assert np.allclose(df['Energy'].values, [0.1, 1.0, 3.0])
+        assert np.allclose(df['Result'].values, [2.65504e-09, 9.16002e-09, 1.06652e-09])
+        assert np.allclose(df['Error'].values, [0.0226, 0.0306, 0.0173])
+        
+        # Test perturbation collection to_dataframe
+        pertcol_df = tally.perturbation.to_dataframe()
+        assert isinstance(pertcol_df, pd.DataFrame)
+        assert 'Perturbation' in pertcol_df.columns
+        assert set([174]).issubset(set(pertcol_df['Perturbation'].unique()))
+        
+    except FileNotFoundError:
+        pytest.fail(f"Test file not found: {filename}")
+
+
+def test_to_xarray():
+    """Test the to_xarray method for simple and multidimensional tallies."""
+    
+    # Skip if xarray is not available
+    try:
+        import xarray as xr
+    except ImportError:
+        pytest.skip("xarray not installed")
+    
+    # Test with simple tally (energy-only)
+    filename = "tests/data/mctal/mctalfile_test_1.m"
+    try:
+        mctal = read_mctal(filename)
+        
+        # Test tally 4 (with energy bins)
+        tally = mctal.tally.get(4)
+        ds = tally.to_xarray()
+        
+        # Check dataset structure
+        assert isinstance(ds, xr.Dataset)
+        assert 'result' in ds.data_vars
+        assert 'error' in ds.data_vars
+        assert 'energy' in ds.coords
+        
+        # Check dimensions - use .sizes instead of .dims to avoid FutureWarning
+        assert set(ds.dims) == {'cell', 'energy'}
+        assert ds.sizes['energy'] == 3
+        
+        # Check values
+        assert np.allclose(ds.energy.values, [0.1, 1.0, 3.0])
+        assert np.allclose(ds.result.values, [2.95887e-09, 8.25405e-09, 8.62196e-10])
+        assert np.allclose(ds.error.values, [0.1038, 0.0765, 0.1932])
+        
+    except FileNotFoundError:
+        pytest.fail(f"Test file not found: {filename}")
+
+    # Test with multidimensional tally
+    filename = "tests/data/mctal/mctalfile_test_2.m"
+    try:
+        mctal = read_mctal(filename)
+        tally = mctal.tally.get(10014)
+        
+        # Get the xarray dataset
+        ds = tally.to_xarray()
+        
+        # Check dataset structure
+        assert isinstance(ds, xr.Dataset)
+        assert 'result' in ds.data_vars
+        assert 'error' in ds.data_vars
+        
+        # Check dimensions - use .sizes instead of .dims to avoid FutureWarning
+        dimensions = tally.get_dimensions()
+        assert set(ds.dims) == set(dimensions.keys())
+        for dim, size in dimensions.items():
+            assert ds.sizes[dim] == size
+        
+        # Check some values using xarray's selection
+        result_value = ds.result.sel(energy=1.0, segment=0).values.item()
+        error_value = ds.error.sel(energy=1.0, segment=0).values.item()
+        assert np.isclose(result_value, 150578.0)
+        assert np.isclose(error_value, 0.7105)
+        
+        result_value = ds.result.sel(energy=1.0, segment=1).values.item()
+        error_value = ds.error.sel(energy=1.0, segment=1).values.item()
+        assert np.isclose(result_value, 111063.0)
+        assert np.isclose(error_value, 0.7287)
+        
+    except FileNotFoundError:
+        pytest.fail(f"Test file not found: {filename}")
+
+
+def test_integral_energy_data():
+    """Test methods for getting energy-integrated data."""
+    
+    filename = "tests/data/mctal/mctalfile_test_2.m"
+    try:
+        mctal = read_mctal(filename)
+        tally = mctal.tally.get(10014)
+        
+        # Test get_integral_energy_data
+        integral_data = tally.get_integral_energy_data()
+        
+        # Check structure
+        assert 'Result' in integral_data
+        assert 'Error' in integral_data
+        
+        # Check shape matches expected dimensions (segment, cell, multiplier)
+        dimensions = tally.get_dimensions()
+        expected_shape = (dimensions['segment'], dimensions['cell'], dimensions['multiplier'])
+        reshaped_data = integral_data['Result'].reshape(dimensions['segment'], dimensions['cell'], dimensions['multiplier'])
+        
+        # Check values from the reshaped array match expected values
+        assert np.isclose(reshaped_data[0, 0, 0], 6.06103e+07)
+        assert np.isclose(reshaped_data[1, 0, 0], 6.62893e+07)
+        
+        # Test get_integral_energy_dataframe
+        df = tally.get_integral_energy_dataframe()
+        
+        # Check structure
+        assert isinstance(df, pd.DataFrame)
+        assert set(['Cell', 'Segment', 'Multiplier', 'Energy', 'Result', 'Error']).issubset(set(df.columns))
+        
+        # All rows should have Energy = 'Integral'
+        assert all(df['Energy'] == 'Integral')
+        
+        # Should have one row per segment (since cell and multiplier are both 1)
+        assert len(df) == dimensions['segment']
+        
+        # Check specific values
+        segment0 = df[df['Segment'] == 0]
+        assert np.isclose(segment0['Result'].values[0], 6.06103e+07)
+        assert np.isclose(segment0['Error'].values[0], 0.6156)
+        
+        segment1 = df[df['Segment'] == 1]
+        assert np.isclose(segment1['Result'].values[0], 6.62893e+07)
+        assert np.isclose(segment1['Error'].values[0], 0.6146)
+        
+    except FileNotFoundError:
+        pytest.fail(f"Test file not found: {filename}")

@@ -10,8 +10,8 @@ from mcnpy.input.material import Mat
 
 def test_material_parsing():
 
-    matfile = "tests/data/mat/PWRSphereMAT_test.i"
-    inputfile = "tests/data/input/PWRSphere_test.i"
+    matfile = "tests/data/mat/matfile_test_1.i"
+    inputfile = "tests/data/input/inputfile_test_1.i"
 
     try:
 
@@ -99,8 +99,8 @@ def test_material_parsing():
 
 def test_mat_perturbation():
     # Define input and reference files
-    matfile = "tests/data/mat/PWRSphereMAT_test.i"
-    inputfile = "tests/data/input/PWRSphere_test.i"
+    matfile = "tests/data/mat/matfile_test_1.i"
+    inputfile = "tests/data/input/inputfile_test_1.i"
 
     # Create temporary copies
     with tempfile.NamedTemporaryFile(suffix='.i', delete=False) as tmp_matfile:
@@ -119,8 +119,8 @@ def test_mat_perturbation():
         perturb_material(inputfile_copy, 300000, 8.526729e-02, 26056, in_place=True)
         
         # Compare with reference files
-        matfile_ref = "tests/data/mat/PWRSphereMAT_ref.i"
-        inputfile_ref = "tests/data/mat/PWRSphere_ref.i"
+        matfile_ref = "tests/data/mat/matfile_ref_1.i"
+        inputfile_ref = "tests/data/mat/inputfile_ref_1.i"
         
         assert filecmp.cmp(matfile_copy, matfile_ref), "Perturbed material file doesn't match reference"
         assert filecmp.cmp(inputfile_copy, inputfile_ref), "Perturbed input file doesn't match reference"

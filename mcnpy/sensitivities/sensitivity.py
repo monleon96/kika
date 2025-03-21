@@ -150,7 +150,7 @@ class TaylorCoefficients:
         :rtype: str
         """
         # Create a visually appealing header with a border
-        header_width = 60
+        header_width = 70
         header = "=" * header_width + "\n"
         header += f"{'Taylor Coefficient Data - MT ' + str(self.reaction):^{header_width}}\n"
         header += "=" * header_width + "\n\n"
@@ -192,8 +192,8 @@ class TaylorCoefficients:
         data_preview += "-" * 70 + "\n"
         
         for i in range(min(n_preview, n_values)):
-            e_low = f"{self.pert_energies[i]:.3e}"
-            e_high = f"{self.pert_energies[i+1]:.3e}"
+            e_low = f"{self.pert_energies[i]::.3e}"
+            e_high = f"{self.pert_energies[i+1]::.3e}"
             c1_val = self.c1[i]
             c2_val = self.c2[i]
             ratio_val = self.ratio[i]
@@ -206,22 +206,52 @@ class TaylorCoefficients:
             
             # Show last few values
             for i in range(max(n_preview, n_values - n_preview), n_values):
-                e_low = f"{self.pert_energies[i]:.3e}"
-                e_high = f"{self.pert_energies[i+1]:.3e}"
+                e_low = f"{self.pert_energies[i]::.3e}"
+                e_high = f"{self.pert_energies[i+1]::.3e}"
                 c1_val = self.c1[i]
                 c2_val = self.c2[i]
                 ratio_val = self.ratio[i]
                 
                 data_preview += f"{e_low}-{e_high:^8} | {c1_val:15.6e} | {c2_val:15.6e} | {ratio_val:12.6e}\n"
         
-        # Available methods section
-        methods = "\n\nAvailable methods:\n"
-        methods += "- .calculate_nonlinearity(p) - Calculate nonlinearity factor for specified perturbation magnitude\n"
-        methods += "- .calculate_nonlinearity_by_bin(p) - Calculate nonlinearity factor by energy bin\n"
-        methods += "- .plot(ax=None, title=None, top_n=5) - Plot nonlinearity factor vs perturbation magnitude\n"
+        # Available methods in table format
+        methods_section = "\n\nAvailable Methods:\n"
+        methods_section += "-" * header_width + "\n"
+        
+        # Set column widths for method and description
+        method_col_width = 35
+        desc_col_width = header_width - method_col_width - 3  # -3 for spacing and formatting
+        
+        methods_section += "{:<{width1}} {:<{width2}}\n".format(
+            "Method", "Description", width1=method_col_width, width2=desc_col_width)
+        methods_section += "-" * header_width + "\n"
+        
+        # Function to add a method and description with proper wrapping
+        def add_method(method, description):
+            nonlocal methods_section
+            if len(description) <= desc_col_width:
+                methods_section += "{:<{width1}} {:<{width2}}\n".format(
+                    method, description, width1=method_col_width, width2=desc_col_width)
+            else:
+                # Handle wrapping for long descriptions
+                methods_section += "{:<{width1}} {:<{width2}}\n".format(
+                    method, description[:desc_col_width], width1=method_col_width, width2=desc_col_width)
+                remaining = description[desc_col_width:]
+                while remaining:
+                    chunk = remaining[:desc_col_width].strip()
+                    remaining = remaining[len(chunk):].strip()
+                    methods_section += "{:<{width1}} {:<{width2}}\n".format(
+                        "", chunk, width1=method_col_width, width2=desc_col_width)
+        
+        # Add each method with its description
+        add_method(".calculate_nonlinearity(p)", "Calculate nonlinearity factor for specified perturbation magnitude")
+        add_method(".calculate_nonlinearity_by_bin(p)", "Calculate nonlinearity factor by energy bin")
+        add_method(".plot(ax=None, title=None, top_n=5)", "Plot nonlinearity factor vs perturbation magnitude")
+        
+        methods_section += "-" * header_width + "\n"
         
         # Combine all sections
-        return header + stats + data_preview + methods
+        return header + stats + data_preview + methods_section
 
 
 @dataclass
@@ -524,7 +554,7 @@ class SensitivityData:
         :rtype: str
         """
         # Create a visually appealing header with a border
-        header_width = 60
+        header_width = 85
         header = "=" * header_width + "\n"
         header += f"{'Sensitivity Data for ' + self.nuclide:^{header_width}}\n"
         header += "=" * header_width + "\n\n"
@@ -585,16 +615,72 @@ class SensitivityData:
         if "integral" in self.energies:
             energy_info += "  - integral\n"
         
-        # Add an empty line before the footer with available methods
-        footer = "\n\nAvailable methods:\n"
-        footer += "- .plot_sensitivity(energy=None, reaction=None, xlim=None) - Plot sensitivity profiles\n"
-        if has_second_order:
-            footer += "- .plot_perturbed_response(energy=None, reaction=None) - Plot response comparison of 1st vs 2nd order\n"
-            footer += "- .plot_second_order_contribution(energy=None, reaction=None) - Plot second order term contribution\n"
-        footer += "- .to_dataframe() - Get full data as pandas DataFrame\n"
+        # Available methods in table format
+        methods_section = "\n\nAvailable Methods:\n"
+        methods_section += "-" * header_width + "\n"
         
-        # Add examples of accessing data
-        examples = "\nExamples of accessing data:\n"
+        # Set column widths for method and description
+        method_col_width = 38
+        desc_col_width = header_width - method_col_width - 3  # -3 for spacing and formatting
+        
+        methods_section += "{:<{width1}} {:<{width2}}\n".format(
+            "Method", "Description", width1=method_col_width, width2=desc_col_width)
+        methods_section += "-" * header_width + "\n"
+        
+        # Function to add a method and description with proper wrapping
+        def add_method(method, description):
+            nonlocal methods_section
+            if len(description) <= desc_col_width:
+                methods_section += "{:<{width1}} {:<{width2}}\n".format(
+                    method, description, width1=method_col_width, width2=desc_col_width)
+            else:
+                # Handle wrapping for long descriptions
+                methods_section += "{:<{width1}} {:<{width2}}\n".format(
+                    method, description[:desc_col_width], width1=method_col_width, width2=desc_col_width)
+                remaining = description[desc_col_width:]
+                while remaining:
+                    chunk = remaining[:desc_col_width].strip()
+                    remaining = remaining[len(chunk):].strip()
+                    methods_section += "{:<{width1}} {:<{width2}}\n".format(
+                        "", chunk, width1=method_col_width, width2=desc_col_width)
+        
+        # Add each method with its description
+        add_method(".plot_sensitivity(...)", "Plot sensitivity profiles")
+        add_method(".to_dataframe()", "Get full data as pandas DataFrame")
+        
+        # Add methods only available with second-order data
+        if has_second_order:
+            add_method(".plot_ratio(...)", "Plot ratio of 2nd to 1st order coefficients")
+            add_method(".plot_perturbed_response(...)", "Plot response comparison of 1st vs 2nd order")
+            add_method(".plot_second_order_contribution(...)", "Plot second order term contribution")
+        
+        methods_section += "-" * header_width + "\n"
+        
+        # Add section showing how to access data with the same table format
+        access_section = "\nAccessing Data:\n"
+        access_section += "-" * header_width + "\n"
+        
+        # Use the same column widths for consistent formatting
+        access_section += "{:<{width1}} {:<{width2}}\n".format(
+            "Expression", "Description", width1=method_col_width, width2=desc_col_width)
+        access_section += "-" * header_width + "\n"
+        
+        # Function to add an access pattern and description with proper wrapping
+        def add_access_pattern(pattern, description):
+            nonlocal access_section
+            if len(description) <= desc_col_width:
+                access_section += "{:<{width1}} {:<{width2}}\n".format(
+                    pattern, description, width1=method_col_width, width2=desc_col_width)
+            else:
+                # Handle wrapping for long descriptions
+                access_section += "{:<{width1}} {:<{width2}}\n".format(
+                    pattern, description[:desc_col_width], width1=method_col_width, width2=desc_col_width)
+                remaining = description[desc_col_width:]
+                while remaining:
+                    chunk = remaining[:desc_col_width].strip()
+                    remaining = remaining[len(chunk):].strip()
+                    access_section += "{:<{width1}} {:<{width2}}\n".format(
+                        "", chunk, width1=method_col_width, width2=desc_col_width)
         
         # Get the first available energy bin or integral
         first_energy = next((e for e in self.energies if e != "integral"), "integral" if "integral" in self.energies else None)
@@ -603,26 +689,30 @@ class SensitivityData:
         first_reaction = self.reactions[0] if self.reactions else None
         
         if first_energy is not None and first_reaction is not None:
-            examples += f"- .data['{first_energy}'][{first_reaction}] - Get coefficients for "
-            if first_energy == "integral":
-                examples += "integral result"
-            else:
-                examples += f"energy bin {first_energy}"
-            examples += f", reaction {first_reaction}\n"
+            energy_desc = "integral result" if first_energy == "integral" else f"energy bin {first_energy}"
+            access_pattern = f".data['{first_energy}'][{first_reaction}]"
+            description = f"Get coefficients for {energy_desc}, reaction {first_reaction}"
+            add_access_pattern(access_pattern, description)
         
         # If we have integral results and at least two reactions, show second example
         if "integral" in self.energies and len(self.reactions) > 1:
             second_reaction = self.reactions[1]
-            examples += f"- .data['integral'][{second_reaction}] - Get integral coefficients for reaction {second_reaction}\n"
+            access_pattern = f".data['integral'][{second_reaction}]"
+            description = f"Get integral coefficients for reaction {second_reaction}"
+            add_access_pattern(access_pattern, description)
         
         # Show Taylor coefficients example if available
         if self.coefficients:
             energy_key = next(iter(self.coefficients.keys()))
             rxn_key = next(iter(self.coefficients[energy_key].keys()))
-            examples += f"- .coefficients['{energy_key}'][{rxn_key}] - Get Taylor coefficient data for energy bin, reaction {rxn_key}\n"
+            access_pattern = f".coefficients['{energy_key}'][{rxn_key}]" 
+            description = f"Get Taylor coefficient data for energy bin, reaction {rxn_key}"
+            add_access_pattern(access_pattern, description)
+        
+        access_section += "-" * header_width + "\n"
         
         # Combine all sections
-        return header + stats + energy_info + footer + examples
+        return header + stats + energy_info + methods_section + access_section
 
     def plot_perturbed_response(self, 
                             energy: Union[str, List[str]] = None, 
@@ -1056,7 +1146,7 @@ class Coefficients:
         :rtype: str
         """
         # Create a visually appealing header
-        header_width = 50
+        header_width = 85
         header = "=" * header_width + "\n"
         header += f"{'Sensitivity Coefficients':^{header_width}}\n"
         header += "=" * header_width + "\n\n"
@@ -1082,7 +1172,7 @@ class Coefficients:
         
         # Format as a small table
         data_preview += f"{'  Energy Bin':^19} | {'Value':^15} | {'  Rel. Error':^12}\n"
-        data_preview += "-" * 46 + "\n"
+        data_preview += "-" * 50 + "\n"
         
         for i in range(min(n_preview, n_values)):
             e_low = f"{self.pert_energies[i]:.3e}"
@@ -1091,24 +1181,53 @@ class Coefficients:
         
         # Add ellipsis if there are more values than shown
         if n_values > 2 * n_preview:
-            data_preview += "..." + " " * 43 + "\n"
+            data_preview += "..." + " " * 47 + "\n"
             
             # Show last few values
             for i in range(max(n_preview, n_values - n_preview), n_values):
                 e_low = f"{self.pert_energies[i]::.3e}"
-                e_high = f"{self.pert_energies[i+1]:.3e}"
+                e_high = f"{self.pert_energies[i+1]::.3e}"
                 data_preview += f"{e_low}-{e_high:^6} | {self.values[i]:15.6e} | {self.errors[i]:12.6f}\n"
         
-        # Available methods section
-        methods = "\n\nAvailable methods:\n"
-        methods += "- .lethargy - Get lethargy intervals as property\n"
-        methods += "- .values_per_lethargy - Get sensitivity per lethargy as property\n"
-        methods += "- .plot(ax=None, xlim=None) - Plot sensitivity coefficients\n"
-        methods += "- .to_dataframe() - Export data as pandas DataFrame with columns:\n"
-        methods += "    energy, reaction, e_lower, e_upper, sensitivity, error\n"
+        # Available methods in table format
+        methods_section = "\n\nAvailable Methods:\n"
+        methods_section += "-" * header_width + "\n"
+        
+        # Set column widths for method and description
+        method_col_width = 27
+        desc_col_width = header_width - method_col_width - 3  # -3 for spacing and formatting
+        
+        methods_section += "{:<{width1}} {:<{width2}}\n".format(
+            "Method", "Description", width1=method_col_width, width2=desc_col_width)
+        methods_section += "-" * header_width + "\n"
+        
+        # Function to add a method and description with proper wrapping
+        def add_method(method, description):
+            nonlocal methods_section
+            if len(description) <= desc_col_width:
+                methods_section += "{:<{width1}} {:<{width2}}\n".format(
+                    method, description, width1=method_col_width, width2=desc_col_width)
+            else:
+                # Handle wrapping for long descriptions
+                methods_section += "{:<{width1}} {:<{width2}}\n".format(
+                    method, description[:desc_col_width], width1=method_col_width, width2=desc_col_width)
+                remaining = description[desc_col_width:]
+                while remaining:
+                    chunk = remaining[:desc_col_width].strip()
+                    remaining = remaining[len(chunk):].strip()
+                    methods_section += "{:<{width1}} {:<{width2}}\n".format(
+                        "", chunk, width1=method_col_width, width2=desc_col_width)
+        
+        # Add each method with its description
+        add_method(".lethargy", "Get lethargy intervals as property")
+        add_method(".values_per_lethargy", "Get sensitivity per lethargy as property")
+        add_method(".plot(...)", "Plot sensitivity coefficients")
+        add_method(".to_dataframe()", "Export data as pandas DataFrame")
+        
+        methods_section += "-" * header_width + "\n"
         
         # Combine all sections
-        return header + info + data_preview + methods
+        return header + info + data_preview + methods_section
         
     # New helper method to plot onto a provided axis
     def _plot_on_ax(self, ax, xlim=None):

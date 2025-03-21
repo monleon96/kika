@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mcnpy"
-version = "0.2.4"
+version = "0.2.5"
 description = ""
 authors = ["Juan Antonio Monleon de la Lluvia <juanmonleon96@gmail.com>"]
 license = "GNU General Public License v3.0"
@@ -11,6 +11,7 @@ readme = "README.md"
 python = "^3.12"
 matplotlib = "^3.10.0"
 pandas = "^2.2.3"
+xarray = "^2025.3.0"
 
 
 [tool.poetry.group.dev.dependencies]

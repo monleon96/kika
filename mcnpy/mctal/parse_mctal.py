@@ -17,23 +17,15 @@ def _parse_fixed_width(line, specs):
         pos += width
     return fields
 
-def read_mctal(filename, tally_ids=None, tfc=True, pert=True):
+def read_mctal(filename):
     """Read and parse an MCNP MCTAL file.
 
     :param filename: Path to the MCTAL file
     :type filename: str
-    :param tally_ids: List of tally IDs to parse. If None, parse all
-    :type tally_ids: List[int] or None
-    :param tfc: Whether to parse TFC (tally fluctuation chart) data
-    :type tfc: bool
-    :param pert: Whether to parse perturbation data
-    :type pert: bool
     :returns: An Mctal object containing the parsed data
     :rtype: Mctal
     :raises ValueError: If the file format is invalid or parsing fails
     """
-    if tally_ids is None:
-        tally_ids = []
     mctal = Mctal()
 
     with open(filename, "r") as f:
@@ -93,11 +85,8 @@ def read_mctal(filename, tally_ids=None, tfc=True, pert=True):
                     tally_numbers.append(int(num))
         mctal.tally_numbers = tally_numbers
 
-        # If no tally_ids are provided, use all found tally numbers.
-        if not tally_ids:
-            tally_ids = set(tally_numbers)
-        else:
-            tally_ids = set(tally_ids)
+        # Read all tallies
+        tally_ids = set(tally_numbers)
 
         # --- Parse Tally Sections ---
         found_tally_ids = set()
@@ -115,7 +104,8 @@ def read_mctal(filename, tally_ids=None, tfc=True, pert=True):
                         continue
                     if tid in tally_ids:
                         # Use pos (saved before reading this line) as the start position
-                        tally = parse_tally(tid, f, pos, tfc, pert)
+                        # Always read TFC and perturbation data
+                        tally = parse_tally(tid, f, pos, True, True)
                         mctal.tally[tid] = tally  # Store in dict using tid as key
                         found_tally_ids.add(tid)
                         if found_tally_ids == tally_ids:
@@ -123,7 +113,7 @@ def read_mctal(filename, tally_ids=None, tfc=True, pert=True):
 
         missing_ids = tally_ids - found_tally_ids
         if missing_ids:
-            raise ValueError(f"Could not find or parse the following requested tally IDs: {missing_ids}")
+            raise ValueError(f"Could not find or parse the following tally IDs: {missing_ids}")
 
     return mctal
 
@@ -191,6 +181,122 @@ def parse_tally(tally_id, file_obj, start_pos, tfc=True, pert=True):
         tally.name = ""
         # line already contains the next section to process
 
+    # Parse 'f' line - cells or surfaces where tally is scored
+    while not line.lower().startswith('f '):
+        line = file_obj.readline()
+        if not line:
+            raise ValueError(f"Unexpected end of file while looking for 'f' line for tally {tally_id}")
+
+    parts = line.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise ValueError(f"Invalid format for 'f' line in tally {tally_id}")
+    
+    n_cells_surfaces = int(parts[1])
+    tally.n_cells_surfaces = n_cells_surfaces
+    
+    # Parse cell/surface numbers - can span multiple lines
+    cell_surface_ids = []
+    while len(cell_surface_ids) < n_cells_surfaces:
+        line = file_obj.readline()
+        if not line:
+            raise ValueError(f"Unexpected end of file while parsing cell/surface IDs for tally {tally_id}")
+        
+        # If we've reached the 'd' line, we've gone too far
+        if line.lstrip().lower().startswith('d '):
+            raise ValueError(f"Reached 'd' line before finding all {n_cells_surfaces} cell/surface IDs for tally {tally_id}")
+        
+        try:
+            cell_surface_ids.extend([int(x) for x in line.strip().split()])
+        except ValueError:
+            raise ValueError(f"Error parsing cell/surface IDs for tally {tally_id}")
+    
+    tally.cell_surface_ids = cell_surface_ids
+    
+    # Parse 'd' line - direct vs. total or flagged vs. unflagged bins
+    while not line.lower().startswith('d '):
+        line = file_obj.readline()
+        if not line:
+            raise ValueError(f"Unexpected end of file while looking for 'd' line for tally {tally_id}")
+    
+    parts = line.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise ValueError(f"Invalid format for 'd' line in tally {tally_id}")
+    
+    n_direct_bins = int(parts[1])
+    tally.n_direct_bins = n_direct_bins
+    
+    # Currently, only allow n_direct_bins = 1 as specified in the requirements
+    if n_direct_bins != 1:
+        raise ValueError(f"Only n_direct_bins = 1 is currently supported, got {n_direct_bins} for tally {tally_id}")
+    
+    # Parse 'u', 'ut', or 'uc' line - number of user bins
+    line = file_obj.readline()
+    if not line.lower().startswith(('u ', 'ut ', 'uc ')):
+        raise ValueError(f"Expected 'u', 'ut', or 'uc' line but got '{line}' for tally {tally_id}")
+    
+    parts = line.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise ValueError(f"Invalid format for '{parts[0]}' line in tally {tally_id}")
+    
+    is_total_user_bin = line.lower().startswith('ut ')
+    is_cumulative_user_bin = line.lower().startswith('uc ')
+    n_user_bins = int(parts[1])
+    
+    tally.n_user_bins = n_user_bins
+    tally._has_total_user_bin = is_total_user_bin  # Fix: use private attribute
+    tally._has_cumulative_user_bin = is_cumulative_user_bin  # Fix: use private attribute
+    
+    # Parse 's', 'st', or 'sc' line - number of segment bins
+    line = file_obj.readline()
+    if not line.lower().startswith(('s ', 'st ', 'sc ')):
+        raise ValueError(f"Expected 's', 'st', or 'sc' line but got '{line}' for tally {tally_id}")
+    
+    parts = line.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise ValueError(f"Invalid format for '{parts[0]}' line in tally {tally_id}")
+    
+    is_total_segment_bin = line.lower().startswith('st ')
+    is_cumulative_segment_bin = line.lower().startswith('sc ')
+    n_segment_bins = int(parts[1])
+    
+    tally.n_segment_bins = n_segment_bins
+    tally._has_total_segment_bin = is_total_segment_bin  # Fix: use private attribute
+    tally._has_cumulative_segment_bin = is_cumulative_segment_bin  # Fix: use private attribute
+    
+    # Parse 'm', 'mt', or 'mc' line - number of multiplier bins
+    line = file_obj.readline()
+    if not line.lower().startswith(('m ', 'mt ', 'mc ')):
+        raise ValueError(f"Expected 'm', 'mt', or 'mc' line but got '{line}' for tally {tally_id}")
+    
+    parts = line.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise ValueError(f"Invalid format for '{parts[0]}' line in tally {tally_id}")
+    
+    is_total_multiplier_bin = line.lower().startswith('mt ')
+    is_cumulative_multiplier_bin = line.lower().startswith('mc ')
+    n_multiplier_bins = int(parts[1])
+    
+    tally.n_multiplier_bins = n_multiplier_bins
+    tally._has_total_multiplier_bin = is_total_multiplier_bin  # Fix: use private attribute
+    tally._has_cumulative_multiplier_bin = is_cumulative_multiplier_bin  # Fix: use private attribute
+    
+    # Parse 'c', 'ct', or 'cc' line - number of cosine bins
+    line = file_obj.readline()
+    if not line.lower().startswith(('c ', 'ct ', 'cc ')):
+        raise ValueError(f"Expected 'c', 'ct', or 'cc' line but got '{line}' for tally {tally_id}")
+    
+    parts = line.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise ValueError(f"Invalid format for '{parts[0]}' line in tally {tally_id}")
+    
+    is_total_cosine_bin = line.lower().startswith('ct ')
+    is_cumulative_cosine_bin = line.lower().startswith('cc ')
+    n_cosine_bins = int(parts[1])
+    
+    tally.n_cosine_bins = n_cosine_bins
+    tally._has_total_cosine_bin = is_total_cosine_bin  # Fix: use private attribute
+    tally._has_cumulative_cosine_bin = is_cumulative_cosine_bin  # Fix: use private attribute
+    
     # Parse energy bins
     while not line.lower().startswith(('e ', 'ec ', 'et ')):
         line = file_obj.readline()
@@ -205,8 +311,13 @@ def parse_tally(tally_id, file_obj, start_pos, tfc=True, pert=True):
     
     # Check if this is a total bin case (et) or zero bins case
     is_total = line.lower().startswith('et ')
+    is_cumulative = line.lower().startswith('ec ')
     is_zero_bins = (n_energy_bins == 0)
     expected_energies = 0 if is_zero_bins else (n_energy_bins - 1 if is_total else n_energy_bins)
+    
+    tally.n_energy_bins = n_energy_bins
+    tally._has_total_energy_bin = is_total  # Fix: use private attribute
+    tally._has_cumulative_energy_bin = is_cumulative  # Fix: use private attribute
 
     # Parse energy values if we have any bins
     energies = []
@@ -232,16 +343,94 @@ def parse_tally(tally_id, file_obj, start_pos, tfc=True, pert=True):
                 f"({'total bin case' if is_total else 'normal case'}) "
                 f"but found {len(energies)} for tally {tally_id}"
             )
-
-    tally.energies = energies
-
-    # After energy parsing, look for 'vals' line
-    while True:
+    else:
+        # For zero energy bins, we need to explicitly read the next line 
+        # which should be the time bins line
         line = file_obj.readline()
         if not line:
-            raise ValueError(f"Unexpected end of file while looking for vals in tally {tally_id}")
-        if line.lstrip().lower().startswith('vals'):
-            break
+            raise ValueError(f"Unexpected end of file after zero energy bins for tally {tally_id}")
+
+    tally.energies = energies
+    
+    # Parse 't', 'tt', or 'tc' line - number of time bins (line already read in energy parsing)
+    if not line.lower().startswith(('t ', 'tt ', 'tc ')):
+        raise ValueError(f"Expected 't', 'tt', or 'tc' line but got '{line}' for tally {tally_id}")
+    
+    parts = line.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise ValueError(f"Invalid format for '{parts[0]}' line in tally {tally_id}")
+    
+    is_total_time_bin = line.lower().startswith('tt ')
+    is_cumulative_time_bin = line.lower().startswith('tc ')
+    n_time_bins = int(parts[1])
+    
+    tally.n_time_bins = n_time_bins
+    tally._has_total_time_bin = is_total_time_bin  # Fix: use private attribute
+    tally._has_cumulative_time_bin = is_cumulative_time_bin  # Fix: use private attribute
+    
+    # Parse time values if we have any bins
+    times = []
+    is_zero_time_bins = (n_time_bins == 0)
+    expected_times = 0 if is_zero_time_bins else (n_time_bins - 1 if is_total_time_bin else n_time_bins)
+    
+    if not is_zero_time_bins:
+        while True:
+            line = file_obj.readline()
+            if not line:
+                raise ValueError(f"Unexpected end of file while parsing time bins for tally {tally_id}")
+            
+            # Check if we've reached the vals section
+            if line.lstrip().lower().startswith('vals'):
+                break
+            
+            # Parse scientific notation numbers from the line
+            try:
+                times.extend(_parse_scientific_notation(line.strip()))
+            except ValueError as e:
+                raise ValueError(f"Error parsing time values for tally {tally_id}: {str(e)}")
+    
+        if len(times) != expected_times:
+            raise ValueError(
+                f"Expected {expected_times} time bins "
+                f"({'total bin case' if is_total_time_bin else 'normal case'}) "
+                f"but found {len(times)} for tally {tally_id}"
+            )
+    else:
+        # If we have zero time bins, we should directly reach the vals section
+        line = file_obj.readline()
+        if not line.lstrip().lower().startswith('vals'):
+            raise ValueError(f"Expected 'vals' line after zero time bins but got '{line}' for tally {tally_id}")
+    
+    tally.times = times
+
+    # After parsing all bin dimensions, we're at the 'vals' line
+    if not line.lstrip().lower().startswith('vals'):
+        # If we're not at vals yet, read until we find it
+        while True:
+            line = file_obj.readline()
+            if not line:
+                raise ValueError(f"Unexpected end of file while looking for vals in tally {tally_id}")
+            if line.lstrip().lower().startswith('vals'):
+                break
+
+    # Calculate the total number of expected result/error pairs
+    # For dimensions with 0 bins, treat as 1 bin for multiplication
+    # For dimensions with total bins, use the actual count including total
+    def effective_bin_count(count, has_total):
+        if count == 0:
+            return 1
+        return count
+
+    expected_result_count = (
+        effective_bin_count(tally.n_cells_surfaces, False) *
+        effective_bin_count(tally.n_direct_bins, False) *
+        effective_bin_count(tally.n_user_bins, tally._has_total_user_bin) *
+        effective_bin_count(tally.n_segment_bins, tally._has_total_segment_bin) *
+        effective_bin_count(tally.n_multiplier_bins, tally._has_total_multiplier_bin) *
+        effective_bin_count(tally.n_cosine_bins, tally._has_total_cosine_bin) *
+        effective_bin_count(tally.n_energy_bins, tally._has_total_energy_bin) *
+        effective_bin_count(tally.n_time_bins, tally._has_total_time_bin)
+    )
 
     # Parse results and errors
     results = []
@@ -258,42 +447,91 @@ def parse_tally(tally_id, file_obj, start_pos, tfc=True, pert=True):
         values = line.strip().split()
         for i in range(0, len(values), 2):
             try:
-                results.append(float(values[i]))
-                errors.append(float(values[i + 1]))
+                if i+1 < len(values):  # Make sure we have both result and error
+                    results.append(float(values[i]))
+                    errors.append(float(values[i + 1]))
             except (ValueError, IndexError) as e:
                 raise ValueError(f"Error parsing result/error pairs in tally {tally_id}: {str(e)}")
 
-    # Handle results based on case
-    if is_zero_bins:
-        if len(results) != 1 or len(errors) != 1:
-            raise ValueError(
-                f"Expected 1 result/error pair for zero bins case "
-                f"but found {len(results)}/{len(errors)} for tally {tally_id}"
+    # Verify we have the expected number of results
+    if len(results) != expected_result_count or len(errors) != expected_result_count:
+        raise ValueError(
+            f"Expected {expected_result_count} result/error pairs based on bin structure, "
+            f"but found {len(results)}/{len(errors)} for tally {tally_id}"
+        )
+
+    # Store the raw results and errors
+    tally.results = results.copy()
+    tally.errors = errors.copy()
+
+    # For backward compatibility and simpler access, extract the total energy bin where applicable
+    if tally._has_total_energy_bin:
+        if (tally.n_cells_surfaces <= 1 and
+            tally.n_direct_bins <= 1 and
+            tally.n_user_bins <= 1 and
+            tally.n_segment_bins <= 1 and
+            tally.n_multiplier_bins <= 1 and
+            tally.n_cosine_bins <= 1 and
+            effective_bin_count(tally.n_time_bins, tally._has_total_time_bin) <= 1):
+            
+            # For simple tallies with energy bins and a total:
+            # 1. Store the total energy bin values
+            tally.total_energy_result = results[-1]
+            tally.total_energy_error = errors[-1]
+            
+            # 2. Remove total from regular results (keep only energy-specific values)
+            tally.results = results[:-1]
+            tally.errors = errors[:-1]
+            
+            # 3. Keep the total value also in integral_result for backward compatibility
+            tally.integral_result = tally.total_energy_result
+            tally.integral_error = tally.total_energy_error
+        else:
+            # For multi-dimensional tallies with energy total bins, we need to extract the total bin values
+            # In MCNP MCTAL files, the rightmost dimension (energy) varies fastest
+            # Extract total energy results and remove them from the main results array
+            regular_results, total_results = separate_total_energy_bins(
+                results, 
+                tally.n_energy_bins, 
+                tally._has_total_energy_bin
             )
-        # For zero bins, save the single value in both places
+            regular_errors, total_errors = separate_total_energy_bins(
+                errors, 
+                tally.n_energy_bins, 
+                tally._has_total_energy_bin
+            )
+            
+            # Store regular results (without totals)
+            tally.results = regular_results
+            tally.errors = regular_errors
+            
+            # Store all total energy values in a dictionary
+            tally.total_energy_values = {
+                'results': total_results,
+                'errors': total_errors
+            }
+            
+            # Store the first total value for backward compatibility
+            if total_results and total_errors:
+                tally.total_energy_result = total_results[0]
+                tally.total_energy_error = total_errors[0]
+            else:
+                tally.total_energy_result = None
+                tally.total_energy_error = None
+            
+            # For multi-dimensional tallies, don't set an integral_result
+            tally.integral_result = None
+            tally.integral_error = None
+
+    elif expected_result_count == 1:
+        # If we have exactly one result (all dimensions are zero or one with no totals)
+        # Single result case
         tally.integral_result = results[0]
         tally.integral_error = errors[0]
-        tally.results = results
-        tally.errors = errors
     else:
-        expected_length = len(energies)
-        if is_total:
-            if len(results) != expected_length + 1 or len(errors) != expected_length + 1:
-                raise ValueError(
-                    f"Expected {expected_length + 1} results/errors (total bin case) "
-                    f"but found {len(results)}/{len(errors)} for tally {tally_id}"
-                )
-            # Split off the total values
-            tally.integral_result = results.pop()
-            tally.integral_error = errors.pop()
-        else:
-            if len(results) != expected_length or len(errors) != expected_length:
-                raise ValueError(
-                    f"Expected {expected_length} results/errors but found "
-                    f"{len(results)}/{len(errors)} for tally {tally_id}"
-                )
-        tally.results = results
-        tally.errors = errors
+        # Multi-dimensional case without total energy bins
+        tally.integral_result = None
+        tally.integral_error = None
 
     # Parse TFC data if requested
     if tfc:
@@ -475,3 +713,46 @@ def parse_tally(tally_id, file_obj, start_pos, tfc=True, pert=True):
 
     tally._end_pos = file_obj.tell()
     return tally
+
+def separate_total_energy_bins(values, n_energy_bins, has_total_energy_bin):
+    """Separate the total energy bin values from the regular results array.
+    
+    In MCNP MCTAL files with multiple dimensions, energy is the rightmost dimension
+    and varies fastest. For tallies with total energy bins, every nth value
+    (where n = n_energy_bins) is a total bin value.
+    
+    Args:
+        values (list): The flat array of values (results or errors)
+        n_energy_bins (int): Number of energy bins including total bins
+        has_total_energy_bin (bool): Whether the tally has total energy bins
+        
+    Returns:
+        tuple: (regular_values, total_values) - values with totals removed, and the extracted totals
+    """
+    if not has_total_energy_bin or n_energy_bins <= 1:
+        return values, []
+    
+    # For energy bins with a total, the number of regular bins is n_energy_bins - 1
+    n_regular_bins = n_energy_bins - 1
+    
+    if n_regular_bins == 0:
+        # Special case: If there are no regular energy bins, all values are total bins
+        return [], values
+    
+    # Initialize regular and total value lists
+    regular_values = []
+    total_values = []
+    
+    # Extract values: in each group of n_energy_bins values, the last one is the total
+    for i in range(0, len(values), n_energy_bins):
+        # Add all but the last value to regular_values
+        group_end = min(i + n_energy_bins, len(values))
+        
+        if i + n_regular_bins <= len(values):
+            regular_values.extend(values[i:i + n_regular_bins])
+        
+        # Add the total value if it exists in this group
+        if i + n_regular_bins < group_end:
+            total_values.append(values[i + n_regular_bins])
+    
+    return regular_values, total_values

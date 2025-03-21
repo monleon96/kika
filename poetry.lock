@@ -2985,7 +2985,33 @@ files = [
     {file = "websockets-15.0.tar.gz", hash = "sha256:ca36151289a15b39d8d683fd8b7abbe26fc50be311066c5f8dcf3cb8cee107ab"},
 ]
 
+[[package]]
+name = "xarray"
+version = "2025.3.0"
+description = "N-D labeled arrays and datasets in Python"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "xarray-2025.3.0-py3-none-any.whl", hash = "sha256:022b7eac5ebc26d70d34211de732ec1a15127a40455f9492acdde7fbe5bbf091"},
+    {file = "xarray-2025.3.0.tar.gz", hash = "sha256:531cf6d64e6ab54c19239930a840654f1a79d2140e9f0d11d1e8d69dcc581d0f"},
+]
+
+[package.dependencies]
+numpy = ">=1.24"
+packaging = ">=23.2"
+pandas = ">=2.1"
+
+[package.extras]
+accel = ["bottleneck", "flox", "numba (>=0.54)", "numbagg", "opt_einsum", "scipy"]
+complete = ["xarray[accel,etc,io,parallel,viz]"]
+etc = ["sparse"]
+io = ["cftime", "fsspec", "h5netcdf", "netCDF4", "pooch", "pydap ; python_version < \"3.10\"", "scipy", "zarr"]
+parallel = ["dask[complete]"]
+types = ["pandas-stubs", "types-PyYAML", "types-Pygments", "types-colorama", "types-decorator", "types-defusedxml", "types-docutils", "types-networkx", "types-openpyxl", "types-pexpect", "types-psutil", "types-pycurl", "types-python-dateutil", "types-pytz", "types-setuptools"]
+viz = ["cartopy", "matplotlib", "nc-time-axis", "seaborn"]
+
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "06de9f9927b7bda64b46ce0ba4dee3880c350b5b867808c3f6eee8d1092db723"
+content-hash = "a087eb9580e96518a8715bf8da2e6c27df3520450f69aa53a7ec238042a5f048"

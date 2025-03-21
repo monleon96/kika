@@ -26,7 +26,10 @@ The parsed MCTAL file is represented by a ``Mctal`` object containing header inf
 
 .. code-block:: python
 
-   # Display basic information
+   # The Mctal object itself provides a nicely formatted summary
+   mctal
+
+   # Display specific header information
    print(f"Code: {mctal.code_name} {mctal.ver}")
    print(f"Problem ID: {mctal.probid}")
    print(f"Number of particle histories: {mctal.nps:.2e}")
@@ -50,34 +53,19 @@ Tallies are the main output of MCNP simulations. The ``Mctal`` class provides ac
    # Access a specific tally
    tally_id = tally_ids[0]  # Select first tally as example
    tally = mctal.tally[tally_id]
-   print(f"Tally {tally_id} details:")
-   print(tally)
-
-Accessing Tally Data
---------------------
-
-Each tally contains results, errors, and energy bin information:
-
-.. code-block:: python
-
-   # Display tally details
+   
+   # Display the tally information
+   display(tally)
+   
+   # Display tally dimensions and structure
    print(f"Tally name: {tally.name}")
-   print(f"Number of energy bins: {len(tally.energies)}")
-   print(f"Number of results: {len(tally.results)}")
+   print(f"Tally dimensions: {tally.get_dimensions()}")
    
-   # Display integral result if available
-   if tally.integral_result is not None:
-       print(f"Integral result: {tally.integral_result:.6e}")
-       print(f"Integral error: {tally.integral_error:.6e}")
-   
-   # Display energy bin structure
+   # Display energy bin structure if available
    if tally.energies:
-       print("Energy bin structure:")
-       print(tally.energies)
-   
-   # Access energy bins and results
-   for i, (energy, result, error) in enumerate(zip(tally.energies, tally.results, tally.errors)):
-       print(f"Energy bin {i}: {energy:.3e} MeV, Result: {result:.6e} ± {error:.6e}")
+       print("Energy bin boundaries:")
+       for i, energy in enumerate(tally.energies):
+           print(f"  Bin {i}: {energy:.6e} MeV")
 
 Converting to DataFrame
 -----------------------
@@ -89,36 +77,57 @@ For more advanced data analysis, MCNPy allows you to convert tally data to panda
    # Convert tally to DataFrame
    tally_df = tally.to_dataframe()
    
-   # Examine the data
-   print(tally_df.head())
+   # Display the DataFrame
+   display(tally_df)
    
-   # Perform calculations and filtering
-   # Example: Filter by energy range
-   filtered_df = tally_df[tally_df['energy_bin'] > 1e-6]
-   
-   # Basic statistics
-   print(f"Mean result: {tally_df['result'].mean():.6e}")
-   print(f"Maximum result: {tally_df['result'].max():.6e}")
+   # For energy-integrated data (if available)
+   integral_df = tally.get_integral_energy_dataframe()
+   if not integral_df.empty:
+       print("Energy-integrated data as DataFrame:")
+       display(integral_df)
 
-Visualizing Tally Data
-----------------------
+Working with Multidimensional Data
+----------------------------------
 
-MCNPy provides built-in methods for visualizing tally results and convergence:
+MCNPy supports multidimensional data analysis using xarray, which provides labeled N-dimensional arrays:
 
 .. code-block:: python
 
-   # Basic plotting of results vs energy
-   plt.figure(figsize=(10, 6))
-   plt.errorbar(tally_df['energy_bin'], tally_df['result'], 
-               yerr=tally_df['result']*tally_df['rel_error'], 
-               fmt='o', capsize=5)
-   plt.xscale('log')
-   plt.yscale('log')
-   plt.xlabel('Energy (MeV)')
-   plt.ylabel('Tally Result')
-   plt.title(f'Tally {tally_id} Results vs Energy')
-   plt.grid(True, which='both', linestyle='--', alpha=0.7)
-   plt.show()
+   # Convert tally data to xarray Dataset
+   ds = tally.to_xarray()
+   display(ds)
+   
+   # Extracting slices of multidimensional data
+   dims = tally.get_dimensions()
+   print(f"Tally dimensions: {dims}")
+   
+   # Get a slice for a specific energy value
+   results, errors = tally.get_slice(energy=tally.energies[2])
+   print(f"Results for selected energy bin: {results}")
+   print(f"Errors for selected energy bin: {errors}")
+   
+   # Get a slice for a specific segment
+   results, errors = tally.get_slice(segment=1)  # Segment numbering starts at 0
+   print(f"Results for second segment: {results}")
+   print(f"Errors for second segment: {errors}")
+
+Working with Energy-Integrated Data
+----------------------------------
+
+For tallies with energy bins, MCNPy provides methods to access energy-integrated data:
+
+.. code-block:: python
+
+   # Get the energy-integrated data
+   integral_data = tally.get_integral_energy_data()
+   
+   # Display the energy-integrated data
+   print(f"Result: {integral_data['Result']}")
+   print(f"Error: {integral_data['Error']}")
+   
+   # Convert to DataFrame for tabular view
+   integral_df = tally.get_integral_energy_dataframe()
+   display(integral_df)
 
 Analyzing Tally Convergence
 ---------------------------
@@ -128,15 +137,20 @@ Use TFC (Tally Fluctuation Chart) data to analyze tally convergence:
 .. code-block:: python
 
    # Check if TFC data is available
-   if tally.tfc_nps and len(tally.tfc_nps) > 0:
-       # Plot TFC data using the built-in method
-       print("Plotting TFC convergence data:")
-       tally.plot_tfc_data()
+   if hasattr(tally, 'tfc_nps') and tally.tfc_nps and len(tally.tfc_nps) > 0:
+       print(f"Tally has {len(tally.tfc_nps)} TFC data points")
        
-       # The plot includes:
-       # 1. Tally mean vs. histories
-       # 2. Relative error vs. histories 
-       # 3. Figure of merit vs. histories
+       # Show some TFC data values
+       print("Sample of TFC data:")
+       print(f"{'NPS':<12} {'Result':<15} {'Error':<10} {'FOM':<10}")
+       for i in range(min(5, len(tally.tfc_nps))):  # Show up to first 5 points
+           print(f"{tally.tfc_nps[i]:<12} {tally.tfc_results[i]:<15.6e} {tally.tfc_errors[i]:<10.6f} {tally.tfc_fom[i]:<10.2f}")
+       
+       # Plot TFC data using the built-in method
+       tally.plot_tfc_data(figsize=(15, 4))
+       
+       # Plot without error bars for clearer visualization
+       tally.plot_tfc_data(figsize=(15, 4), show_error_bars=False)
    else:
        print("No TFC data available for this tally.")
 
@@ -148,7 +162,7 @@ MCNP perturbation data is stored in the MCTAL file for perturbed tallies:
 .. code-block:: python
 
    # Find tallies with perturbation data
-   tallies_with_pert = [tid for tid in tally_ids if mctal.tally[tid].perturbation]
+   tallies_with_pert = [tid for tid in tally_ids if hasattr(mctal.tally[tid], 'perturbation') and mctal.tally[tid].perturbation]
    
    if tallies_with_pert:
        # Get the first tally with perturbation data
@@ -156,7 +170,8 @@ MCNP perturbation data is stored in the MCTAL file for perturbed tallies:
        tally = mctal.tally[tally_id]
        
        # Display the perturbation collection
-       print(tally.perturbation)
+       print(f"Perturbation collection for Tally {tally_id}:")
+       display(tally.perturbation)
        
        # Get list of perturbation IDs
        pert_ids = list(tally.perturbation.keys())
@@ -166,11 +181,8 @@ MCNP perturbation data is stored in the MCTAL file for perturbed tallies:
            pert_id = pert_ids[0]
            pert = tally.perturbation[pert_id]
            
-           print(f"Details for perturbation {pert_id}:")
-           print(pert)
-           
-           # Access specific perturbation data
-           print(f"Result: {pert.integral_result:.6e} ± {pert.integral_error:.6e}")
+           # Display the perturbation details
+           display(pert)
 
 Converting Perturbation Data to DataFrames
 ------------------------------------------
@@ -186,14 +198,14 @@ For better analysis, perturbation data can be converted to pandas DataFrames:
        # Convert all perturbations to a DataFrame
        pert_df = tally.perturbation.to_dataframe()
        
-       if not pert_df.empty:
-           print("All perturbations as DataFrame:")
-           print(pert_df.head())
+       print("All perturbations as DataFrame:")
+       display(pert_df)
+       
+       # Analyze a single perturbation
+       if pert_ids:
+           pert_id = pert_ids[0]
+           single_pert = tally.perturbation[pert_id]
+           single_df = single_pert.to_dataframe()
            
-           # Analyze perturbation data
-           if 'energy_bin' in pert_df.columns:
-               # Group by energy bin
-               energy_groups = pert_df.groupby('energy_bin')
-               
-               # Summary statistics by energy bin
-               print(energy_groups['result'].mean())
+           print(f"Perturbation {pert_id} as DataFrame:")
+           display(single_df)

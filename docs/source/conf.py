@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath('../..'))
 project = 'MCNPy'
 copyright = f"{datetime.datetime.now().year}, Juan Antonio Monleon de la Lluvia <juanmonleon96@gmail.com>"
 author = "Juan Antonio Monleon de la Lluvia <juanmonleon96@gmail.com>"
-release = "0.2.4"
+release = "0.2.5"
 
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -75,5 +75,5 @@ html_sidebars = {
 }
 
 rst_prolog = f"""
-.. |version| replace:: "0.2.4"
+.. |version| replace:: "0.2.5"
 """
