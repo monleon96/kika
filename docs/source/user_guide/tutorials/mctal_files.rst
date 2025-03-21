@@ -112,7 +112,7 @@ MCNPy supports multidimensional data analysis using xarray, which provides label
    print(f"Errors for second segment: {errors}")
 
 Working with Energy-Integrated Data
-----------------------------------
+-----------------------------------
 
 For tallies with energy bins, MCNPy provides methods to access energy-integrated data:
 

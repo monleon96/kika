@@ -75,5 +75,5 @@ html_sidebars = {
 }
 
 rst_prolog = f"""
-.. |version| replace:: "0.2.5"
+.. |version| replace:: 0.2.5
 """
