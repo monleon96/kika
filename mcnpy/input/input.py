@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from .material import Materials
 from .perturbations import Perturbation
-from mcnpy.utils.energy_grids import _identify_energy_grid
+from mcnpy.energy_grids.utils import _identify_energy_grid
 
 
 @dataclass

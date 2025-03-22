@@ -1,6 +1,12 @@
+"""
+Utility functions for working with energy grids.
+"""
+
+
 import numpy as np
-from mcnpy.energyGrids._grids import (
-    vitaminj174, vitaminj175, scale44, scale56, scale238, scale252
+from .grids import (
+    VITAMINJ174, VITAMINJ175, SCALE44, SCALE56, SCALE238, SCALE252,
+    WIMS69, ECCO33, ONEGROUP20
 )
 
 def _identify_energy_grid(energies, tolerance=1e-5):
@@ -19,12 +25,15 @@ def _identify_energy_grid(energies, tolerance=1e-5):
     
     # Dictionary mapping grid variables to their names
     grid_dict = {
-        "vitaminj174": vitaminj174,
-        "vitaminj175": vitaminj175, 
-        "scale44": scale44,
-        "scale56": scale56,
-        "scale238": scale238,
-        "scale252": scale252
+        "VITAMINJ174": VITAMINJ174,
+        "VITAMINJ175": VITAMINJ175, 
+        "SCALE44": SCALE44,
+        "SCALE56": SCALE56,
+        "SCALE238": SCALE238,
+        "SCALE252": SCALE252,
+        "WIMS69": WIMS69,
+        "ECCO33": ECCO33,
+        "ONEGROUP20": ONEGROUP20
     }
     
     # Convert input to numpy array for comparison

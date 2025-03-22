@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import pandas as pd
-from mcnpy.utils.energy_grids import _identify_energy_grid
+from mcnpy.energy_grids.utils import _identify_energy_grid
 
 
 @dataclass

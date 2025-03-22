@@ -3,7 +3,7 @@ from typing import List, Optional, Tuple, Union
 import os
 from mcnpy._constants import MT_TO_REACTION, ATOMIC_NUMBER_TO_SYMBOL
 from mcnpy.sensitivities.sensitivity import SensitivityData
-from mcnpy.utils.energy_grids import _identify_energy_grid
+from mcnpy.energy_grids.utils import _identify_energy_grid
 
 
 @dataclass

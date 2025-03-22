@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, Tuple
 import pandas as pd
-from mcnpy.utils.energy_grids import _identify_energy_grid
+from mcnpy.energy_grids.utils import _identify_energy_grid
 
 class PertCollection(dict):
     """A collection class for perturbation cards that provides a nice summary representation.
