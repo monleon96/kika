@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+dist/
+docs/build/
+
+# VSCODE
+.vscode/
+*.code-workspace
+
+# Personal docs
+_README.md
+
+# Directories
+myworkspace/
