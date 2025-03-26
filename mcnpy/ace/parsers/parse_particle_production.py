@@ -1,6 +1,6 @@
 import logging
 from typing import List, Optional
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.particle_production import ParticleProductionTypes
 
 # Setup logger
@@ -32,7 +32,7 @@ def read_particle_types_block(ace: Ace, debug=False) -> None:
         return
     
     # Get the number of particle types (NTYPE = NXS(7))
-    ntype = ace.header.nxs_array[6]  # NXS(7) - convert to 0-indexed array
+    ntype = ace.header.nxs_array[7]  # NXS(7)
     
     if debug:
         logger.debug(f"NXS(7) = {ntype} → Number of particle types")
@@ -43,21 +43,18 @@ def read_particle_types_block(ace: Ace, debug=False) -> None:
         return  # No particle types defined
     
     # Get the starting index for the PTYPE block (LTYPE = JXS(30))
-    ltype_idx = ace.header.jxs_array[29]  # JXS(30) - convert to 0-indexed array
+    ltype_idx = ace.header.jxs_array[30]  # JXS(30)
     
     if debug:
-        logger.debug(f"JXS(30) = {ltype_idx} → Locator for PTYPE block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(30) = {ltype_idx} → Locator for PTYPE block")
     
     if ltype_idx <= 0 or ltype_idx > len(ace.xss_data):
         if debug:
             logger.debug(f"Invalid index or no PTYPE block: JXS(30)={ltype_idx}")
         return  # Invalid index
     
-    # Convert to 0-indexed
-    ltype_idx -= 1
-    
     if debug:
-        logger.debug(f"PTYPE block starts at index {ltype_idx} (0-indexed)")
+        logger.debug(f"PTYPE block starts at index {ltype_idx}")
     
     # Check if we have enough data
     if ltype_idx + ntype - 1 >= len(ace.xss_data):
@@ -108,7 +105,7 @@ def read_secondary_particle_types_block(ace: Ace, debug=False) -> None:
         return
     
     # Get the number of particle types (NTYPE = NXS(7))
-    ntype = ace.header.nxs_array[6]  # NXS(7) - convert to 0-indexed array
+    ntype = ace.header.nxs_array[7]  # NXS(7)
     
     if debug:
         logger.debug(f"NXS(7) = {ntype} → Number of secondary particle types")
@@ -119,21 +116,18 @@ def read_secondary_particle_types_block(ace: Ace, debug=False) -> None:
         return  # No particle types defined
     
     # Get the starting index for the PTYPE block (LTYPE = JXS(30))
-    ltype_idx = ace.header.jxs_array[29]  # JXS(30) - convert to 0-indexed array
+    ltype_idx = ace.header.jxs_array[30]  # JXS(30)
     
     if debug:
-        logger.debug(f"JXS(30) = {ltype_idx} → Locator for secondary particles block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(30) = {ltype_idx} → Locator for secondary particles block")
     
     if ltype_idx <= 0 or ltype_idx > len(ace.xss_data):
         if debug:
             logger.debug(f"Invalid index or no secondary particles block: JXS(30)={ltype_idx}")
         return  # Invalid index
     
-    # Convert to 0-indexed
-    ltype_idx -= 1
-    
     if debug:
-        logger.debug(f"Secondary particles block starts at index {ltype_idx} (0-indexed)")
+        logger.debug(f"Secondary particles block starts at index {ltype_idx}")
     
     # Check if we have enough data
     if ltype_idx + ntype - 1 >= len(ace.xss_data):

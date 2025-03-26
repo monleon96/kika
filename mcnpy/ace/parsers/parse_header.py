@@ -148,7 +148,8 @@ def read_header(header, lines, debug=False):
     if debug:
         logger.debug("Reading IZAW array")
         
-    izaw = []
+    # Initialize with sentinel value at index 0 for Fortran 1-based indexing
+    izaw = [(0, 0.0)]
     
     for i in range(4):  # 4 lines of IZAW data
         if line_idx < len(lines):
@@ -168,7 +169,7 @@ def read_header(header, lines, debug=False):
     header.izaw_array = izaw
     
     if debug and izaw:
-        logger.debug(f"Read {len(izaw)} IZAW entries")
+        logger.debug(f"Read {len(izaw)-1} IZAW entries (plus index 0 sentinel)")
     
     # -------------------------
     # Read NXS array (16 integers over 2 lines)
@@ -177,7 +178,8 @@ def read_header(header, lines, debug=False):
     if debug:
         logger.debug("Reading NXS array")
         
-    nxs = []
+    # Initialize with sentinel value at index 0 for Fortran 1-based indexing
+    nxs = [0]
     
     for i in range(2):  # 2 lines of NXS data
         if line_idx < len(lines):
@@ -194,7 +196,7 @@ def read_header(header, lines, debug=False):
     header.nxs_array = nxs
     
     if debug and nxs:
-        logger.debug(f"Read {len(nxs)} NXS entries")
+        logger.debug(f"Read {len(nxs)-1} NXS entries (plus index 0 sentinel)")
         logger.debug(f"NXS values: {nxs}")
     
     # -------------------------
@@ -204,7 +206,8 @@ def read_header(header, lines, debug=False):
     if debug:
         logger.debug("Reading JXS array")
         
-    jxs = []
+    # Initialize with sentinel value at index 0 for Fortran 1-based indexing
+    jxs = [0]
     
     for i in range(4):  # 4 lines of JXS data
         if line_idx < len(lines):
@@ -221,8 +224,8 @@ def read_header(header, lines, debug=False):
     header.jxs_array = jxs
     
     if debug and jxs:
-        logger.debug(f"Read {len(jxs)} JXS entries")
-        logger.debug(f"JXS non-zero pointers: {[(i+1, val) for i, val in enumerate(jxs) if val > 0]}")
+        logger.debug(f"Read {len(jxs)-1} JXS entries (plus index 0 sentinel)")
+        logger.debug(f"JXS non-zero pointers: {[(i, val) for i, val in enumerate(jxs) if val > 0 and i > 0]}")
     
     if debug:
         logger.debug("Finished reading header")

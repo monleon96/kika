@@ -1,4 +1,4 @@
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.energy_distribution import EnergyDependentYield
 
 def parse_energy_dependent_yield(ace: Ace, ky_idx: int) -> EnergyDependentYield:

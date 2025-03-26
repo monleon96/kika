@@ -3,7 +3,7 @@ from typing import List, Dict, Optional, Union, Tuple, Any, KeysView
 import numpy as np
 from enum import Enum
 import pandas as pd
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 from mcnpy.ace.classes.angular_distribution.angular_distribution_repr import (
     angular_distribution_repr, 
     isotropic_distribution_repr,

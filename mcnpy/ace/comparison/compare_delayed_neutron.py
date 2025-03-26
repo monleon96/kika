@@ -2,7 +2,7 @@
 Module for comparing delayed neutron data in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.delayed_neutron import DelayedNeutronPrecursor
 from mcnpy.ace.comparison.compare_utils import compare_arrays, compare_floats
 

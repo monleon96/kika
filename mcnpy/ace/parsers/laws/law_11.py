@@ -1,6 +1,6 @@
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.energy_distribution import EnergyDistribution, EnergyDependentWattSpectrum
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 
 def parse_energy_dependent_watt_spectrum(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> EnergyDependentWattSpectrum:
     """

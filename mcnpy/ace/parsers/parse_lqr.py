@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from mcnpy.ace.classes.q_values import QValues
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -30,20 +30,18 @@ def read_lqr_block(ace, debug=False):
         ace.q_values = QValues()
     
     # Read LQR block (reaction Q-values) if present
-    lqr_idx = ace.header.jxs_array[3]  # JXS(4)
+    lqr_idx = ace.header.jxs_array[4]  # JXS(4)
     
     if debug:
-        logger.debug(f"JXS(4) = {lqr_idx} → Locator for LQR block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(4) = {lqr_idx} → Locator for LQR block")
     
     if lqr_idx > 0:
-        num_reactions = ace.header.nxs_array[3]  # NXS(4)
+        num_reactions = ace.header.nxs_array[4]  # NXS(4)
         
         if debug:
             logger.debug(f"NXS(4) = {num_reactions} → Total number of reactions")
         
         if num_reactions > 0:
-            # Convert to 0-indexed and read the LQR block
-            lqr_idx -= 1
             
             if debug:
                 logger.debug(f"LQR block range: XSS[{lqr_idx}:{lqr_idx+num_reactions}]")

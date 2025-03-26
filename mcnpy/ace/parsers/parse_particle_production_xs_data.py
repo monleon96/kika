@@ -1,5 +1,5 @@
 from typing import List, Optional
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.particle_production_xs_data import ParticleProductionXSData, ParticleProductionXSContainer
 import logging
 
@@ -61,9 +61,6 @@ def read_particle_production_xs_data_blocks(ace: Ace, debug: bool = False) -> No
             if debug:
                 logger.debug(f"Invalid HPD index {hpd_idx} for particle type {j}, skipping")
             continue
-        
-        # Adjust to 0-indexed
-        hpd_idx -= 1
         
         if debug:
             logger.debug(f"HPD index for particle type {j}: {hpd_idx}")

@@ -2,7 +2,7 @@
 Module for comparing nu-bar data in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.nubar.nubar import NuData, NuPolynomial, NuTabulated
 from mcnpy.ace.comparison.compare_utils import compare_arrays, compare_floats
 

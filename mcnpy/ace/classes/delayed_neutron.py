@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 
 @dataclass
 class DelayedNeutronPrecursor:

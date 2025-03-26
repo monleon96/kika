@@ -1,6 +1,6 @@
 import logging
 from typing import List, Optional
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.photon_production_xs import (
     PhotonProductionCrossSections, ParticleProductionCrossSections,
     YieldBasedCrossSection, DirectCrossSection
@@ -59,11 +59,11 @@ def read_photon_production_xs(ace: Ace, debug=False) -> None:
         logger.debug("\n----- SIGP Block -----")
     
     # Get block parameters from Table 56
-    sigp_idx = ace.header.jxs_array[14]  # JXS(15)
-    nmt = ace.header.nxs_array[5]  # NXS(6)
+    sigp_idx = ace.header.jxs_array[15]  # JXS(15)
+    nmt = ace.header.nxs_array[6]  # NXS(6)
     
     if debug:
-        logger.debug(f"JXS(15) = {sigp_idx} → Starting index of SIGP block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(15) = {sigp_idx} → Starting index of SIGP block")
         logger.debug(f"NXS(6) = {nmt} → Number of photon production reactions")
     
     if sigp_idx <= 0 or nmt <= 0:
@@ -100,21 +100,21 @@ def read_photon_production_xs(ace: Ace, debug=False) -> None:
         loc_value = int(loc.value)
         
         # Adjust locator to be relative to SIGP
-        loc_rel = loc_value - 1  # Adjust to 0-indexed
+        loc_value = loc_value - 1  # Adjust to 0-indexed
         
         if debug:
             logger.debug(f"\nReaction {i+1}: MT={mt_value}")
             logger.debug(f"  Locator value: {loc_value}")
-            logger.debug(f"  Relative index: {loc_rel}")
+            logger.debug(f"  Relative index: {loc_value}")
         
         # Check bounds
-        if sigp_idx + loc_rel >= len(ace.xss_data):
+        if sigp_idx + loc_value >= len(ace.xss_data):
             if debug:
-                logger.debug(f"  ERROR: Index {sigp_idx + loc_rel} is out of bounds ({len(ace.xss_data)})")
+                logger.debug(f"  ERROR: Index {sigp_idx + loc_value} is out of bounds ({len(ace.xss_data)})")
             continue
         
         # Read the cross section data based on MFTYPE
-        mftype_entry = ace.xss_data[sigp_idx + loc_rel]
+        mftype_entry = ace.xss_data[sigp_idx + loc_value]
         mftype = int(mftype_entry.value)
         
         if debug:
@@ -123,7 +123,7 @@ def read_photon_production_xs(ace: Ace, debug=False) -> None:
         if mftype in (12, 16):
             if debug:
                 logger.debug(f"  Processing yield-based XS (MFTYPE={mftype})")
-            xs = read_yield_based_xs(ace.xss_data, sigp_idx + loc_rel, mt_value, mftype, debug)
+            xs = read_yield_based_xs(ace.xss_data, sigp_idx + loc_value, mt_value, mftype, debug)
             if xs:
                 ace.photon_production_xs.cross_sections[mt_value] = xs
                 ace.photon_production_xs.has_data = True
@@ -132,7 +132,7 @@ def read_photon_production_xs(ace: Ace, debug=False) -> None:
         elif mftype == 13:
             if debug:
                 logger.debug("  Processing direct XS (MFTYPE=13)")
-            xs = read_direct_xs(ace.xss_data, sigp_idx + loc_rel, mt_value, debug)
+            xs = read_direct_xs(ace.xss_data, sigp_idx + loc_value, mt_value, debug)
             if xs:
                 ace.photon_production_xs.cross_sections[mt_value] = xs
                 ace.photon_production_xs.has_data = True
@@ -164,12 +164,12 @@ def read_particle_production_xs(ace: Ace, debug=False) -> None:
         logger.debug("\n----- SIGH Block -----")
     
     # Check if we have particle types
-    if ace.header.nxs_array[12] <= 0:  # NXS(13) - Number of particle types
+    if ace.header.nxs_array[13] <= 0:  # NXS(13) - Number of particle types
         if debug:
-            logger.debug(f"No particle types: NXS(13)={ace.header.nxs_array[12]}")
+            logger.debug(f"No particle types: NXS(13)={ace.header.nxs_array[13]}")
         return
     
-    n_types = ace.header.nxs_array[12]
+    n_types = ace.header.nxs_array[13]
     
     if debug:
         logger.debug(f"Number of particle types: {n_types}")
@@ -180,12 +180,12 @@ def read_particle_production_xs(ace: Ace, debug=False) -> None:
             logger.debug(f"\nProcessing particle type {i}:")
         
         # Get block parameters from Table 56
-        jxs31_idx = ace.header.jxs_array[30] - 1  # JXS(31) - convert to 0-indexed
-        jxs32_idx = ace.header.jxs_array[31] - 1  # JXS(32) - convert to 0-indexed
+        jxs31_idx = ace.header.jxs_array[31]  # JXS(31)
+        jxs32_idx = ace.header.jxs_array[32]  # JXS(32)
         
         if debug:
-            logger.debug(f"  JXS(31) 0-indexed = {jxs31_idx}")
-            logger.debug(f"  JXS(32) 0-indexed = {jxs32_idx}")
+            logger.debug(f"  JXS(31) = {jxs31_idx}")
+            logger.debug(f"  JXS(32) = {jxs32_idx}")
         
         if jxs31_idx < 0 or jxs32_idx < 0 or jxs31_idx >= len(ace.xss_data) or jxs32_idx >= len(ace.xss_data):
             if debug:
@@ -193,7 +193,7 @@ def read_particle_production_xs(ace: Ace, debug=False) -> None:
             continue
         
         # Get NMT value for this particle type
-        nmt_idx = jxs31_idx + i - 1
+        nmt_idx = jxs31_idx + i
         
         if debug:
             logger.debug(f"  NMT index: jxs31_idx + i - 1 = {jxs31_idx} + {i} - 1 = {nmt_idx}")
@@ -210,7 +210,7 @@ def read_particle_production_xs(ace: Ace, debug=False) -> None:
             logger.debug(f"  NMT = {nmt} → Number of reactions for this particle")
         
         # Get SIG value for this particle type
-        sig_idx = jxs32_idx + 10 * (i - 1) + 4 - 1  # Convert to 0-indexed
+        sig_idx = jxs32_idx + 10 * (i - 1) + 4  # Position 4 in JXS array
         
         if debug:
             logger.debug(f"  SIG index: jxs32_idx + 10*(i-1) + 3 = {jxs32_idx} + 10*({i}-1) + 3 = {sig_idx}")
@@ -251,22 +251,19 @@ def read_particle_production_xs(ace: Ace, debug=False) -> None:
             mt_value = int(mt.value)
             loc_value = int(loc.value)
             
-            # Adjust locator to be relative to SIG
-            loc_rel = loc_value - 1  # Adjust to 0-indexed
-            
             if debug:
                 logger.debug(f"\n  Reaction {j+1}: MT={mt_value}")
                 logger.debug(f"    Locator value: {loc_value}")
-                logger.debug(f"    Relative index: {loc_rel}")
+                logger.debug(f"    Relative index: {loc_value}")
             
             # Check bounds
-            if sig_idx + loc_rel >= len(ace.xss_data):
+            if sig_idx + loc_value >= len(ace.xss_data):
                 if debug:
-                    logger.debug(f"    ERROR: Index {sig_idx + loc_rel} is out of bounds ({len(ace.xss_data)})")
+                    logger.debug(f"    ERROR: Index {sig_idx + loc_value} is out of bounds ({len(ace.xss_data)})")
                 continue
             
             # Read the cross section data based on MFTYPE
-            mftype_entry = ace.xss_data[sig_idx + loc_rel]
+            mftype_entry = ace.xss_data[sig_idx + loc_value]
             mftype = int(mftype_entry.value)
             
             if debug:
@@ -275,7 +272,7 @@ def read_particle_production_xs(ace: Ace, debug=False) -> None:
             if mftype in (12, 16):
                 if debug:
                     logger.debug(f"    Processing yield-based XS (MFTYPE={mftype})")
-                xs = read_yield_based_xs(ace.xss_data, sig_idx + loc_rel, mt_value, mftype, debug)
+                xs = read_yield_based_xs(ace.xss_data, sig_idx + loc_value, mt_value, mftype, debug)
                 if xs:
                     ace.particle_production_xs.cross_sections[mt_value] = xs
                     ace.particle_production_xs.has_data = True

@@ -2,7 +2,7 @@
 Module for comparing angular distribution locators in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.comparison.compare_utils import compare_arrays, compare_floats
 
 def compare_angular_locators(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool = True) -> bool:

@@ -1,6 +1,6 @@
 import logging
 from mcnpy.ace.classes.delayed_neutron import DelayedNeutronPrecursor, DelayedNeutronData
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 from typing import List, Tuple
 
 # Setup logger
@@ -30,7 +30,7 @@ def read_delayed_neutron_data(ace, debug=False):
         logger.debug(f"Header info: ZAID={ace.header.zaid}")
     
     # Read BDD block if present
-    bdd_idx = ace.header.jxs_array[24]  # JXS(25)
+    bdd_idx = ace.header.jxs_array[25]  # JXS(25)
     
     if debug:
         logger.debug(f"JXS(25) = {bdd_idx} → Locator for BDD block (FORTRAN 1-indexed)")
@@ -42,14 +42,12 @@ def read_delayed_neutron_data(ace, debug=False):
         if debug:
             logger.debug(f"BDD block found at index {bdd_idx}")
         
-        # Convert to 0-indexed
-        bdd_idx -= 1
-        
+        # Check bounds
         if bdd_idx >= len(ace.xss_data):
-            raise ValueError(f"Invalid BDD block index: {bdd_idx+1}")
+            raise ValueError(f"Invalid BDD block index: {bdd_idx}")
         
         # Get the number of precursor groups
-        num_precursors = ace.header.num_delayed_neutron_precursors
+        num_precursors = ace.header.nxs_array[8]  # NXS(8)
         
         if debug:
             logger.debug(f"Number of precursor groups: {num_precursors}")
@@ -84,11 +82,12 @@ def parse_precursor_data(xss_data: List[XssEntry], idx: int, debug=False) -> Tup
         Whether to print debug information, defaults to False
         
     Returns
-    -------
+    ------- 
     Tuple[DelayedNeutronPrecursor, int]
         A tuple containing the precursor data and the new index position
     """
-    if idx < 0 or idx >= len(xss_data):
+    # Check valid index
+    if idx <= 0 or idx >= len(xss_data):
         raise ValueError(f"Invalid precursor data index: {idx}")
     
     # Create a DelayedNeutronPrecursor object

@@ -1,7 +1,7 @@
 from typing import List, Optional
 import logging
 from mcnpy.ace.classes.mtr import ReactionMTData
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -26,18 +26,16 @@ def read_mtr_blocks(ace, debug=False):
         ace.reaction_mt_data = ReactionMTData()
     
     # Read MTR block (neutron reaction MT numbers) if present
-    mtr_idx = ace.header.jxs_array[2]  # JXS(3)
+    mtr_idx = ace.header.jxs_array[3]  # JXS(3)
     if mtr_idx > 0:
-        num_reactions = ace.header.nxs_array[3]  # NXS(4)
+        num_reactions = ace.header.nxs_array[4]  # NXS(4)
         
         if debug:
             logger.debug("\n===== MTR BLOCK PARSING =====")
-            logger.debug(f"JXS(3) = {mtr_idx} → Starting index of MTR block (FORTRAN 1-indexed)")
+            logger.debug(f"JXS(3) = {mtr_idx} → Starting index of MTR block")
             logger.debug(f"NXS(4) = {num_reactions} → Total number of reactions")
         
         if num_reactions > 0:
-            # Convert to 0-indexed and read the MTR block
-            mtr_idx -= 1
             if (mtr_idx + num_reactions <= len(ace.xss_data)):
                 # Store XssEntry objects directly
                 ace.reaction_mt_data.incident_neutron = ace.xss_data[mtr_idx:mtr_idx + num_reactions]
@@ -48,7 +46,7 @@ def read_mtr_blocks(ace, debug=False):
                 
                 # Determine reactions with secondary neutrons
                 # First NXS(5) values excluding elastic scattering (MT=2)
-                num_secondary_neutron_reactions = ace.header.nxs_array[4]  # NXS(5)
+                num_secondary_neutron_reactions = ace.header.nxs_array[5]  # NXS(5)
                 
                 if debug:
                     logger.debug(f"NXS(5) = {num_secondary_neutron_reactions} → Number of secondary neutron reactions")
@@ -63,18 +61,16 @@ def read_mtr_blocks(ace, debug=False):
                     logger.debug(f"Secondary neutron MT numbers: {[int(entry.value) for entry in ace.reaction_mt_data.secondary_neutron_mt]}")
     
     # Read MTRP block (photon production MT numbers) if present
-    mtrp_idx = ace.header.jxs_array[12]  # JXS(13)
+    mtrp_idx = ace.header.jxs_array[13]  # JXS(13)
     if mtrp_idx > 0:
-        num_photon_reactions = ace.header.nxs_array[5]  # NXS(6)
+        num_photon_reactions = ace.header.nxs_array[6]  # NXS(6)
         
         if debug:
             logger.debug("\n===== MTRP BLOCK PARSING =====")
-            logger.debug(f"JXS(13) = {mtrp_idx} → Starting index of MTRP block (FORTRAN 1-indexed)")
+            logger.debug(f"JXS(13) = {mtrp_idx} → Starting index of MTRP block")
             logger.debug(f"NXS(6) = {num_photon_reactions} → Number of photon production reactions")
         
         if num_photon_reactions > 0:
-            # Convert to 0-indexed and read the MTRP block
-            mtrp_idx -= 1
             if mtrp_idx + num_photon_reactions <= len(ace.xss_data):
                 # Store XssEntry objects directly
                 ace.reaction_mt_data.photon_production = ace.xss_data[mtrp_idx:mtrp_idx + num_photon_reactions]
@@ -84,27 +80,23 @@ def read_mtr_blocks(ace, debug=False):
                     logger.debug(f"Photon production MT values: {[int(entry.value) for entry in ace.reaction_mt_data.photon_production]}")
     
     # Read MTRH block (particle production MT numbers) if present
-    jxs31 = ace.header.jxs_array[30]  # JXS(31)
-    jxs32 = ace.header.jxs_array[31]  # JXS(32)
-    num_particle_types = ace.header.nxs_array[6]  # NXS(7)
+    jxs31 = ace.header.jxs_array[31]  # JXS(31)
+    jxs32 = ace.header.jxs_array[32]  # JXS(32)
+    num_particle_types = ace.header.nxs_array[7]  # NXS(7)
     
     if debug:
         logger.debug("\n===== MTRH BLOCK PARSING =====")
-        logger.debug(f"JXS(31) = {jxs31} → Locator for NMT values (FORTRAN 1-indexed)")
-        logger.debug(f"JXS(32) = {jxs32} → Locator for MTRH block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(31) = {jxs31} → Locator for NMT values")
+        logger.debug(f"JXS(32) = {jxs32} → Locator for MTRH block")
         logger.debug(f"NXS(7) = {num_particle_types} → Number of particle types")
     
     if jxs31 > 0 and jxs32 > 0 and num_particle_types > 0:
         # Initialize list for each particle type
         ace.reaction_mt_data.particle_production = [[] for _ in range(num_particle_types)]
         
-        # Convert to 0-indexed
-        jxs31_0 = jxs31 - 1
-        jxs32_0 = jxs32 - 1
-        
         if debug:
-            logger.debug(f"JXS(31) 0-indexed = {jxs31_0}")
-            logger.debug(f"JXS(32) 0-indexed = {jxs32_0}")
+            logger.debug(f"JXS(31) 0-indexed = {jxs31}")
+            logger.debug(f"JXS(32) 0-indexed = {jxs32}")
         
         # Process each particle type
         for i_python in range(num_particle_types):
@@ -116,10 +108,10 @@ def read_mtr_blocks(ace, debug=False):
             
             # Get the number of MT numbers for this particle type
             # NMT = XSS(JXS(31)+i−1) in FORTRAN / Table 9
-            nmt_idx = jxs31_0 + (i - 1)  # Adjusted for FORTRAN formula with Python 0-indexing
+            nmt_idx = jxs31 + (i - 1)
             
             if debug:
-                logger.debug(f"  NMT index = JXS(31) + (i-1) = {jxs31_0} + ({i}-1) = {nmt_idx}")
+                logger.debug(f"  NMT index = JXS(31) + (i-1) = {jxs31} + ({i}-1) = {nmt_idx}")
             
             if nmt_idx >= len(ace.xss_data):
                 error_msg = f"MTRH particle type {i} NMT index {nmt_idx} is out of bounds"
@@ -139,12 +131,11 @@ def read_mtr_blocks(ace, debug=False):
             
             # Get the starting index for the MT numbers
             # LMT = XSS(JXS(32)+10*(i−1)+1) in FORTRAN / Table 9
-            # In 0-indexed Python but keeping FORTRAN formula: XSS[jxs32_0 + 10*(i-1)]
             offset = 10*(i-1)
-            lmt_idx_ptr = jxs32_0 + offset
+            lmt_idx_ptr = jxs32 + offset
             
             if debug:
-                logger.debug(f"  LMT pointer = JXS(32) + 10*(i-1) = {jxs32_0} + {offset} = {lmt_idx_ptr}")
+                logger.debug(f"  LMT pointer = JXS(32) + 10*(i-1) = {jxs32} + {offset} = {lmt_idx_ptr}")
             
             if lmt_idx_ptr >= len(ace.xss_data):
                 error_msg = f"MTRH particle type {i} LMT pointer index {lmt_idx_ptr} is out of bounds"
@@ -155,21 +146,19 @@ def read_mtr_blocks(ace, debug=False):
             lmt = int(ace.xss_data[lmt_idx_ptr].value)
             
             if debug:
-                logger.debug(f"  LMT = XSS[{lmt_idx_ptr}] = {lmt} → 1-indexed location of MT values")
-            
-            # Convert to 0-indexed for Python
-            lmt_0 = lmt - 1
+                logger.debug(f"  LMT = XSS[{lmt_idx_ptr}] = {lmt} → location of MT values")
+        
             
             if debug:
-                logger.debug(f"  LMT 0-indexed = {lmt_0}")
+                logger.debug(f"  LMT 0-indexed = {lmt}")
             
-            if lmt_0 < 0:
+            if lmt < 0:
                 error_msg = f"MTRH particle type {i} LMT value {lmt} is invalid (must be > 0)"
                 if debug:
                     logger.debug(f"  ERROR: {error_msg}")
                 raise ValueError(error_msg)
                 
-            if lmt_0 + nmt > len(ace.xss_data):
+            if lmt + nmt > len(ace.xss_data):
                 error_msg = f"MTRH particle type {i} would read past end of XSS array"
                 if debug:
                     logger.debug(f"  ERROR: {error_msg}")
@@ -177,9 +166,9 @@ def read_mtr_blocks(ace, debug=False):
                 
             try:
                 # Read the MT numbers for this particle type
-                mt_range = f"{lmt_0}:{lmt_0+nmt}"
+                mt_range = f"{lmt}:{lmt+nmt}"
                 # Store XssEntry objects directly
-                mt_values = ace.xss_data[lmt_0:lmt_0 + nmt]
+                mt_values = ace.xss_data[lmt:lmt + nmt]
                 
                 if debug:
                     logger.debug(f"  Reading MT values from XSS[{mt_range}]: {[int(entry.value) for entry in mt_values]}")

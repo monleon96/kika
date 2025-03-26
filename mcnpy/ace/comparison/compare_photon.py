@@ -2,7 +2,7 @@
 Module for comparing photon production data in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.comparison.compare_gpd import compare_gpd
 from mcnpy.ace.comparison.compare_photon_xs import compare_photon_production_xs
 

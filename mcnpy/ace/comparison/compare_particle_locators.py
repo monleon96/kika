@@ -2,7 +2,7 @@
 Module for comparing particle production locators in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 
 def compare_particle_production_locators(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool = True) -> bool:
     """Compare particle production locators between two ACE objects."""

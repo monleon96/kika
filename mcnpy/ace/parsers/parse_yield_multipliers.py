@@ -1,6 +1,6 @@
 import logging
 from typing import List, Optional
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.yield_multipliers import PhotonYieldMultipliers, ParticleYieldMultipliers
 
 # Setup logger
@@ -55,7 +55,7 @@ def read_photon_yield_multipliers(ace: Ace, debug=False) -> None:
         logger.debug("\n----- YP Block -----")
     
     # For YP, LY = NXS(6)
-    ly = ace.header.nxs_array[5]  # NXS(6) - Number of MT numbers in photon production
+    ly = ace.header.nxs_array[6]  # NXS(6) - Number of MT numbers in photon production
     
     if debug:
         logger.debug(f"NXS(6) = {ly} → Number of photon production MT numbers")
@@ -65,30 +65,27 @@ def read_photon_yield_multipliers(ace: Ace, debug=False) -> None:
             logger.debug(f"No YP block present: NXS(6)={ly}")
         return
     
-    # Convert to 0-indexed
-    ly_0 = ly - 1
-    
     if debug:
-        logger.debug(f"LY 0-indexed = {ly_0}")
+        logger.debug(f"LY 0-indexed = {ly}")
     
     # Read number of MTs
-    nyp_entry = ace.xss_data[ly_0]
+    nyp_entry = ace.xss_data[ly]
     nyp = int(nyp_entry.value)
     
     if debug:
         logger.debug(f"NYP = {nyp} → Number of yield multiplier MT numbers")
     
-    if nyp <= 0 or ly_0 + nyp >= len(ace.xss_data):
+    if nyp <= 0 or ly + nyp >= len(ace.xss_data):
         if debug:
             logger.debug(f"No yield multiplier MT numbers: NYP={nyp}")
         return
     
     # Read the MT numbers
     if debug:
-        logger.debug(f"Reading MT numbers from XSS[{ly_0}:{ly_0+nyp}]")
+        logger.debug(f"Reading MT numbers from XSS[{ly}:{ly+nyp}]")
     
     for i in range(nyp):
-        mt_entry = ace.xss_data[ly_0 + i]
+        mt_entry = ace.xss_data[ly + i]
         mt = int(mt_entry.value)
         ace.photon_yield_multipliers.multiplier_mts.append(mt)
         
@@ -121,12 +118,12 @@ def read_particle_yield_multipliers(ace: Ace, debug=False) -> None:
         logger.debug("\n----- YH Block -----")
     
     # Check if we have particle types
-    if ace.header.nxs_array[12] <= 0:  # NXS(13) - Number of particle types
+    if ace.header.nxs_array[13] <= 0:  # NXS(13) - Number of particle types
         if debug:
-            logger.debug(f"No particle types: NXS(13)={ace.header.nxs_array[12]}")
+            logger.debug(f"No particle types: NXS(13)={ace.header.nxs_array[13]}")
         return
     
-    n_types = ace.header.nxs_array[12]
+    n_types = ace.header.nxs_array[13]
     
     if debug:
         logger.debug(f"Number of particle types: {n_types}")
@@ -137,7 +134,7 @@ def read_particle_yield_multipliers(ace: Ace, debug=False) -> None:
             logger.debug(f"\nProcessing particle type {i}:")
         
         # Get JXS(32) index
-        jxs32_idx = ace.header.jxs_array[31] - 1  # JXS(32) - convert to 0-indexed
+        jxs32_idx = ace.header.jxs_array[32]  # JXS(32)
         
         if debug:
             logger.debug(f"  JXS(32) 0-indexed = {jxs32_idx}")
@@ -169,32 +166,30 @@ def read_particle_yield_multipliers(ace: Ace, debug=False) -> None:
             if debug:
                 logger.debug(f"  No yield multiplier data: LY={ly}")
             continue
-        
-        # Convert to 0-indexed
-        ly_0 = ly - 1
+
         
         if debug:
-            logger.debug(f"  LY 0-indexed = {ly_0}")
+            logger.debug(f"  LY 0-indexed = {ly}")
         
         # Read number of MTs
-        nyh_entry = ace.xss_data[ly_0]
+        nyh_entry = ace.xss_data[ly]
         nyh = int(nyh_entry.value)
         
         if debug:
             logger.debug(f"  NYH = {nyh} → Number of yield multiplier MT numbers")
         
-        if nyh <= 0 or ly_0 + nyh >= len(ace.xss_data):
+        if nyh <= 0 or ly + nyh >= len(ace.xss_data):
             if debug:
                 logger.debug(f"  No yield multiplier MT numbers: NYH={nyh}")
             continue
         
         # Read the MT numbers for this particle type
         if debug:
-            logger.debug(f"  Reading MT numbers from XSS[{ly_0+1}:{ly_0+nyh+1}]")
+            logger.debug(f"  Reading MT numbers from XSS[{ly+1}:{ly+nyh+1}]")
         
         particle_mts = []
         for j in range(nyh):
-            mt_entry = ace.xss_data[ly_0 + 1 + j]  # Skip the first value (which is NYH)
+            mt_entry = ace.xss_data[ly + 1 + j]  # Skip the first value (which is NYH)
             mt = int(mt_entry.value)
             particle_mts.append(mt)
             

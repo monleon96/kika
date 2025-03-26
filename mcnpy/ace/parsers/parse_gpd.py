@@ -37,11 +37,11 @@ def read_gpd_block(ace, debug=False):
         logger.debug(f"Header info: ZAID={ace.header.zaid}")
     
     # Check if GPD block exists: JXS(12) ≠ 0 and JXS(13) = 0
-    gpd_idx = ace.header.jxs_array[11]  # JXS(12)
-    jxs_13 = ace.header.jxs_array[12]   # JXS(13)
+    gpd_idx = ace.header.jxs_array[12]
+    jxs_13 = ace.header.jxs_array[13]
     
     if debug:
-        logger.debug(f"JXS(12) = {gpd_idx} → Locator for GPD block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(12) = {gpd_idx} → Locator for GPD block")
         logger.debug(f"JXS(13) = {jxs_13} → Must be 0 for GPD format")
     
     if gpd_idx <= 0 or jxs_13 != 0:
@@ -52,9 +52,6 @@ def read_gpd_block(ace, debug=False):
     # Initialize photon_production_data if it doesn't exist
     if ace.photon_production_data is None:
         ace.photon_production_data = PhotonProductionData()
-    
-    # Convert to 0-indexed
-    gpd_idx -= 1
     
     if debug:
         logger.debug(f"GPD block starts at index {gpd_idx} (0-indexed)")

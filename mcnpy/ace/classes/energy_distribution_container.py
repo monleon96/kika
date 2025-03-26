@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Union, Tuple
 from mcnpy.ace.classes.energy_distribution import EnergyDistribution
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 
 @dataclass
 class EnergyDistributionContainer:

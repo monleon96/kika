@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from mcnpy.ace.classes.xs_data import CrossSectionData, ReactionCrossSection
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -33,18 +33,15 @@ def read_xs_data_block(ace, debug=False):
         ace.xs_data = CrossSectionData()
     
     # Get the starting index for SIG block
-    sig_idx = ace.header.jxs_array[6]  # JXS(7)
+    sig_idx = ace.header.jxs_array[7]  # JXS(7)
     
     if debug:
-        logger.debug(f"JXS(7) = {sig_idx} → Starting index of SIG block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(7) = {sig_idx} → Starting index of SIG block")
     
     if sig_idx <= 0:
         if debug:
             logger.debug("No SIG block present (JXS(7) ≤ 0)")
         return
-        
-    # Convert to 0-indexed
-    sig_idx -= 1
     
     if debug:
         logger.debug(f"SIG block starts at index {sig_idx} (0-indexed)")
@@ -72,12 +69,12 @@ def read_xs_data_block(ace, debug=False):
         locator_value = int(locator_entry.value)
         
         # Calculate absolute index
-        abs_idx = sig_idx + locator_value - 1  # -1 for 0-based indexing
-        
+        abs_idx = sig_idx + locator_value 
+
         if debug:
             logger.debug(f"\nReaction {i+1}: MT={mt_value}")
             logger.debug(f"  Locator value: {locator_value}")
-            logger.debug(f"  Absolute index: sig_idx + locator - 1 = {sig_idx} + {locator_value} - 1 = {abs_idx}")
+            logger.debug(f"  Absolute index: sig_idx + locator= {sig_idx} + {locator_value} = {abs_idx}")
         
         if abs_idx >= len(ace.xss_data):
             if debug:
@@ -92,9 +89,6 @@ def read_xs_data_block(ace, debug=False):
             if debug:
                 logger.debug(f"  Energy grid index: {energy_idx}")
                 logger.debug(f"  Number of energies: {num_energies}")
-            
-            # Convert energy index to 0-based
-            energy_idx -= 1
             
             # Read cross section values
             xs_start = abs_idx + 2

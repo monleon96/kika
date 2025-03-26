@@ -1,4 +1,4 @@
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 import numpy as np

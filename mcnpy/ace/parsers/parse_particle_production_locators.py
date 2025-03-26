@@ -1,6 +1,6 @@
 import logging
 from typing import List, Optional
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.particle_production_locators import ParticleProductionLocators, ParticleLocatorSet
 
 # Setup logger
@@ -44,21 +44,18 @@ def read_particle_production_locators_block(ace: Ace, debug=False) -> None:
         return  # No particle types defined
     
     # Get the starting index for the IXS block (JXS(32))
-    next_idx = ace.header.jxs_array[31]  # JXS(32) - convert to 0-indexed array
+    next_idx = ace.header.jxs_array[32]  # JXS(32)
     
     if debug:
-        logger.debug(f"JXS(32) = {next_idx} → Locator for IXS block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(32) = {next_idx} → Locator for IXS block")
     
     if next_idx <= 0 or next_idx > len(ace.xss_data):
         if debug:
             logger.debug(f"Invalid index or no IXS block: JXS(32)={next_idx}")
         return  # Invalid index
     
-    # Convert to 0-indexed
-    next_idx -= 1
-    
     if debug:
-        logger.debug(f"IXS block starts at index {next_idx} (0-indexed)")
+        logger.debug(f"IXS block starts at index {next_idx}")
     
     # Read the locators for each particle type
     for j in range(1, ntype + 1):

@@ -4,7 +4,7 @@ This is useful for validating read/write operations to ensure data integrity.
 """
 
 from typing import Dict, Tuple
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.parse_ace import read_ace
 
 # Import utility functions

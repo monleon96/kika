@@ -1,6 +1,6 @@
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.energy_distribution import EnergyDistribution, TabularEnergyDistribution
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 from typing import List
 
 def parse_tabular_energy_distribution(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> TabularEnergyDistribution:

@@ -2,7 +2,7 @@
 Module for comparing particle production data in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.comparison.compare_particle_types import compare_particle_types
 from mcnpy.ace.comparison.compare_particle_locators import compare_particle_production_locators
 from mcnpy.ace.comparison.compare_particle_xs import compare_particle_production_xs

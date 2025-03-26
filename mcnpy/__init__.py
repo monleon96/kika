@@ -3,7 +3,7 @@ from .input.parse_input import read_mcnp
 from .input.pert_generator import generate_PERTcards, perturb_material
 from .sensitivities.sensitivity_processing import create_sdf_data, compute_sensitivity, plot_sens_comparison
 from .sensitivities.sdf import SDFData
-from .ace.parse_ace import read_ace
+from .ace.parsers.parse_ace import read_ace
 from . import energy_grids
 from ._config import LIBRARY_VERSION, AUTHOR
 

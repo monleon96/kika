@@ -1,6 +1,6 @@
 import os
-from mcnpy.ace.ace import Ace
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.classes.ace import Ace
+from mcnpy.ace.parsers.xss import XssEntry
 from mcnpy.ace.writers.write_header import write_header
 
 def write_ace(ace: Ace, filepath: str = None, overwrite: bool = False) -> str:

@@ -1,7 +1,7 @@
 from typing import List, Optional
 import logging
 from mcnpy.ace.classes.particle_release import ParticleRelease
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -35,11 +35,11 @@ def read_tyr_blocks(ace, debug=False, strict_validation=True):
         logger.debug(f"JXS array: {ace.header.jxs_array}")
     
     # Read TYR block (incident neutron reactions) if present
-    tyr_idx = ace.header.jxs_array[4]  # JXS(5)
-    num_reactions = ace.header.nxs_array[3]  # NXS(4)
+    tyr_idx = ace.header.jxs_array[5]  # JXS(5)
+    num_reactions = ace.header.nxs_array[4]  # NXS(4)
     
     if debug:
-        logger.debug(f"JXS(5) = {tyr_idx} → Starting index of TYR block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(5) = {tyr_idx} → Starting index of TYR block")
         logger.debug(f"NXS(4) = {num_reactions} → Total number of reactions including elastic")
     
     # Initialize the incident_neutron list even if we don't find data
@@ -60,30 +60,27 @@ def read_tyr_blocks(ace, debug=False, strict_validation=True):
             logger.debug(f"Reactions in TYR block: {num_reactions_tyr} (NXS(4)-1, elastic excluded)")
         
         if tyr_idx > 0 and num_reactions_tyr > 0:
-            # Convert to 0-indexed and read the TYR block
-            tyr_idx_0 = tyr_idx - 1
             
             if debug:
-                logger.debug(f"TYR starting index (0-indexed): {tyr_idx_0}")
-                logger.debug(f"XSS array length: {len(ace.xss_data)}")
+                logger.debug(f"TYR starting index: {tyr_idx}")
+                logger.debug(f"XSS array length: {len(ace.xss_data)-1}") 
             
             # Double-check array bounds
-            if tyr_idx_0 >= len(ace.xss_data):
-                error_msg = f"TYR block index {tyr_idx_0} is out of bounds for XSS array of length {len(ace.xss_data)}"
+            if tyr_idx >= len(ace.xss_data):
+                error_msg = f"TYR block index {tyr_idx} is out of bounds for XSS array of length {len(ace.xss_data)-1}"
                 logger.error(error_msg)
                 raise IndexError(error_msg)
                 
-            # Make sure we don't read past the end of the array
-            end_idx = min(tyr_idx_0 + num_reactions_tyr, len(ace.xss_data))
+            # End index calculation
+            end_idx = min(tyr_idx + num_reactions_tyr - 1, len(ace.xss_data) - 1)
             
             if debug:
-                logger.debug(f"TYR block range: XSS[{tyr_idx_0}:{end_idx}]")
-                if tyr_idx_0 < len(ace.xss_data):
-                    logger.debug(f"First value at XSS[{tyr_idx_0}] = {ace.xss_data[tyr_idx_0].value}")
+                logger.debug(f"TYR block range: XSS[{tyr_idx}:{end_idx+1}]")
+                logger.debug(f"First value at XSS[{tyr_idx}] = {ace.xss_data[tyr_idx].value}")
             
             try:
                 # Read the TYR block - store XssEntry objects directly
-                ty_entries = ace.xss_data[tyr_idx_0:end_idx]
+                ty_entries = ace.xss_data[tyr_idx:end_idx+1]
                 
                 if debug:
                     logger.debug(f"TYR values read: {[int(entry.value) for entry in ty_entries]}")
@@ -93,9 +90,9 @@ def read_tyr_blocks(ace, debug=False, strict_validation=True):
                     ty_value = int(entry.value)
                     valid = _is_valid_ty_value(ty_value)
                     if debug:
-                        logger.debug(f"  TY[{i}] = {ty_value} → {'VALID' if valid else 'INVALID'}")
+                        logger.debug(f"  TY[{i+1}] = {ty_value} → {'VALID' if valid else 'INVALID'}")
                     if not valid:
-                        error_msg = f"Invalid TY value {ty_value} at index {i} in TYR block"
+                        error_msg = f"Invalid TY value {ty_value} at index {i+1} in TYR block"
                         if strict_validation:
                             logger.error(error_msg)
                             raise ValueError(error_msg)
@@ -111,45 +108,38 @@ def read_tyr_blocks(ace, debug=False, strict_validation=True):
                 raise ValueError(error_msg)
     
     # Read TYRH block (particle production reactions) if present
-    jxs31 = ace.header.jxs_array[30]  # JXS(31)
-    jxs32 = ace.header.jxs_array[31]  # JXS(32)
-    num_particle_types = ace.header.nxs_array[6]  # NXS(7)
+    jxs31 = ace.header.jxs_array[31]  # JXS(31)
+    jxs32 = ace.header.jxs_array[32]  # JXS(32)
+    num_particle_types = ace.header.nxs_array[7]  # NXS(7)
     
     if debug:
         logger.debug("\n===== TYRH BLOCK PARSING =====")
-        logger.debug(f"JXS(31) = {jxs31} → Locator for NMT values (FORTRAN 1-indexed)")
-        logger.debug(f"JXS(32) = {jxs32} → Locator for TYRH block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(31) = {jxs31} → Locator for NMT values")
+        logger.debug(f"JXS(32) = {jxs32} → Locator for TYRH block")
         logger.debug(f"NXS(7) = {num_particle_types} → Number of particle types")
     
     if jxs31 > 0 and jxs32 > 0 and num_particle_types > 0:
         # Initialize list for each particle type
         ace.particle_release.particle_production = [[] for _ in range(num_particle_types)]
-        
-        # Convert to 0-indexed
-        jxs31_0 = jxs31 - 1
-        jxs32_0 = jxs32 - 1
-        
+    
         if debug:
-            logger.debug(f"JXS(31) 0-indexed = {jxs31_0}")
-            logger.debug(f"JXS(32) 0-indexed = {jxs32_0}")
-            logger.debug(f"XSS array length = {len(ace.xss_data)}")
+            logger.debug(f"XSS array length = {len(ace.xss_data)-1}") 
         
-        # Process each particle type (FORTRAN uses 1-indexed, so we need to adjust)
-        for i_python in range(num_particle_types):
-            # Convert to FORTRAN 1-based indexing for the formula
-            i = i_python + 1  # This is the i in the formulas from the documentation
+        # Process each particle type (we'll use 1-based iteration to match ACE format)
+        for i in range(1, num_particle_types + 1):
+            i_python = i - 1  # Only for array access in our Python code
             
             if debug:
-                logger.debug(f"\nProcessing particle type {i} (Python index {i_python}):")
+                logger.debug(f"\nProcessing particle type {i}:")
             
             # Get the number of MT numbers for this particle type
-            # NMT = XSS(JXS(31)+i-1) in FORTRAN / Table 12
-            nmt_idx = jxs31_0 + (i - 1)  # Adjusted for FORTRAN formula with Python 0-indexing
+            # NMT = XSS(JXS(31)+i-1) in FORTRAN
+            nmt_idx = jxs31 + i - 1  
             if debug:
-                logger.debug(f"  NMT index calculation: jxs31_0 + (i-1) = {jxs31_0} + ({i}-1) = {nmt_idx}")
+                logger.debug(f"  NMT index calculation: jxs31 + (i-1) = {jxs31} + ({i}-1) = {nmt_idx}")
             
             if nmt_idx >= len(ace.xss_data):
-                error_msg = f"TYRH particle type {i} NMT index {nmt_idx} is out of bounds ({len(ace.xss_data)})"
+                error_msg = f"TYRH particle type {i} NMT index {nmt_idx} is out of bounds ({len(ace.xss_data)-1})"
                 logger.error(error_msg)
                 raise IndexError(error_msg)
                 
@@ -163,45 +153,41 @@ def read_tyr_blocks(ace, debug=False, strict_validation=True):
                 continue  # Skip if no reactions for this particle
             
             # Get the starting index for the TY values
-            # LTYR = XSS(JXS(32)+10*(i-1)+2) in FORTRAN / Table 12
-            # In 0-indexed Python but keeping FORTRAN formula: XSS[jxs32_0 + 10*(i-1) + 1]
-            offset = 10*(i-1) + 1
-            ltyr_idx_ptr = jxs32_0 + offset
+            # LTYR = XSS(JXS(32)+10*(i-1)+2) in FORTRAN
+            offset = 10*(i-1) + 2
+            ltyr_idx_ptr = jxs32 + offset - 1  
             
             if debug:
-                logger.debug(f"  LTYR pointer calculation: jxs32_0 + 10*(i-1) + 1 = {jxs32_0} + 10*({i}-1) + 1 = {jxs32_0} + {offset} = {ltyr_idx_ptr}")
+                logger.debug(f"  LTYR pointer calculation: jxs32 + 10*(i-1) + 2 - 1 = {jxs32} + 10*({i}-1) + 2 - 1 = {jxs32} + {offset-1} = {ltyr_idx_ptr}")
             
             if ltyr_idx_ptr >= len(ace.xss_data):
-                error_msg = f"TYRH particle type {i} LTYR pointer index {ltyr_idx_ptr} is out of bounds ({len(ace.xss_data)})"
+                error_msg = f"TYRH particle type {i} LTYR pointer index {ltyr_idx_ptr} is out of bounds ({len(ace.xss_data)-1})"
                 logger.error(error_msg)
                 raise IndexError(error_msg)
                 
             ltyr = int(ace.xss_data[ltyr_idx_ptr].value)
             
             if debug:
-                logger.debug(f"  LTYR = XSS[{ltyr_idx_ptr}] = {ltyr} → 1-indexed location of TY values")
-            
-            # Convert to 0-indexed for Python
-            ltyr_0 = ltyr - 1
+                logger.debug(f"  LTYR = XSS[{ltyr_idx_ptr}] = {ltyr} → location of TY values")
             
             if debug:
-                logger.debug(f"  LTYR 0-indexed = {ltyr_0}")
+                logger.debug(f"  LTYR = {ltyr}")
             
-            if ltyr_0 < 0:
+            if ltyr <= 0:
                 error_msg = f"TYRH particle type {i} LTYR value {ltyr} is invalid (must be > 0)"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
                 
-            if ltyr_0 + nmt > len(ace.xss_data):
-                error_msg = f"TYRH particle type {i} would read past end of XSS array: {ltyr_0+nmt} > {len(ace.xss_data)}"
+            if ltyr + nmt - 1 >= len(ace.xss_data):
+                error_msg = f"TYRH particle type {i} would read past end of XSS array: {ltyr+nmt-1} >= {len(ace.xss_data)}"
                 logger.error(error_msg)
                 raise IndexError(error_msg)
                 
             # Read the TY values for this particle type
             try:
-                ty_range = f"{ltyr_0}:{ltyr_0+nmt}"
+                ty_range = f"{ltyr}:{ltyr+nmt}"
                 # Store XssEntry objects directly
-                ty_entries = ace.xss_data[ltyr_0:ltyr_0 + nmt]
+                ty_entries = ace.xss_data[ltyr:ltyr+nmt]
                 
                 if debug:
                     logger.debug(f"  Reading TY values from XSS[{ty_range}]")
@@ -212,7 +198,7 @@ def read_tyr_blocks(ace, debug=False, strict_validation=True):
                     ty_value = int(entry.value)
                     valid = _is_valid_ty_value(ty_value)
                     if debug:
-                        logger.debug(f"    TY[{j}] = {ty_value} → {'VALID' if valid else 'INVALID'}")
+                        logger.debug(f"    TY[{j+1}] = {ty_value} → {'VALID' if valid else 'INVALID'}")
                     if not valid:
                         error_msg = f"Invalid TY value {ty_value} for particle type {i}, reaction {j+1}"
                         if strict_validation:
@@ -236,7 +222,9 @@ def _is_valid_ty_value(ty: int) -> bool:
     Validate a TY value against allowed values according to the ACE format specification.
     
     According to documentation, allowed values are:
-    ±1, ±2, ±3, ±4, ±5, ±19, 0, and integers > 100 in absolute value
+    ±1, ±2, ±3, ±4, ±19, 0, and integers > 100 in absolute value
+    
+    Not included in documentation but found in some files is ±5
     
     Parameters
     ----------

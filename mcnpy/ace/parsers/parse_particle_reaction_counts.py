@@ -1,6 +1,6 @@
 import logging
 from typing import List, Optional
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.particle_reaction_counts import ParticleReactionCounts
 
 # Setup logger
@@ -44,21 +44,18 @@ def read_particle_reaction_counts_block(ace: Ace, debug=False) -> None:
         return  # No particle types defined
     
     # Get the starting index for the NTRO block (JXS(31))
-    ltype_idx = ace.header.jxs_array[30]  # JXS(31) - convert to 0-indexed array
+    ltype_idx = ace.header.jxs_array[31]  # JXS(31)
     
     if debug:
-        logger.debug(f"JXS(31) = {ltype_idx} → Locator for NTRO block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(31) = {ltype_idx} → Locator for NTRO block")
     
     if ltype_idx <= 0 or ltype_idx > len(ace.xss_data):
         if debug:
             logger.debug(f"Invalid index or no NTRO block: JXS(31)={ltype_idx}")
         return  # Invalid index
     
-    # Convert to 0-indexed
-    ltype_idx -= 1
-    
     if debug:
-        logger.debug(f"NTRO block starts at index {ltype_idx} (0-indexed)")
+        logger.debug(f"NTRO block starts at index {ltype_idx}")
     
     # Check if we have enough data
     if ltype_idx + ntype - 1 >= len(ace.xss_data):

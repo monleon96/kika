@@ -1,11 +1,11 @@
 from typing import List, Optional
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.angular_distribution.angular_distribution import (
     AngularDistributionContainer, AngularDistribution, 
     IsotropicAngularDistribution, EquiprobableAngularDistribution,
     TabulatedAngularDistribution, KalbachMannAngularDistribution,
 )
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 import logging
 
 # Setup logger
@@ -16,8 +16,8 @@ def read_angular_distribution_blocks(ace: Ace, debug: bool = False) -> None:
     Read the AND, ANDP, and ANDH blocks from the ACE file.
     
     These blocks contain angular distribution data:
-    - AND: For incident neutron reactions (JXS[8])
-    - ANDP: For photon production reactions (JXS[16])
+    - AND: For incident neutron reactions (JXS[9])
+    - ANDP: For photon production reactions (JXS[17])
     - ANDH: For other particle production reactions (accessed through particle pointers)
     
     Parameters
@@ -48,8 +48,8 @@ def read_angular_distribution_blocks(ace: Ace, debug: bool = False) -> None:
         ace.angular_distributions = AngularDistributionContainer()
     
     # Get the JXS pointers for each block
-    and_idx = ace.header.jxs_array[8] - 1  # JXS(9), convert to 0-indexed
-    andp_idx = ace.header.jxs_array[16] - 1  # JXS(17), convert to 0-indexed
+    and_idx = ace.header.jxs_array[9]  # JXS(9)
+    andp_idx = ace.header.jxs_array[17]  # JXS(17)
     
     if debug:
         logger.debug(f"AND block index: {and_idx}, ANDP block index: {andp_idx}")
@@ -97,7 +97,7 @@ def read_and_block(ace: Ace, and_idx: int, debug: bool = False) -> None:
         
         if elastic_locator_value > 0:
             # Process elastic scattering angular distribution
-            elastic_data_idx = and_idx + elastic_locator_value - 1
+            elastic_data_idx = and_idx + elastic_locator_value  
             
             if elastic_data_idx >= len(ace.xss_data):
                 raise ValueError(f"Elastic scattering data index out of bounds: {elastic_data_idx} >= {len(ace.xss_data)}")
@@ -167,7 +167,7 @@ def read_and_block(ace: Ace, and_idx: int, debug: bool = False) -> None:
                 continue  # Skip if MT number not available
             
             # Calculate the data index
-            data_idx = and_idx + locator_value - 1
+            data_idx = and_idx + locator_value  
             
             # Check if the index is valid before trying to read
             if data_idx < 0 or data_idx >= len(ace.xss_data):
@@ -193,12 +193,20 @@ def read_andp_block(ace: Ace, andp_idx: int, debug: bool = False) -> None:
     """
     Read the ANDP block containing angular distributions for photon production reactions.
     
+    According to the ACE format specification, the angular distribution for the i-th 
+    photon-producing reaction begins at JXS(17) + LOCBᵢ - 1, where LOCBᵢ comes from the 
+    LANDP block. Each distribution contains:
+    1. Number of energies (N_E)
+    2. Energy grid (N_E values)
+    3. Locators (L_C) for each energy (N_E values), relative to JXS(17)
+    4. 32 equiprobable cosine bins (33 values) for each energy
+    
     Parameters
     ----------
     ace : Ace
         The Ace object to update
     andp_idx : int
-        Starting index of the ANDP block in the XSS array
+        Starting index of the ANDP block in the XSS array (JXS(17))
     debug : bool, optional
         Whether to print debug information, defaults to False
         
@@ -222,12 +230,8 @@ def read_andp_block(ace: Ace, andp_idx: int, debug: bool = False) -> None:
             if locator_value == 0:
                 # Isotropic distribution, no data needed
                 continue
-            elif locator_value == -1:
-                # This should not happen for photon production
-                # Law=44 is only valid for AND and ANDH blocks
-                logger.warning(f"Invalid locator value -1 for photon production angular distribution at index {i}")
-                continue  # Skip instead of raising an error to be more tolerant of data issues
-            elif locator_value < -1:  # Invalid negative value
+            elif locator_value < 0:  # Invalid negative value
+                logger.warning(f"Invalid negative locator value {locator_value} for photon production angular distribution at index {i}")
                 continue
             
             # Get the corresponding MT number
@@ -239,28 +243,129 @@ def read_andp_block(ace: Ace, andp_idx: int, debug: bool = False) -> None:
             if mt_entry is None:
                 continue  # Skip if MT number not available
             
-            # Calculate the data index
+            # Calculate the data index according to the documentation: JXS(17) + LOCBᵢ - 1
             data_idx = andp_idx + locator_value - 1
+            
+            if debug:
+                logger.debug(f"Photon production distribution for MT={mt_entry.value}: LOCBᵢ={locator_value}, index={data_idx}")
             
             # Check if the index is valid before trying to read
             if data_idx < 0 or data_idx >= len(ace.xss_data):
-                # Continue instead of failing if just one reaction has an issue
+                logger.warning(f"Invalid angular distribution index for photon production: {data_idx} out of bounds")
                 continue
             
             try:
-                # Read the angular distribution
-                dist = read_angular_distribution(ace, data_idx, mt_entry, debug)
+                # Read the angular distribution with the ANDP block base index
+                dist = read_angular_distribution_photon(ace, data_idx, andp_idx, mt_entry, debug)
                 if dist:
                     # Store using the MT value as the key
                     mt_value = int(mt_entry.value)
                     ace.angular_distributions.photon_production[mt_value] = dist
                     if debug:
                         logger.debug(f"Read photon production distribution for MT={mt_value}")
-            except ValueError:
+            except ValueError as e:
+                logger.warning(f"Error reading photon production distribution: {e}")
                 # Skip this reaction if there's an issue
                 continue
     except Exception as e:
         raise ValueError(f"Error reading ANDP block: {e}")
+
+def read_angular_distribution_photon(ace: Ace, data_idx: int, andp_idx: int, mt_entry: XssEntry, debug: bool = False) -> Optional[AngularDistribution]:
+    """
+    Read a photon production angular distribution from the XSS array.
+    
+    The distribution structure follows Table 54 from the ACE format specification:
+    1. Number of energies (N_E)
+    2. Energy grid (N_E values)
+    3. Locators (L_C) for each energy (N_E values), relative to JXS(17)
+    4. 32 equiprobable cosine bins (33 values) for each energy
+    
+    Parameters
+    ----------
+    ace : Ace
+        The Ace object with XSS data
+    data_idx : int
+        Starting index of the angular distribution data in the XSS array
+    andp_idx : int
+        Base index of the ANDP block (JXS(17)) for relative locators
+    mt_entry : XssEntry
+        MT number entry for this reaction
+    debug : bool, optional
+        Whether to print debug information, defaults to False
+        
+    Returns
+    -------
+    AngularDistribution
+        The parsed angular distribution
+        
+    Raises
+    ------
+    ValueError
+        If data is invalid or inconsistent
+    """
+    if debug:
+        logger.debug(f"Reading photon production angular distribution at index {data_idx} for MT={mt_entry.value}")
+    
+    if data_idx < 0 or data_idx >= len(ace.xss_data):
+        raise ValueError(f"Angular distribution index out of bounds: {data_idx}")
+    
+    # First value is the number of energies (N_E)
+    loc = data_idx
+    num_energies = int(ace.xss_data[loc].value)
+    
+    if debug:
+        logger.debug(f"Number of energy points: {num_energies}")
+    
+    if num_energies <= 0:
+        # If N_E = 0, we have isotropic scattering for all energies
+        return IsotropicAngularDistribution(mt=mt_entry)
+    
+    # Check if we have enough data
+    if loc + 1 + 2*num_energies > len(ace.xss_data):
+        raise ValueError(f"Photon angular distribution data truncated: need at least {1 + 2*num_energies} entries, but only {len(ace.xss_data) - loc} available")
+    
+    # Read the energy grid (N_E values)
+    energies = ace.xss_data[loc + 1:loc + 1 + num_energies]
+    
+    # Read the locators (L_C) for each energy (N_E values) - relative to JXS(17)
+    lc_start = loc + 1 + num_energies
+    locators = ace.xss_data[lc_start:lc_start + num_energies]
+    
+    # Create an equiprobable angular distribution
+    distribution = EquiprobableAngularDistribution(mt=mt_entry, energies=energies)
+    
+    # For each energy point with a non-zero locator
+    for i, locator_entry in enumerate(locators):
+        locator_value = int(locator_entry.value)
+        
+        if locator_value == 0:
+            # Isotropic distribution at this energy
+            # Add 33 values from -1 to 1 (uniformly spaced)
+            # Create XssEntry objects for the uniformly spaced cosines
+            cosines = [XssEntry(0, -1.0 + j * (2.0 / 32)) for j in range(33)]
+            distribution.cosine_bins.append(cosines)
+            if debug:
+                logger.debug(f"Using isotropic distribution for energy point {i} ({energies[i].value})")
+            continue
+        
+        # L_C is relative to JXS(17), so calculate the absolute index
+        data_loc = andp_idx + locator_value - 1
+        
+        if debug:
+            logger.debug(f"Reading cosine bins for energy point {i}: L_C={locator_value}, index={data_loc}")
+        
+        # Check if we have enough data
+        if data_loc + 33 > len(ace.xss_data):
+            raise ValueError(f"Equiprobable bin data truncated at energy {energies[i].value}: need 33 entries, but only {len(ace.xss_data) - data_loc} available")
+        
+        # Read the 33 cosine values for 32 equiprobable bins
+        cosines = ace.xss_data[data_loc:data_loc + 33]
+        distribution.cosine_bins.append(cosines)
+        
+        if debug and i == 0:  # Print details for first energy only to avoid verbose output
+            logger.debug(f"Cosine bins for first energy: {[c.value for c in cosines[:5]]}... (showing first 5)")
+    
+    return distribution
 
 def read_andh_blocks(ace: Ace, debug: bool = False) -> None:
     """
@@ -311,14 +416,14 @@ def read_andh_blocks(ace: Ace, debug: bool = False) -> None:
         
         # Get the ANDH pointer for this particle
         andh_ptr = 0
-        if len(ace.header.jxs_array) > 31:  # Need JXS(32)
-            jxs32_idx = ace.header.jxs_array[31] - 1  # JXS(32)
+        if len(ace.header.jxs_array) > 32:  # Need JXS(32)
+            jxs32_idx = ace.header.jxs_array[32]  # JXS(32)
             if jxs32_idx > 0 and particle_idx < num_particle_types:
                 # ANDH pointer is at XSS(JXS(32)+10*(i-1)+6)
-                andh_pointer_idx = jxs32_idx + 10 * particle_idx + 6 - 1  # +6 for 7th element (index 6), convert to 0-indexed
+                andh_pointer_idx = jxs32_idx + 10 * particle_idx + 6
                 
                 if andh_pointer_idx < len(ace.xss_data):
-                    andh_ptr = int(ace.xss_data[andh_pointer_idx].value)  # Extract the value attribute first
+                    andh_ptr = int(ace.xss_data[andh_pointer_idx].value)
                     
                     # Validate the pointer value
                     if andh_ptr <= 0:
@@ -327,8 +432,6 @@ def read_andh_blocks(ace: Ace, debug: bool = False) -> None:
                     if andh_ptr > len(ace.xss_data):
                         continue
                     
-                    # Convert to 0-indexed for internal use
-                    andh_idx = andh_ptr - 1
                 else:
                     continue
             else:
@@ -368,7 +471,7 @@ def read_andh_blocks(ace: Ace, debug: bool = False) -> None:
                 continue
             
             # Calculate the actual data index using the data entry at the ANDH address
-            data_idx = andh_idx
+            data_idx = andh_ptr
             
             # Validate the final index
             if data_idx < 0 or data_idx >= len(ace.xss_data):
@@ -445,7 +548,7 @@ def read_angular_distribution(ace: Ace, data_idx: int, mt_entry: XssEntry, debug
     
     # For tabulated and equiprobable distributions, we need the base of the AND block
     # Find which block we're in based on the MT
-    and_idx = ace.header.jxs_array[8] - 1  # JXS(9), convert to 0-indexed
+    and_idx = ace.header.jxs_array[9]  # JXS(9)
     
     # Check distribution type based on the locators
     if all(lc_val == 0 for lc_val in locator_values):
@@ -519,8 +622,7 @@ def read_equiprobable_distribution(ace: Ace, base_idx: int, mt_entry: XssEntry,
             continue
         
         # Positive locator points to 32 equiprobable bin boundaries
-        # LC is relative to the AND block, not the specific distribution data
-        data_loc = base_idx + locator_value - 1
+        data_loc = base_idx + locator_value  
         
         # Check if we have enough data
         if data_loc + 33 > len(ace.xss_data):
@@ -598,10 +700,9 @@ def read_tabulated_distribution(ace: Ace, base_idx: int, mt_entry: XssEntry,
             continue
         
         # Negative locator points to tabulated distribution
-        # Take absolute value of LC
         lc_abs = abs(locator_value)
         # LC is relative to the AND block, not the specific distribution data
-        data_loc = base_idx + lc_abs - 1
+        data_loc = base_idx + lc_abs  
         
         # Check if we have enough data for the header (interp + num_points)
         if data_loc + 2 > len(ace.xss_data):
@@ -638,55 +739,3 @@ def read_tabulated_distribution(ace: Ace, base_idx: int, mt_entry: XssEntry,
         distribution.cdf.append(cdfs)
     
     return distribution
-
-#def process_angular_distribution(ace: Ace, locator_list, distribution_list, base_idx):
-#    """
-#    Process each reaction's angular distribution.
-#    
-#    Parameters
-#    ----------
-#    ace : Ace
-#        The Ace object with XSS data
-#    locator_list : list
-#        List of locators (can be XssEntry objects or integers)
-#    distribution_list : dict
-#        Dictionary to store the distributions by MT number
-#    base_idx : int
-#        Base index of the angular distribution block in the XSS array
-#    """
-#    for i, loc in enumerate(locator_list):
-#        if loc is None:
-#            continue
-#            
-#        # Convert locator to absolute index (handle XssEntry object)
-#        if hasattr(loc, 'value'):
-#            loc_value = int(loc.value)
-#        else:
-#            loc_value = int(loc)
-#        
-#        # Skip if locator is 0 (isotropic) or negative (special case)
-#        if loc_value <= 0:
-#            continue
-#            
-#        # Calculate absolute index
-#        ang_idx = base_idx + loc_value - 1  # -1 for 0-indexing
-#        
-#        # Get the corresponding MT number
-#        mt_entry = None
-#        if ace.reaction_mt_data and i < len(ace.reaction_mt_data.incident_neutron):
-#            mt_entry = ace.reaction_mt_data.incident_neutron[i]
-#        
-#        if mt_entry is None:
-#            continue  # Skip if MT number not available
-#        
-#        # Read the angular distribution
-#        try:
-#            dist = read_angular_distribution(ace, ang_idx, mt_entry)
-#            if dist:
-#                # Store using the MT value as the key
-#                mt_value = int(mt_entry.value)
-#                distribution_list[mt_value] = dist
-#        except ValueError as e:
-#            logger.warning(f"Error reading angular distribution at index {i}: {e}")
-#            continue  # Skip this reaction if there's an issue
-#

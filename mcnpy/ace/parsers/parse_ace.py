@@ -1,6 +1,6 @@
 import logging
-from mcnpy.ace.ace import Ace
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.classes.ace import Ace
+from mcnpy.ace.parsers.xss import XssEntry
 from mcnpy.ace.classes.header import Header
 from mcnpy.ace.classes.esz import EszBlock
 from mcnpy.ace.parsers.parse_esz import read_esz_block
@@ -52,8 +52,8 @@ def read_ace(filename, debug=False):
     """
     Read and parse an ACE format file.
     
-    This implementation uses lazy loading - only header and XSS data are loaded initially.
-    Other components are parsed on-demand when accessed.
+    This implementation eagerly loads all data except energy distribution data
+    which is still loaded on-demand when accessed.
     
     Parameters
     ----------
@@ -93,7 +93,76 @@ def read_ace(filename, debug=False):
     # Read XSS array - essential data needed for all parsers
     ace.xss_data = read_xss(lines[line_idx:])
     
-    # Don't call any parsers here - they'll be called on-demand
+    # Eagerly load all components except energy distribution data
+    
+    # ESZ Block
+    ace.esz_block = read_esz_block(ace, debug)
+    
+    # Nubar data
+    ace.nubar = read_nubar_data(ace, debug)
+    
+    # Delayed neutron data
+    ace.delayed_neutron_data = read_delayed_neutron_data(ace, debug)
+    
+    # MT Reaction data
+    ace.reaction_mt_data = read_mtr_blocks(ace, debug)
+    
+    # Q values
+    ace.q_values = read_lqr_block(ace, debug)
+    
+    # Particle release data
+    ace.particle_release = read_tyr_blocks(ace, debug)
+    
+    # Cross section locators
+    ace.xs_locators = read_xs_locator_blocks(ace, debug)
+    
+    # Cross section data
+    ace.xs_data = read_xs_data_block(ace, debug)
+    
+    # Angular distribution locators
+    read_angular_locator_blocks(ace, debug)  # This function modifies ace directly
+    
+    # Angular distribution data
+    read_angular_distribution_blocks(ace, debug)  # This function modifies ace directly
+    
+    # Energy distribution locators
+    ace.energy_distribution_locators = read_energy_locator_blocks(ace, debug)
+    
+    # NOTE: Energy distribution data will be loaded on-demand
+    # when accessed to maintain lazy loading for this component
+    
+    # Photon production data
+    ace.photon_production_data = read_gpd_block(ace, debug)
+    
+    # Photon production cross sections
+    result = read_production_xs_blocks(ace, debug)
+    if result:
+        ace.photon_production_xs, ace.particle_production_xs = result
+    
+    # Photon yield multipliers
+    result = read_yield_multiplier_blocks(ace, debug)
+    if result:
+        ace.photon_yield_multipliers, ace.particle_yield_multipliers = result
+    
+    # Fission cross section
+    ace.fission_xs = read_fission_xs_block(ace, debug)
+    
+    # Unresolved resonance tables
+    ace.unresolved_resonance = read_unresolved_resonance_block(ace, debug)
+    
+    # Particle production types
+    ace.secondary_particles = read_particle_types_block(ace, debug)
+    ace.particle_types = ace.secondary_particles  # Set the alias
+    
+    # Particle reaction counts
+    ace.particle_reaction_counts = read_particle_reaction_counts_block(ace, debug)
+    
+    # Particle production locators
+    ace.particle_production_locators = read_particle_production_locators_block(ace, debug)
+    
+    # Particle production cross section data
+    ace.particle_production_xs_data = read_particle_production_xs_data_blocks(ace, debug)
+    
     return ace
 
 def read_xss(lines):
@@ -110,7 +179,7 @@ def read_xss(lines):
     list
         El array XSS como una lista de objetos XssEntry
     """
-    xss_data = []
+    xss_data = [0]
     xss_index = 0  # Renamed for clarity
     
     for line in lines:

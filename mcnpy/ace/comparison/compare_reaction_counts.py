@@ -2,7 +2,7 @@
 Module for comparing particle reaction counts in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 
 def compare_reaction_counts(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool = True) -> bool:
     """Compare particle reaction counts between two ACE objects."""

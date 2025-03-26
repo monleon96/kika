@@ -2,7 +2,7 @@
 Module for comparing yield multiplier data in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 
 def compare_yield_multipliers(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool = True) -> bool:
     """Compare yield multiplier data between two ACE objects."""

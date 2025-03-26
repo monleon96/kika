@@ -1,7 +1,7 @@
 import logging
 from typing import List
 from mcnpy.ace.classes.nubar.nubar import NuData, NuPolynomial, NuTabulated, NuContainer
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -30,86 +30,71 @@ def read_nubar_data(ace, debug=False):
         logger.debug(f"Header info: ZAID={ace.header.zaid}")
     
     # Read NU block (fission nubar data) if present
-    jxs2 = ace.header.jxs_array[1]  # JXS(2)
+    jxs2 = ace.header.jxs_array[2]  # JXS(2)
     
     if debug:
-        logger.debug(f"JXS(2) = {jxs2} → Locator for NU block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(2) = {jxs2} → Locator for NU block")
     
-    if jxs2 > 0:
-        # Set flag indicating NU data is present
+    if jxs2 == 0:
+        # Case 1: No NU Block (JXS(2)=0)
+        if debug:
+            logger.debug("No NU block present (JXS(2) = 0)")
+        ace.nubar.has_nubar = False
+    elif jxs2 > 0:
+        # Case 2: Either prompt or total ν is given (JXS(2) > 0)
         ace.nubar.has_nubar = True
+        ace.nubar.has_both_nu_types = False
         
         if debug:
-            logger.debug(f"NU block found at index {jxs2}")
+            logger.debug(f"Single NU type present (JXS(2) = {jxs2} > 0)")
         
-        # Check if we have both prompt and total nubar data
-        # Get the value at XSS(JXS(2))
-        xss_jxs2 = ace.xss_data[jxs2 - 1]  # Convert to 0-indexed
+        # The NU array begins at location XSS(KNU) where KNU=JXS(2) + 1
+        single_nu_idx = jxs2 + 1
         
-        # Extract the value attribute before comparison
-        xss_jxs2_value = xss_jxs2.value if hasattr(xss_jxs2, 'value') else xss_jxs2
+        if debug:
+            logger.debug(f"NU data starts at index {single_nu_idx}")
         
-        if xss_jxs2_value < 0:
-            # Both prompt and total nubar data are present (Case 2)
-            ace.nubar.has_both_nu_types = True
-            
-            if debug:
-                logger.debug(f"Both prompt and total nubar data present (XSS[{jxs2-1}] = {xss_jxs2_value} < 0)")
-            
-            # Prompt nu array begins at XSS(KNU) where KNU = JXS(2) + 1
-            prompt_nu_idx = jxs2  # Already converted to 0-indexed (+1 -1 = 0)
-            
-            # Total nu array begins at XSS(KNU) where KNU = JXS(2) + ABS(XSS(JXS(2))) + 1
-            # Make sure to use the value attribute for abs()
-            total_nu_idx = jxs2 + int(abs(xss_jxs2_value))  # Already converted to 0-indexed
-            
-            if debug:
-                logger.debug(f"Prompt nubar data starts at index {prompt_nu_idx}")
-                logger.debug(f"Total nubar data starts at index {total_nu_idx}")
-            
-            # Parse prompt nubar data
-            ace.nubar.prompt = parse_nubar_array(ace.xss_data, prompt_nu_idx, debug)
-            
-            # Parse total nubar data
-            ace.nubar.total = parse_nubar_array(ace.xss_data, total_nu_idx, debug)
-        else:
-            # Only one type of nubar data is present (Case 1)
-            ace.nubar.has_both_nu_types = False
-            
-            if debug:
-                logger.debug(f"Only one nubar data type present (XSS[{jxs2-1}] = {xss_jxs2_value} ≥ 0)")
-            
-            # A single nu array begins at location XSS(KNU) where KNU = JXS(2)
-            single_nu_idx = jxs2 - 1  # Convert to 0-indexed
-            
-            if debug:
-                logger.debug(f"Nubar data starts at index {single_nu_idx}")
-            
-            # Parse the single nubar array
-            ace.nubar.total = parse_nubar_array(ace.xss_data, single_nu_idx, debug)
-            # In this case, we assume it's total nubar (most common)
-            # The user would need to check the evaluations to confirm this
+        # Parse the single nubar array (assumed to be total nubar, but could be prompt)
+        ace.nubar.total = parse_nubar_array(ace.xss_data, single_nu_idx, debug)
+    else:  # jxs2 < 0
+        # Case 3: Both prompt and total ν are given (JXS(2) < 0)
+        ace.nubar.has_nubar = True
+        ace.nubar.has_both_nu_types = True
+        
+        if debug:
+            logger.debug(f"Both prompt and total NU types present (JXS(2) = {jxs2} < 0)")
+        
+        # The prompt NU array begins at XSS(KNU) where KNU=|JXS(2)| + 1
+        prompt_nu_idx = abs(jxs2) + 1
+        
+        # The total NU array begins at XSS(KNU) where KNU = JXS(2) + ABS(JXS(2))
+        total_nu_idx = jxs2 + abs(jxs2)
+        
+        if debug:
+            logger.debug(f"Prompt NU data starts at index {prompt_nu_idx}")
+            logger.debug(f"Total NU data starts at index {total_nu_idx}")
+        
+        # Parse prompt nubar data
+        ace.nubar.prompt = parse_nubar_array(ace.xss_data, prompt_nu_idx, debug)
+        
+        # Parse total nubar data
+        ace.nubar.total = parse_nubar_array(ace.xss_data, total_nu_idx, debug)
     
     # Read DNU block (delayed fission nubar data) if present
-    dnu_idx = ace.header.jxs_array[23]  # JXS(24)
+    dnu_idx = ace.header.jxs_array[24]  # JXS(24)
     
     if debug:
         logger.debug("\n===== DELAYED NUBAR BLOCK PARSING =====")
-        logger.debug(f"JXS(24) = {dnu_idx} → Locator for DNU block (FORTRAN 1-indexed)")
+        logger.debug(f"JXS(24) = {dnu_idx} → Locator for DNU block")
     
     if dnu_idx > 0:
-        # Set flag indicating DNU data is present
+        # Delayed ν is given when JXS(24) > 0
         ace.nubar.has_delayed = True
         
         if debug:
             logger.debug(f"DNU block found at index {dnu_idx}")
         
-        # Convert to 0-indexed
-        dnu_idx -= 1
-        
-        if dnu_idx >= len(ace.xss_data):
-            raise ValueError(f"Invalid DNU block index: {dnu_idx+1}")
-        
+        # Delayed ν array begins at XSS(KNU) where KNU=JXS(24)
         # Parse the delayed nubar data (always in tabulated form)
         ace.nubar.delayed = parse_nubar_array(ace.xss_data, dnu_idx, debug)
         

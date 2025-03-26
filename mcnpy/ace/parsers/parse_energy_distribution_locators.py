@@ -1,7 +1,7 @@
 from typing import List, Dict, Optional
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.energy_distribution_locators import EnergyDistributionLocators
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 import logging
 
 # Setup logger
@@ -59,10 +59,10 @@ def read_energy_locator_blocks(ace: Ace, debug: bool = False) -> None:
     ace.energy_distribution_locators.num_delayed_neutron_precursors = num_delayed_neutron_precursors
     
     # Get the JXS pointers for each block
-    ldlw_idx = ace.header.jxs_array[9] - 1  # JXS(10), convert to 0-indexed
-    ldlwp_idx = ace.header.jxs_array[17] - 1  # JXS(18), convert to 0-indexed
-    dnedl_idx = ace.header.jxs_array[25] - 1  # JXS(26), convert to 0-indexed
-    particle_pointer_idx = ace.header.jxs_array[30] - 1  # JXS(31), convert to 0-indexed
+    ldlw_idx = ace.header.jxs_array[10] - 1  # JXS(10)
+    ldlwp_idx = ace.header.jxs_array[18] - 1  # JXS(19)
+    dnedl_idx = ace.header.jxs_array[26] - 1  # JXS(27)
+    particle_pointer_idx = ace.header.jxs_array[31] - 1  # JXS(32)
     
     if debug:
         logger.debug(f"LDLW block index: {ldlw_idx}")
@@ -199,10 +199,10 @@ def read_ldlwh_block(ace: Ace, particle_pointer_idx: int, num_particle_types: in
         raise ValueError(f"Particle pointer block index out of bounds: {particle_pointer_idx} >= {len(ace.xss_data)}")
     
     # Get the base index for JXS(32)
-    if len(ace.header.jxs_array) <= 31:
+    if len(ace.header.jxs_array) <= 32:
         raise ValueError("JXS array too short: missing JXS(32) index")
     
-    jxs32_idx = ace.header.jxs_array[31] - 1  # JXS(32), convert to 0-indexed
+    jxs32_idx = ace.header.jxs_array[32] - 1  # JXS(32)
     if jxs32_idx <= 0:
         raise ValueError(f"Invalid JXS(32) value: {jxs32_idx + 1}")
     
@@ -227,7 +227,7 @@ def read_ldlwh_block(ace: Ace, particle_pointer_idx: int, num_particle_types: in
             
         # 2. Get the LDLWH pointer from the particle's data block
         # LDLWH pointer is at XSS(JXS(32)+10*(i-1)+7)
-        ldlwh_pointer_idx = jxs32_idx + 10 * (i - 1) + 7 - 1  # -1 for 0-indexing
+        ldlwh_pointer_idx = jxs32_idx + 10 * (i - 1) + 7 
         
         if ldlwh_pointer_idx >= len(ace.xss_data):
             raise ValueError(f"LDLWH pointer index out of bounds for particle type {i}: {ldlwh_pointer_idx} >= {len(ace.xss_data)}")

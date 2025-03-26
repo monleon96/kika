@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.energy_distribution import EnergyDistribution
 from mcnpy.ace.classes.energy_distribution_container import EnergyDistributionContainer
 from mcnpy.ace.parsers.laws import (
@@ -19,7 +19,7 @@ from mcnpy.ace.parsers.laws import (
     parse_laboratory_angle_energy_distribution,
     parse_energy_dependent_yield
 )
-from mcnpy.ace.xss import XssEntry
+from mcnpy.ace.parsers.xss import XssEntry
 import logging
 
 # Setup logger
@@ -60,9 +60,9 @@ def read_energy_distribution_blocks(ace: Ace, debug: bool = False) -> None:
         ace.energy_distributions = EnergyDistributionContainer()
     
     # Get the JXS values for the energy distribution blocks
-    jxs_dlw = ace.header.jxs_array[10] - 1  # JXS(11), convert to 0-indexed
-    jxs_dlwp = ace.header.jxs_array[18] - 1  # JXS(19), convert to 0-indexed
-    jxs_dned = ace.header.jxs_array[26] - 1  # JXS(27), convert to 0-indexed
+    jxs_dlw = ace.header.jxs_array[11]    # JXS(11)
+    jxs_dlwp = ace.header.jxs_array[19]   # JXS(19)
+    jxs_dned = ace.header.jxs_array[27]   # JXS(27)
     
     if debug:
         logger.debug(f"JXS indices: jxs_dlw={jxs_dlw}, jxs_dlwp={jxs_dlwp}, jxs_dned={jxs_dned}")
@@ -137,7 +137,7 @@ def read_dlw_block(ace: Ace, jxs_dlw: int, debug: bool = False) -> None:
             locators.append(locator_entry)
             if debug:
                 locator_value = int(locator_entry.value) if hasattr(locator_entry, 'value') else int(locator_entry)
-                logger.debug(f"MT={mt_value}, locator={locator_value}, absolute index={jxs_dlw + locator_value - 1 if locator_value > 0 else 'N/A'}")
+                logger.debug(f"MT={mt_value}, locator={locator_value}, absolute index={jxs_dlw + locator_value if locator_value > 0 else 'N/A'}")
         elif debug:
             logger.debug(f"Could not find locator for MT={mt_value}")
     
@@ -165,7 +165,7 @@ def read_dlw_block(ace: Ace, jxs_dlw: int, debug: bool = False) -> None:
             continue  # Skip if the locator is invalid
         
         # The locator is relative to JXS(11)
-        offset = jxs_dlw + locator_value - 1  # Convert to 0-indexed
+        offset = jxs_dlw + locator_value
         if debug: logger.debug(f"Processing MT={mt_value}, locator={locator_value}, offset={offset} (XSS length: {len(ace.xss_data)})")
         
         if offset >= len(ace.xss_data):
@@ -274,7 +274,7 @@ def read_dlwp_block(ace: Ace, jxs_dlwp: int, debug: bool = False) -> None:
             continue  # Skip if the locator is invalid
         
         # The locator is relative to JXS(19)
-        offset = jxs_dlwp + locator_value - 1  # Convert to 0-indexed
+        offset = jxs_dlwp + locator_value
         if debug: logger.debug(f"Processing MT={mt}, locator={locator_value}, offset={offset} (XSS length: {len(ace.xss_data)})")
         
         if offset >= len(ace.xss_data):
@@ -359,13 +359,13 @@ def read_dlwh_block(ace: Ace, debug: bool = False) -> None:
         return
     
     # Get the base index for JXS(32)
-    jxs32_idx = ace.header.jxs_array[31] - 1  # JXS(32), convert to 0-indexed
+    jxs32_idx = ace.header.jxs_array[32] # JXS(32)
     if jxs32_idx <= 0:
         if debug: logger.debug(f"Invalid JXS(32) index: {jxs32_idx}")
         return
     
     # Get the base index for JXS(31)
-    jxs31_idx = ace.header.jxs_array[30] - 1  # JXS(31), convert to 0-indexed
+    jxs31_idx = ace.header.jxs_array[31] # JXS(31)
     if jxs31_idx <= 0:
         if debug: logger.debug(f"Invalid JXS(31) index: {jxs31_idx}")
         return
@@ -397,12 +397,12 @@ def read_dlwh_block(ace: Ace, debug: bool = False) -> None:
             continue
         
         # Get the JED value for this particle type
-        jed_idx = jxs32_idx + 10 * i + 8 - 1  # -1 for 0-indexing
+        jed_idx = jxs32_idx + 10 * i + 8 
         if jed_idx >= len(ace.xss_data):
             if debug: logger.debug(f"JED index {jed_idx} out of range for XSS data of length {len(ace.xss_data)}")
             continue
             
-        jed = int(ace.xss_data[jed_idx].value) - 1  # Convert to 0-indexed
+        jed = int(ace.xss_data[jed_idx].value)
         if debug: logger.debug(f"Particle type {i+1} JED={jed}, calculated at index {jed_idx}")
         
         # Process each MT number with its corresponding locator
@@ -416,7 +416,7 @@ def read_dlwh_block(ace: Ace, debug: bool = False) -> None:
                 continue  # Skip if the locator is invalid
             
             # The locator is relative to JED for this particle
-            offset = jed + locator_value - 1  # Convert to 0-indexed
+            offset = jed + locator_value
             if debug: logger.debug(f"Processing MT={mt}, locator={locator_value}, JED={jed}, offset={offset} (XSS length: {len(ace.xss_data)})")
             
             if offset >= len(ace.xss_data):
@@ -460,12 +460,12 @@ def read_dlwh_block(ace: Ace, debug: bool = False) -> None:
                         mt = ace.reaction_mt_data.particle_production[i][j]
                         
                         # Get the JED value for this particle type
-                        jed_idx = jxs32_idx + 10 * i + 8 - 1
+                        jed_idx = jxs32_idx + 10 * i + 8
                         if jed_idx >= len(ace.xss_data):
                             if debug: logger.debug(f"JED index {jed_idx} out of range for XSS data")
                             continue
                             
-                        jed = int(ace.xss_data[jed_idx].value) - 1
+                        jed = int(ace.xss_data[jed_idx].value)
                         
                         # Calculate KY = JED + |TY_i| - 101, ensure it's an integer
                         ky = int(jed + abs(ty_value) - 101)
@@ -528,7 +528,7 @@ def read_dned_block(ace: Ace, jxs_dned: int, debug: bool = False) -> None:
             continue  # Skip if the locator is invalid
         
         # The locator is relative to JXS(27)
-        offset = jxs_dned + locator_value - 1  # Convert to 0-indexed
+        offset = jxs_dned + locator_value
         if debug: logger.debug(f"Processing group {i+1}, locator={locator_value}, offset={offset} (XSS length: {len(ace.xss_data)})")
         
         if offset >= len(ace.xss_data):
@@ -626,7 +626,7 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
             idx += n_e
         
         # Calculate absolute index for law data
-        idat_absolute = jed + idat - 1  # -1 for 0-indexing
+        idat_absolute = jed + idat 
         
         if debug: 
             logger.debug(f"Law {law}, LNW={lnw}, IDAT={idat}, IDAT_abs={idat_absolute}, N_R={n_r}, N_E={n_e}")
@@ -654,7 +654,7 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
             break
             
         # Move to the next law
-        current_offset = jed + lnw - 1  # LNW is relative to JED, convert to 0-indexed
+        current_offset = jed + lnw  # LNW is relative to JED
         if debug:  logger.debug(f"Moving to next law at offset {current_offset}")
     
     if debug: logger.debug(f"Finished reading distributions, found {len(distributions)} laws")
@@ -689,7 +689,7 @@ def create_energy_distribution(
         NBT interpolation parameters
     interp : List[int]
         INT interpolation scheme parameters
-    debug : bool, optional
+    debug: bool, optional
         Whether to print debug information, defaults to False
         
     Returns
@@ -770,63 +770,3 @@ def create_energy_distribution(
         # For unsupported laws, just return the base distribution
         if debug: logger.debug(f"No specific parser for law {law}, returning base distribution")
         return base_distribution
-
-#def process_energy_distributions(ace: Ace, locator_list, distribution_list, base_idx, debug: bool = False):
-#    """
-#    Process energy distributions for a set of reactions.
-#    
-#    Parameters
-#    ----------
-#    ace : Ace
-#        The Ace object with XSS data
-#    locator_list : list
-#        List of locators (can be XssEntry objects or integers)
-#    distribution_list : dict
-#        Dictionary to store the distributions by MT number
-#    base_idx : int
-#        Base index of the energy distribution block in the XSS array
-#    debug : bool, optional
-#        Whether to print debug information, defaults to False
-#    """
-#    if debug:
-#        logger.debug(f"Processing {len(locator_list)} energy distribution locators")
-#        
-#    for i, loc in enumerate(locator_list):
-#        if loc is None:
-#            continue
-#            
-#        # Convert locator to absolute index (handle XssEntry object)
-#        if hasattr(loc, 'value'):
-#            loc_value = int(loc.value)
-#        else:
-#            loc_value = int(loc)
-#        
-#        # Skip if locator is 0 or negative
-#        if loc_value <= 0:
-#            continue
-#            
-#        # Calculate absolute index
-#        energy_idx = base_idx + loc_value - 1  # -1 for 0-indexing
-#        
-#        # Get the corresponding MT number
-#        mt_entry = None
-#        if ace.reaction_mt_data and i < len(ace.reaction_mt_data.incident_neutron):
-#            mt_entry = ace.reaction_mt_data.incident_neutron[i]
-#        
-#        if mt_entry is None:
-#            continue  # Skip if MT number not available
-#        
-#        # Read the energy distribution
-#        try:
-#            distributions = read_energy_distribution(ace, energy_idx, debug=debug)
-#            if distributions:
-#                # Store using the MT value as the key
-#                mt_value = int(mt_entry.value)
-#                distribution_list[mt_value] = distributions
-#                if debug:
-#                    logger.debug(f"Stored energy distributions for MT={mt_value}")
-#        except Exception as e:
-#            logger.warning(f"Error reading energy distribution at index {i}: {e}")
-#            continue  # Skip this reaction if there's an issue
-#
-#

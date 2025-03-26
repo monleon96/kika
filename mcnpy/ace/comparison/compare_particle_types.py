@@ -2,7 +2,7 @@
 Module for comparing particle production types data in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 
 def compare_particle_types(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool = True) -> bool:
     """Compare particle production types between two ACE objects."""

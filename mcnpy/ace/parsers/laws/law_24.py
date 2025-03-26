@@ -1,4 +1,4 @@
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.energy_distribution import EnergyDistribution, TabularEnergyMultipliers
 
 def parse_tabular_energy_multipliers(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> TabularEnergyMultipliers:

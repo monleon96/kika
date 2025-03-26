@@ -2,7 +2,7 @@
 Module for comparing angular distribution data in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.angular_distribution import AngularDistributionType
 from mcnpy.ace.comparison.compare_ace import compare_arrays
 

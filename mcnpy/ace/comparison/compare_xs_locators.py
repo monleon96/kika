@@ -2,7 +2,7 @@
 Module for comparing cross section locators in ACE format.
 """
 
-from mcnpy.ace.ace import Ace
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.comparison.compare_ace import compare_arrays
 
 def compare_xs_locators(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool = True) -> bool:
