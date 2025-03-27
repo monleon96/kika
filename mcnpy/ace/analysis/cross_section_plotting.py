@@ -8,6 +8,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Optional, Tuple
+from mcnpy.ace.parsers.parse_ace import read_ace
 
 def plot_cross_sections(
     ace_files: List[str], 
@@ -62,7 +63,7 @@ def plot_cross_sections(
     ...     energy_range=(1e-5, 20.0)
     ... )
     """
-    from mcnpy.ace.parse_ace import read_ace
+
     
     # Read ACE files
     ace_data = []
