@@ -1,7 +1,5 @@
 import logging
-from typing import List, Optional
 from mcnpy.ace.classes.xs_data import CrossSectionData, ReactionCrossSection
-from mcnpy.ace.parsers.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -16,13 +14,30 @@ def read_xs_data_block(ace, debug=False):
         The Ace object with XSS data and header
     debug : bool, optional
         Whether to print debug information, defaults to False
+        
+    Returns
+    -------
+    CrossSectionData
+        The cross section data object
     """
+    # Fix the condition - don't check has_neutron_data yet since we might initialize xs_locators later
     if (ace.header is None or ace.header.jxs_array is None or 
-        ace.header.nxs_array is None or ace.xss_data is None or
-        ace.xs_locators is None or not ace.xs_locators.has_neutron_data):
+        ace.header.nxs_array is None or ace.xss_data is None):
         if debug:
-            logger.debug("Skipping XS data block: required data missing")
-        return
+            logger.debug("Skipping XS data block: required header or XSS data missing")
+        return None  # Return None explicitly in error case
+    
+    # Now check for xs_locators separately
+    if ace.xs_locators is None:
+        if debug:
+            logger.debug("Skipping XS data block: xs_locators is None")
+        return None
+        
+    # Now we can check the property since we know xs_locators exists
+    if not ace.xs_locators.has_neutron_data:
+        if debug:
+            logger.debug("Skipping XS data block: no neutron XS locator data available")
+        return None
     
     if debug:
         logger.debug("\n===== CROSS SECTION DATA BLOCK PARSING =====")
@@ -41,7 +56,7 @@ def read_xs_data_block(ace, debug=False):
     if sig_idx <= 0:
         if debug:
             logger.debug("No SIG block present (JXS(7) ≤ 0)")
-        return
+        return None
     
     if debug:
         logger.debug(f"SIG block starts at index {sig_idx} (0-indexed)")
@@ -50,7 +65,7 @@ def read_xs_data_block(ace, debug=False):
     if not ace.reaction_mt_data or not ace.reaction_mt_data.has_neutron_mt_data:
         if debug:
             logger.debug("No MT data available for neutron reactions")
-        return
+        return None
         
     mt_entries = ace.reaction_mt_data.incident_neutron
     locator_entries = ace.xs_locators.incident_neutron
@@ -61,20 +76,21 @@ def read_xs_data_block(ace, debug=False):
     if len(mt_entries) != len(locator_entries):
         if debug:
             logger.debug(f"Number of MT entries ({len(mt_entries)}) doesn't match locator entries ({len(locator_entries)})")
-        return
+        return None
     
     # Process each reaction
     for i, (mt_entry, locator_entry) in enumerate(zip(mt_entries, locator_entries)):
         mt_value = int(mt_entry.value)
         locator_value = int(locator_entry.value)
         
-        # Calculate absolute index
-        abs_idx = sig_idx + locator_value 
+        # Calculate absolute index - FIX: Subtract 1 to match documentation
+        # According to Table 16: LXS + LOCA_i - 1
+        abs_idx = sig_idx + locator_value - 1
 
         if debug:
             logger.debug(f"\nReaction {i+1}: MT={mt_value}")
             logger.debug(f"  Locator value: {locator_value}")
-            logger.debug(f"  Absolute index: sig_idx + locator= {sig_idx} + {locator_value} = {abs_idx}")
+            logger.debug(f"  Absolute index: sig_idx + locator - 1 = {sig_idx} + {locator_value} - 1 = {abs_idx}")
         
         if abs_idx >= len(ace.xss_data):
             if debug:
@@ -125,3 +141,6 @@ def read_xs_data_block(ace, debug=False):
     
     if debug:
         logger.debug(f"\nSuccessfully processed {len(ace.xs_data.reactions)} reaction cross sections")
+    
+    # Return the xs_data object
+    return ace.xs_data

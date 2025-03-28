@@ -83,6 +83,11 @@ class AngularDistributionType(Enum):
     KALBACH_MANN = 3  # Law=44 distributions
 
 
+class Law44DataError(Exception):
+    """Exception raised when Law 44 data is required but not available."""
+    pass
+
+
 @dataclass
 class AngularDistribution:
     """Base class for angular distributions."""
@@ -499,6 +504,10 @@ class KalbachMannAngularDistribution(AngularDistribution):
     This distribution is correlated with energy and uses the Kalbach-Mann formalism.
     The actual angular distribution data is stored in the energy-angle distribution
     section of the ACE file (DLW/DLWH blocks).
+    
+    IMPORTANT: This distribution requires Law=44 data from the energy distribution
+    section to calculate angular probabilities. The ACE object must be provided to
+    methods that calculate or sample angular distributions.
     """
     # Reference to the reaction index in the DLW/DLWH block
     reaction_index: int = -1
@@ -506,6 +515,8 @@ class KalbachMannAngularDistribution(AngularDistribution):
     is_particle_production: bool = False
     # Particle index (only used if is_particle_production=True)
     particle_idx: int = -1
+    # Flag to indicate this distribution requires Law=44 data
+    requires_law44_data: bool = True
     
     def __post_init__(self):
         self.distribution_type = AngularDistributionType.KALBACH_MANN
@@ -523,9 +534,23 @@ class KalbachMannAngularDistribution(AngularDistribution):
         -------
         KalbachMannDistribution or None
             The Law=44 distribution or None if not found
+            
+        Raises
+        ------
+        Law44DataError
+            If the ACE object is not provided or missing required data
         """
-        if ace is None or ace.energy_distributions is None:
-            return None
+        if ace is None:
+            mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
+            raise Law44DataError(
+                f"ACE object must be provided for Kalbach-Mann (Law=44) angular distribution (MT={mt_value})"
+            )
+            
+        if ace.energy_distributions is None:
+            mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
+            raise Law44DataError(
+                f"Energy distributions missing in ACE object for Kalbach-Mann distribution (MT={mt_value})"
+            )
             
         # Get MT number
         mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
@@ -535,7 +560,9 @@ class KalbachMannAngularDistribution(AngularDistribution):
             # Get particle production distributions
             if (self.particle_idx < 0 or 
                 self.particle_idx >= len(ace.energy_distributions.particle_production)):
-                return None
+                raise Law44DataError(
+                    f"Particle index {self.particle_idx} out of bounds for MT={mt_value}"
+                )
                 
             # Get distributions for this MT
             distributions = ace.energy_distributions.get_particle_distribution(
@@ -545,14 +572,20 @@ class KalbachMannAngularDistribution(AngularDistribution):
             distributions = ace.energy_distributions.get_neutron_distribution(mt_value)
             
         if not distributions:
-            return None
+            raise Law44DataError(
+                f"No energy distributions found for MT={mt_value}"
+                f"{f', particle={self.particle_idx}' if self.is_particle_production else ''}"
+            )
             
         # Find the Law=44 distribution
         for dist in distributions:
             if dist.law == 44:  # Law=44 is Kalbach-Mann
                 return dist
                 
-        return None
+        raise Law44DataError(
+            f"Law=44 distribution not found for MT={mt_value}"
+            f"{f', particle={self.particle_idx}' if self.is_particle_production else ''}"
+        )
     
     def sample_mu(self, energy: float, random_value: float, ace=None) -> float:
         """
@@ -574,115 +607,66 @@ class KalbachMannAngularDistribution(AngularDistribution):
         Returns
         -------
         float
-            Sampled cosine value μ (default to isotropic if ACE data not available)
+            Sampled cosine value μ
+            
+        Raises
+        ------
+        Law44DataError
+            If the ACE object is not provided or the Law=44 data is missing/invalid
         """
-        # If no ACE data is available or the reaction index is invalid, use isotropic
-        if ace is None or self.reaction_index < 0:
-            return 2.0 * random_value - 1.0
+        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
+        
+        # If no ACE data is provided, raise an error
+        if ace is None:
+            raise Law44DataError(
+                f"ACE object must be provided to sample from Kalbach-Mann distribution (MT={mt_value})"
+            )
             
-        # Find the Law=44 distribution
+        # If reaction index is invalid, raise an error
+        if self.reaction_index < 0:
+            raise Law44DataError(
+                f"Invalid reaction index {self.reaction_index} for MT={mt_value}"
+            )
+            
+        # Find the Law=44 distribution (this will raise Law44DataError if not found)
         km_dist = self._find_law44_distribution(ace)
-        if km_dist is None:
-            # Fallback to isotropic if distribution not found
-            return 2.0 * random_value - 1.0
             
-        # First, we sample an outgoing energy from the distribution
-        # For a full implementation, we'd use a separate random number for energy
-        # Here we'll just use a random energy from the distribution's table 
+        # Get the interpolated distribution for this energy
         dist = km_dist.get_interpolated_distribution(energy)
         if not dist:
-            return 2.0 * random_value - 1.0
+            raise Law44DataError(
+                f"No distribution data found for energy {energy} MeV in MT={mt_value}"
+            )
+            
+        # Verify that the distribution contains required data
+        if ('e_out' not in dist or 'r' not in dist or 'a' not in dist or 
+            not dist['e_out'] or not dist['r'] or not dist['a']):
+            raise Law44DataError(
+                f"Incomplete Law=44 data for MT={mt_value} at energy {energy} MeV"
+            )
             
         # Select a random energy point to get R and A parameters
         # In practice, this energy would come from the energy sampling step
         # which is correlated with the angular sampling
-        idx = min(int(random_value * (len(dist['e_out']) - 1)), len(dist['e_out']) - 1)
-            
-        # Get the R and A parameters for this energy point
-        r_value = dist['r'][idx]
-        a_value = dist['a'][idx]
-            
-        # Sample from the Kalbach-Mann distribution
-        # If a is very small, return isotropic
-        if abs(a_value) < 1.0e-3:
-            return 2.0 * random_value - 1.0
-            
-        # Use the sampling algorithm from the KalbachMannDistribution class
-        return self._sample_kalbach_mann(a_value, r_value, random_value)
-    
-    def _sample_kalbach_mann(self, a: float, r: float, random_value: float) -> float:
-        """
-        Sample a cosine from the Kalbach-Mann angular distribution.
-        
-        p(μ) = (1/2)*(a/sinh(a))*[cosh(aμ) + r*sinh(aμ)]
-        
-        Parameters
-        ----------
-        a : float
-            Angular distribution slope parameter
-        r : float
-            Precompound fraction parameter
-        random_value : float
-            Random number between 0 and 1
-            
-        Returns
-        -------
-        float
-            Sampled cosine value in [-1, 1]
-        """
-        # This is a direct implementation that works well for sampling
-        # a single μ value when we already have specific r and a parameters
-        
-        # First, calculate the conditional probability function parameters
-        if abs(a) < 1.0e-3:
-            # For very small a, return isotropic distribution
-            return 2.0 * random_value - 1.0
-            
-        # Calculate the normalization factor
-        sinh_a = np.sinh(a)
-        
-        # Direct sampling for r = 0 is simple
-        if abs(r) < 1.0e-5:
-            # For r ≈ 0, we can use a simpler formula:
-            # μ = (1/a) * log[exp(-a) + 2*random_value*sinh(a)]
-            return (1.0/a) * np.log(np.exp(-a) + 2.0 * random_value * sinh_a)
-        
-        # For the general case, we need to solve for μ in:
-        # CDF(μ) = (cosh(aμ) - cosh(-a) + r*(sinh(aμ) - sinh(-a))) / 
-        #          (2*sinh(a) + r*(cosh(a) - cosh(-a)))
-        
-        # Simplified form for practical use: 
-        # CDF(μ) = ((1-r)*sinh(a*(μ+1))/2 + r*(cosh(a*(μ+1))-1)/2) / 
-        #          ((1-r)*sinh(a) + r*(cosh(a)-1))
-        
-        # Solve this numerically using a simplified approach
-        # For production use, a more accurate method like Newton-Raphson would be better
-        
-        # Define CDF(μ) function for values from -1 to +1
-        denominator = (1.0 - r) * sinh_a + r * (np.cosh(a) - 1.0)
-        
-        # Binary search for the μ value that gives the target CDF
-        left = -1.0
-        right = 1.0
-        target = random_value
-        
-        for _ in range(20):  # Usually converges in < 20 iterations
-            mid = (left + right) / 2.0
-            
-            # Calculate CDF at midpoint
-            sinh_term = np.sinh(a * (mid + 1.0)) / 2.0
-            cosh_term = (np.cosh(a * (mid + 1.0)) - 1.0) / 2.0
-            cdf_mid = ((1.0 - r) * sinh_term + r * cosh_term) / denominator
-            
-            if abs(cdf_mid - target) < 1.0e-6:
-                return mid
-            elif cdf_mid < target:
-                left = mid
-            else:
-                right = mid
+        try:
+            idx = min(int(random_value * (len(dist['e_out']) - 1)), len(dist['e_out']) - 1)
                 
-        return (left + right) / 2.0  # Return final midpoint as the answer
-
+            # Get the R and A parameters for this energy point
+            r_value = dist['r'][idx]
+            a_value = dist['a'][idx]
+                
+            # Sample from the Kalbach-Mann distribution
+            # If a is very small, return isotropic
+            if abs(a_value) < 1.0e-3:
+                return 2.0 * random_value - 1.0
+                
+            # Use the sampling algorithm from the KalbachMannDistribution class
+            return self._sample_kalbach_mann(a_value, r_value, random_value)
+        except (IndexError, KeyError, TypeError) as e:
+            raise Law44DataError(
+                f"Error accessing Law=44 data for MT={mt_value}: {str(e)}"
+            ) from e
+    
     def to_dataframe(self, energy: float, ace=None, num_points: int = 100) -> Optional[pd.DataFrame]:
         """
         Convert Kalbach-Mann angular distribution to a pandas DataFrame for a specific incident energy.
@@ -700,6 +684,11 @@ class KalbachMannAngularDistribution(AngularDistribution):
         -------
         pandas.DataFrame or None
             DataFrame with 'cosine' and 'probability' columns, or None if pandas is not available
+            
+        Raises
+        ------
+        Law44DataError
+            If the ACE object is not provided or the Law=44 data is missing/invalid
         """
         try:
             import pandas as pd
@@ -707,39 +696,30 @@ class KalbachMannAngularDistribution(AngularDistribution):
             # Generate a fine cosine grid
             cosines = np.linspace(-1, 1, num_points)
             
-            if ace is None:
-                # If no ACE data is available, return isotropic distribution
-                return pd.DataFrame({
-                    'cosine': cosines,
-                    'probability': np.ones_like(cosines) * 0.5
-                })
+            mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
             
-            # Find the Law=44 distribution
+            # If no ACE data is provided, raise an error
+            if ace is None:
+                raise Law44DataError(
+                    f"ACE object must be provided for Kalbach-Mann (Law=44) angular distribution (MT={mt_value})"
+                )
+            
+            # Find the Law=44 distribution (this will raise Law44DataError if not found)
             km_dist = self._find_law44_distribution(ace)
-            if km_dist is None:
-                # If no Law=44 distribution found, return isotropic
-                return pd.DataFrame({
-                    'cosine': cosines,
-                    'probability': np.ones_like(cosines) * 0.5
-                })
             
             # Get the interpolated distribution for this energy
             dist = km_dist.get_interpolated_distribution(energy)
             if not dist:
-                # If no distribution found, return isotropic
-                return pd.DataFrame({
-                    'cosine': cosines,
-                    'probability': np.ones_like(cosines) * 0.5
-                })
+                raise Law44DataError(
+                    f"No distribution data found for energy {energy} MeV in MT={mt_value}"
+                )
             
             # Verify that we have e_out, r, and a data and they're non-empty
             if ('e_out' not in dist or 'r' not in dist or 'a' not in dist or 
                 not dist['e_out'] or not dist['r'] or not dist['a']):
-                # Missing or empty required data, return isotropic
-                return pd.DataFrame({
-                    'cosine': cosines,
-                    'probability': np.ones_like(cosines) * 0.5
-                })
+                raise Law44DataError(
+                    f"Incomplete Law=44 data for MT={mt_value} at energy {energy} MeV"
+                )
             
             # Convert all lengths to integers explicitly to avoid type issues
             e_out_len = int(len(dist['e_out'])) if isinstance(dist['e_out'], list) else 0
@@ -748,11 +728,10 @@ class KalbachMannAngularDistribution(AngularDistribution):
             
             # Make sure r and a arrays are at least as long as e_out
             if r_len < e_out_len or a_len < e_out_len:
-                # Arrays have inconsistent lengths, return isotropic
-                return pd.DataFrame({
-                    'cosine': cosines,
-                    'probability': np.ones_like(cosines) * 0.5
-                })
+                raise Law44DataError(
+                    f"Inconsistent Law=44 data lengths for MT={mt_value}: "
+                    f"e_out={e_out_len}, r={r_len}, a={a_len}"
+                )
             
             # For simplicity, use the R and A parameters from the middle of the E_out range
             middle_idx = min(e_out_len // 2, r_len - 1, a_len - 1)
@@ -787,17 +766,14 @@ class KalbachMannAngularDistribution(AngularDistribution):
             })
         except ImportError:
             return None
+        except Law44DataError:
+            # Re-raise Law44DataError exceptions
+            raise
         except Exception as e:
-            # Log the error or handle it as appropriate
-            print(f"Error in KalbachMannAngularDistribution.to_dataframe: {e}")
-            # Return isotropic as fallback
-            try:
-                return pd.DataFrame({
-                    'cosine': cosines,
-                    'probability': np.ones_like(cosines) * 0.5
-                })
-            except:
-                return None
+            # Convert other exceptions to Law44DataError with a clear message
+            raise Law44DataError(
+                f"Error calculating Kalbach-Mann distribution for MT={mt_value}: {str(e)}"
+            ) from e
     
     def plot(self, energy: float, ace=None, ax=None, title=None, **kwargs) -> Optional[Tuple]:
         """
@@ -820,11 +796,16 @@ class KalbachMannAngularDistribution(AngularDistribution):
         -------
         tuple or None
             Tuple of (fig, ax) or None if matplotlib is not available
+            
+        Raises
+        ------
+        Law44DataError
+            If the ACE object is not provided or the Law=44 data is missing/invalid
         """
         try:
             import matplotlib.pyplot as plt
             
-            # Get the data to plot
+            # Get the data to plot - this will raise Law44DataError if ACE is missing
             df = self.to_dataframe(energy, ace)
             
             # Create figure and axes if not provided
@@ -860,6 +841,14 @@ class KalbachMannAngularDistribution(AngularDistribution):
             return fig, ax
         except ImportError:
             return None
+    
+    def __str__(self) -> str:
+        """Human-readable string representation."""
+        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
+        particle_info = f", particle={self.particle_idx}" if self.is_particle_production else ""
+        return (f"Kalbach-Mann Angular Distribution (MT={mt_value}{particle_info})\n"
+                f"REQUIRES: Law=44 data from energy distribution section\n"
+                f"NOTE: Must provide ACE object when sampling or plotting this distribution")
     
     __repr__ = kalbach_mann_distribution_repr
 
@@ -1000,8 +989,70 @@ class AngularDistributionContainer:
                 # If they are already integers, sort them directly
                 return sorted(list(mt_keys))
     
+    def get_particle_production_info(self) -> Dict[int, Dict[str, Any]]:
+        """
+        Get comprehensive information about particle production angular distributions.
+        
+        This provides a more detailed and user-friendly version of the data compared to
+        get_particle_production_mt_numbers().
+        
+        Returns
+        -------
+        Dict[int, Dict[str, Any]]
+            Dictionary mapping particle indices to dictionaries containing:
+            - 'mt_numbers': List of MT numbers
+            - 'count': Total number of reactions
+            - 'distribution_types': Dictionary counting each distribution type
+            - 'description': Text description
+            
+        Examples
+        --------
+        >>> info = container.get_particle_production_info()
+        >>> for idx, data in info.items():
+        ...     print(f"Particle {idx}: {data['count']} reactions, {data['description']}")
+        ...     print(f"MT numbers: {data['mt_numbers']}")
+        """
+        result = {}
+        
+        for idx in range(len(self.particle_production)):
+            particle_data = self.particle_production[idx]
+            
+            # Get MT numbers for this particle
+            if isinstance(particle_data, ErrorMessageDict):
+                mt_numbers = sorted(particle_data.keys_as_int())
+            else:
+                mt_keys = particle_data.keys()
+                if mt_keys and isinstance(next(iter(mt_keys)), XssEntry):
+                    mt_numbers = sorted([int(mt.value) for mt in mt_keys])
+                else:
+                    mt_numbers = sorted(list(mt_keys))
+            
+            # Count distribution types
+            distribution_types = {}
+            for mt in mt_numbers:
+                dist = particle_data[mt]
+                dist_type = dist.distribution_type.name
+                distribution_types[dist_type] = distribution_types.get(dist_type, 0) + 1
+            
+            # Create a description
+            description = f"{len(mt_numbers)} reactions"
+            if distribution_types:
+                type_str = ", ".join(f"{count} {dist_type.lower()}" 
+                                   for dist_type, count in distribution_types.items())
+                description += f" ({type_str})"
+            
+            # Store all information
+            result[idx] = {
+                'mt_numbers': mt_numbers,
+                'count': len(mt_numbers),
+                'distribution_types': distribution_types,
+                'description': description
+            }
+            
+        return result
+    
     def sample_mu(self, mt: int, energy: float, random_value: float, 
-                 particle_type: str = 'neutron', particle_idx: int = 0) -> float:
+                 particle_type: str = 'neutron', particle_idx: int = 0, ace=None) -> float:
         """
         Sample a scattering cosine μ for a specific reaction and energy.
         
@@ -1017,11 +1068,22 @@ class AngularDistributionContainer:
             Type of particle: 'neutron', 'photon', or 'particle'
         particle_idx : int, optional
             Index of the particle type (used only for particle_type='particle')
+        ace : Ace, optional
+            ACE object containing Law=44 data (required for Kalbach-Mann distributions)
             
         Returns
         -------
         float
             Sampled cosine value μ (between -1 and 1)
+            
+        Raises
+        ------
+        Law44DataError
+            If trying to sample from a Kalbach-Mann distribution without providing ACE data
+        KeyError
+            If the MT number is not found in the distribution container
+        ValueError
+            If the particle type is unknown or for other sampling errors
         """
         # Special case for elastic scattering (MT=2)
         if particle_type == 'neutron' and mt == 2 and self.elastic:
@@ -1034,19 +1096,21 @@ class AngularDistributionContainer:
             dist_container = self.photon_production
         elif particle_type == 'particle':
             if particle_idx < 0 or particle_idx >= len(self.particle_production):
-                # Fallback to isotropic if no data
-                return 2.0 * random_value - 1.0
+                raise ValueError(f"Particle index {particle_idx} out of bounds")
             dist_container = self.particle_production[particle_idx]
         else:
             raise ValueError(f"Unknown particle type: {particle_type}")
         
         # Get the angular distribution for this MT number
         if mt not in dist_container:
-            # Fallback to isotropic if no data for this MT
-            return 2.0 * random_value - 1.0
+            raise KeyError(f"MT={mt} not found in {particle_type} angular distributions")
         
-        # Sample from the distribution
-        return dist_container[mt].sample_mu(energy, random_value)
+        # Sample from the distribution, passing ace for Kalbach-Mann distributions
+        distribution = dist_container[mt]
+        if isinstance(distribution, KalbachMannAngularDistribution):
+            return distribution.sample_mu(energy, random_value, ace)
+        else:
+            return distribution.sample_mu(energy, random_value)
 
     def to_dataframe(self, mt: int, energy: float, particle_type: str = 'neutron', 
                     particle_idx: int = 0, ace=None, num_points: int = 100) -> Optional[pd.DataFrame]:
@@ -1064,7 +1128,7 @@ class AngularDistributionContainer:
         particle_idx : int, optional
             Index of the particle type (used only for particle_type='particle')
         ace : Ace, optional
-            ACE object containing the distribution data (needed for Kalbach-Mann)
+            ACE object containing the distribution data (required for Kalbach-Mann)
         num_points : int, optional
             Number of angular points to generate, defaults to 100
             
@@ -1072,6 +1136,15 @@ class AngularDistributionContainer:
         -------
         pandas.DataFrame or None
             DataFrame with 'cosine' and 'probability' columns, or None if pandas is not available
+            
+        Raises
+        ------
+        Law44DataError
+            If trying to process a Kalbach-Mann distribution without providing ACE data
+        KeyError
+            If the MT number is not found in the distribution container
+        ValueError
+            If the particle type is unknown
         """
         try:
             import pandas as pd
@@ -1087,22 +1160,14 @@ class AngularDistributionContainer:
                 dist_container = self.photon_production
             elif particle_type == 'particle':
                 if particle_idx < 0 or particle_idx >= len(self.particle_production):
-                    # Fallback to isotropic if no data
-                    return pd.DataFrame({
-                        'cosine': np.linspace(-1, 1, num_points),
-                        'probability': np.ones(num_points) * 0.5
-                    })
+                    raise ValueError(f"Particle index {particle_idx} out of bounds")
                 dist_container = self.particle_production[particle_idx]
             else:
                 raise ValueError(f"Unknown particle type: {particle_type}")
             
             # Get the angular distribution for this MT number
             if mt not in dist_container:
-                # Fallback to isotropic if no data for this MT
-                return pd.DataFrame({
-                    'cosine': np.linspace(-1, 1, num_points),
-                    'probability': np.ones(num_points) * 0.5
-                })
+                raise KeyError(f"MT={mt} not found in {particle_type} angular distributions")
             
             # Special handling for Kalbach-Mann distributions
             distribution = dist_container[mt]
@@ -1199,7 +1264,7 @@ class AngularDistributionContainer:
         particle_idx : int, optional
             Index of the particle type (used only for particle_type='particle')
         ace : Ace, optional
-            ACE object containing the distribution data (needed for Kalbach-Mann)
+            ACE object containing the distribution data (required for Kalbach-Mann)
         ax : matplotlib.axes.Axes, optional
             Axes to plot on, if None a new figure is created
         title : str, optional
@@ -1215,9 +1280,41 @@ class AngularDistributionContainer:
         -------
         tuple or None
             Tuple of (fig, ax) or None if matplotlib is not available
+            
+        Raises
+        ------
+        Law44DataError
+            If trying to process a Kalbach-Mann distribution without providing ACE data
+        KeyError
+            If the MT number is not found in the distribution container
+        ValueError
+            If the particle type is unknown
         """
         try:
             import matplotlib.pyplot as plt
+            
+            # Get the appropriate distribution container
+            if particle_type == 'neutron':
+                dist_container = self.incident_neutron
+            elif particle_type == 'photon':
+                dist_container = self.photon_production
+            elif particle_type == 'particle':
+                if particle_idx < 0 or particle_idx >= len(self.particle_production):
+                    raise ValueError(f"Particle index {particle_idx} out of bounds")
+                dist_container = self.particle_production[particle_idx]
+            else:
+                raise ValueError(f"Unknown particle type: {particle_type}")
+            
+            # Get the angular distribution for this MT number
+            if mt not in dist_container:
+                raise KeyError(f"MT={mt} not found in {particle_type} angular distributions")
+                
+            # Check if this is a Kalbach-Mann distribution that requires ACE data
+            distribution = dist_container[mt]
+            if isinstance(distribution, KalbachMannAngularDistribution) and ace is None:
+                raise Law44DataError(
+                    f"ACE object must be provided for Kalbach-Mann angular distribution (MT={mt})"
+                )
             
             # Create figure and axes if not provided
             if ax is None:
@@ -1239,15 +1336,21 @@ class AngularDistributionContainer:
                 color = colors[i] if i < len(colors) else 'blue'
                 label = labels[i] if i < len(labels) else f"{energy:.4g} MeV"
                 
-                # Get data for this energy
-                df = self.to_dataframe(mt, energy, particle_type, particle_idx, ace)
-                
-                # Plot data
-                plot_kwargs = kwargs.copy()
-                plot_kwargs['color'] = color
-                plot_kwargs['label'] = label
-                
-                ax.plot(df['cosine'], df['probability'], **plot_kwargs)
+                try:
+                    # Get data for this energy - may raise Law44DataError
+                    df = self.to_dataframe(mt, energy, particle_type, particle_idx, ace)
+                    
+                    # Plot data
+                    plot_kwargs = kwargs.copy()
+                    plot_kwargs['color'] = color
+                    plot_kwargs['label'] = label
+                    
+                    ax.plot(df['cosine'], df['probability'], **plot_kwargs)
+                except Law44DataError as e:
+                    # Skip this energy if Law 44 data is missing and add a note to the label
+                    import warnings
+                    warnings.warn(f"Energy {energy} MeV skipped: {str(e)}")
+                    continue
             
             # Set labels and title
             ax.set_xlabel('Cosine (μ)')
@@ -1267,5 +1370,8 @@ class AngularDistributionContainer:
             return fig, ax
         except ImportError:
             return None
+        except Law44DataError:
+            # Re-raise Law44DataError to be handled by the caller
+            raise
     
     __repr__ = angular_container_repr

@@ -19,6 +19,11 @@ def read_tyr_blocks(ace, debug=False, strict_validation=True):
     strict_validation : bool, optional
         If True, invalid TY values will raise an error If False, 
         invalid values will generate a warning but processing will continue.
+        
+    Returns
+    -------
+    ParticleRelease
+        The particle release object
     """
     if (ace.header is None or ace.header.jxs_array is None or 
         ace.header.nxs_array is None or ace.xss_data is None):
@@ -155,10 +160,10 @@ def read_tyr_blocks(ace, debug=False, strict_validation=True):
             # Get the starting index for the TY values
             # LTYR = XSS(JXS(32)+10*(i-1)+2) in FORTRAN
             offset = 10*(i-1) + 2
-            ltyr_idx_ptr = jxs32 + offset - 1  
+            ltyr_idx_ptr = jxs32 + offset  # Fixed: Removed incorrect "-1" subtraction
             
             if debug:
-                logger.debug(f"  LTYR pointer calculation: jxs32 + 10*(i-1) + 2 - 1 = {jxs32} + 10*({i}-1) + 2 - 1 = {jxs32} + {offset-1} = {ltyr_idx_ptr}")
+                logger.debug(f"  LTYR pointer calculation: jxs32 + 10*(i-1) + 2 = {jxs32} + 10*({i}-1) + 2 = {jxs32} + {offset} = {ltyr_idx_ptr}")
             
             if ltyr_idx_ptr >= len(ace.xss_data):
                 error_msg = f"TYRH particle type {i} LTYR pointer index {ltyr_idx_ptr} is out of bounds ({len(ace.xss_data)-1})"
@@ -216,6 +221,9 @@ def read_tyr_blocks(ace, debug=False, strict_validation=True):
                 raise ValueError(error_msg)
     elif debug:
         logger.debug(f"No TYRH block to process: JXS(31)={jxs31}, JXS(32)={jxs32}, NXS(7)={num_particle_types}")
+    
+    # Return the particle_release object
+    return ace.particle_release
 
 def _is_valid_ty_value(ty: int) -> bool:
     """

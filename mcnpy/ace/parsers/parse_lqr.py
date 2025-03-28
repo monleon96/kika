@@ -16,6 +16,11 @@ def read_lqr_block(ace, debug=False):
         The Ace object with XSS data and header
     debug : bool, optional
         Whether to print debug information, defaults to False
+        
+    Returns
+    -------
+    QValues
+        The Q-values object
     """
     if (ace.header is None or ace.header.jxs_array is None or 
         ace.header.nxs_array is None or ace.xss_data is None):
@@ -52,3 +57,6 @@ def read_lqr_block(ace, debug=False):
                 
                 if debug:
                     logger.debug(f"Successfully read {len(ace.q_values.q_values)} Q-values")
+    
+    # Return the q_values object
+    return ace.q_values

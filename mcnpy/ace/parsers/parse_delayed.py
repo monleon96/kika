@@ -1,5 +1,5 @@
 import logging
-from mcnpy.ace.classes.delayed_neutron import DelayedNeutronPrecursor, DelayedNeutronData
+from mcnpy.ace.classes.delayed_neutron.delayed_neutron import DelayedNeutronPrecursor, DelayedNeutronData
 from mcnpy.ace.parsers.xss import XssEntry
 from typing import List, Tuple
 
@@ -16,14 +16,18 @@ def read_delayed_neutron_data(ace, debug=False):
         The Ace object with XSS data and header
     debug : bool, optional
         Whether to print debug information, defaults to False
+        
+    Returns
+    -------
+    DelayedNeutronData
+        The delayed neutron data object
     """
     if (ace.header is None or ace.header.jxs_array is None or 
         ace.xss_data is None):
         raise ValueError("Cannot read delayed neutron data: header or XSS data missing")
     
-    # Initialize delayed_neutron_data if it doesn't exist
-    if ace.delayed_neutron_data is None:
-        ace.delayed_neutron_data = DelayedNeutronData()
+    # Create a new DelayedNeutronData object
+    delayed_neutron_data = DelayedNeutronData()
     
     if debug:
         logger.debug("\n===== DELAYED NEUTRON BLOCK PARSING =====")
@@ -37,7 +41,7 @@ def read_delayed_neutron_data(ace, debug=False):
     
     if bdd_idx > 0:
         # Set flag indicating delayed neutron data is present
-        ace.delayed_neutron_data.has_delayed_neutron_data = True
+        delayed_neutron_data.has_delayed_neutron_data = True
         
         if debug:
             logger.debug(f"BDD block found at index {bdd_idx}")
@@ -63,10 +67,16 @@ def read_delayed_neutron_data(ace, debug=False):
             
             # Parse precursor data and get the new index position
             precursor, current_idx = parse_precursor_data(ace.xss_data, current_idx, debug)
-            ace.delayed_neutron_data.precursors.append(precursor)
+            delayed_neutron_data.precursors.append(precursor)
             
             if debug:
                 logger.debug(f"Precursor group {i+1} parsed, new index: {current_idx}")
+    else:
+        if debug:
+            logger.debug("No BDD block found (JXS(25) <= 0)")
+    
+    # Always return the DelayedNeutronData object
+    return delayed_neutron_data
 
 def parse_precursor_data(xss_data: List[XssEntry], idx: int, debug=False) -> Tuple[DelayedNeutronPrecursor, int]:
     """

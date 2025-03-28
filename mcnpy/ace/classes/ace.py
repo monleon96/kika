@@ -6,8 +6,8 @@ import numpy as np
 from mcnpy.ace.parsers.xss import XssEntry
 from mcnpy.ace.classes.header import Header
 from mcnpy.ace.classes.nubar.nubar import NuContainer
-from mcnpy.ace.classes.delayed_neutron import DelayedNeutronData
-from mcnpy.ace.classes.mtr import ReactionMTData
+from mcnpy.ace.classes.delayed_neutron.delayed_neutron import DelayedNeutronData
+from mcnpy.ace.classes.mt_reaction.mtr import ReactionMTData
 from mcnpy.ace.classes.q_values import QValues
 from mcnpy.ace.classes.particle_release import ParticleRelease
 from mcnpy.ace.classes.xs_locators import CrossSectionLocators
@@ -18,13 +18,13 @@ from mcnpy.ace.classes.energy_distribution_locators import EnergyDistributionLoc
 from mcnpy.ace.classes.energy_distribution_container import EnergyDistributionContainer
 from mcnpy.ace.classes.gpd import PhotonProductionData
 from mcnpy.ace.classes.photon_production_xs import PhotonProductionCrossSections, ParticleProductionCrossSections
-from mcnpy.ace.classes.yield_multipliers import PhotonYieldMultipliers, ParticleYieldMultipliers
+from mcnpy.ace.classes.yield_multipliers import PhotonYieldMultipliers, SecondaryParticleYieldMultipliers
 from mcnpy.ace.classes.fission_xs import FissionCrossSection
 from mcnpy.ace.classes.unresolved_resonance import UnresolvedResonanceTables
-from mcnpy.ace.classes.particle_production import ParticleProductionTypes
-from mcnpy.ace.classes.particle_reaction_counts import ParticleReactionCounts
-from mcnpy.ace.classes.particle_production_locators import ParticleProductionLocators
-from mcnpy.ace.classes.particle_production_xs_data import ParticleProductionXSContainer
+from mcnpy.ace.classes.secondary_particle_cross_sections import SecondaryParticleCrossSections
+from mcnpy.ace.classes.secondary_particle_data_locators import SecondaryParticleDataLocators
+from mcnpy.ace.classes.secondary_particle_reactions import SecondaryParticleReactions
+from mcnpy.ace.classes.secondary_particles_types import SecondaryParticleTypes
 from mcnpy.ace.classes.esz import EszBlock
 from mcnpy.ace.classes.ace_repr import ace_repr
 
@@ -45,7 +45,7 @@ class Ace:
     # XSS data array - loaded immediately
     xss_data: Optional[List[XssEntry]] = None  # Main data array
     
-
+    # Standard ACE data blocks
     esz_block: Optional[EszBlock] = None
     nubar: Optional[NuContainer] = None
     delayed_neutron_data: Optional[DelayedNeutronData] = None
@@ -61,14 +61,15 @@ class Ace:
     photon_production_xs: Optional[PhotonProductionCrossSections] = None
     particle_production_xs: Optional[ParticleProductionCrossSections] = None
     photon_yield_multipliers: Optional[PhotonYieldMultipliers] = None
-    particle_yield_multipliers: Optional[ParticleYieldMultipliers] = None
+    particle_yield_multipliers: Optional[SecondaryParticleYieldMultipliers] = None
     fission_xs: Optional[FissionCrossSection] = None
     unresolved_resonance: Optional[UnresolvedResonanceTables] = None
-    secondary_particles: Optional[ParticleProductionTypes] = None
-    particle_types: Optional[ParticleProductionTypes] = None  # Alias for secondary_particles
-    particle_reaction_counts: Optional[ParticleReactionCounts] = None
-    particle_production_locators: Optional[ParticleProductionLocators] = None
-    particle_production_xs_data: Optional[ParticleProductionXSContainer] = None
+    
+    # User-friendly attribute names for secondary particle data
+    secondary_particle_types: Optional[SecondaryParticleTypes] = None
+    secondary_particle_reactions: Optional[SecondaryParticleReactions] = None
+    secondary_particle_data_locations: Optional[SecondaryParticleDataLocators] = None
+    secondary_particle_cross_sections: Optional[SecondaryParticleCrossSections] = None
     
     # Cache for energy distributions (still lazy-loaded)
     _cache: Dict[str, Any] = field(default_factory=dict, repr=False)
@@ -92,35 +93,35 @@ class Ace:
     
     @property
     def energies(self):
-        """Energy grid (backward compatibility) - returns list of float values"""
+        """Energy grid - returns list of float values"""
         if self.esz_block and self.esz_block.energies:
             return [e.value for e in self.esz_block.energies]
         return None
     
     @property
     def total_xs(self):
-        """Total cross section (backward compatibility) - returns list of float values"""
+        """Total cross section - returns list of float values"""
         if self.esz_block and self.esz_block.total_xs:
             return [xs.value for xs in self.esz_block.total_xs]
         return None
     
     @property
     def absorption_xs(self):
-        """Absorption cross section (backward compatibility) - returns list of float values"""
+        """Absorption cross section - returns list of float values"""
         if self.esz_block and self.esz_block.absorption_xs:
             return [xs.value for xs in self.esz_block.absorption_xs]
         return None
     
     @property
     def elastic_xs(self):
-        """Elastic cross section (backward compatibility) - returns list of float values"""
+        """Elastic cross section - returns list of float values"""
         if self.esz_block and self.esz_block.elastic_xs:
             return [xs.value for xs in self.esz_block.elastic_xs]
         return None
     
     @property
     def heating_numbers(self):
-        """Heating numbers (backward compatibility) - returns list of float values"""
+        """Heating numbers - returns list of float values"""
         if self.esz_block and self.esz_block.heating_numbers:
             return [h.value for h in self.esz_block.heating_numbers]
         return None

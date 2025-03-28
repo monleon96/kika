@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.delayed_neutron.delayed_neutron_repr import precursor_repr, delayed_neutron_data_repr
 
 @dataclass
 class DelayedNeutronPrecursor:
@@ -44,6 +45,10 @@ class DelayedNeutronPrecursor:
         
         # Shouldn't reach here, but just in case
         return self.probabilities[-1].value
+        
+    # Define repr explicitly as a method to ensure it's picked up correctly
+    def __repr__(self):
+        return precursor_repr(self)
 
 @dataclass
 class DelayedNeutronData:
@@ -91,3 +96,7 @@ class DelayedNeutronData:
         
         precursor = self.precursors[group_idx]
         return precursor.decay_constant.value if precursor.decay_constant else None
+        
+    # Define repr explicitly as a method to ensure it's picked up correctly
+    def __repr__(self):
+        return delayed_neutron_data_repr(self)

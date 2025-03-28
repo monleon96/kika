@@ -417,8 +417,11 @@ def kalbach_mann_distribution_repr(self) -> str:
     description = (
         "This object represents an angular distribution using the Kalbach-Mann formalism.\n"
         "The Kalbach-Mann model correlates energy and angle distributions, with parameters\n"
-        "R (precompound fraction) and A (angular slope) that vary with outgoing energy.\n"
-        "The distribution data is stored in the DLW/DLWH blocks as Law=44.\n\n"
+        "R (precompound fraction) and A (angular slope) that vary with outgoing energy.\n\n"
+        "IMPORTANT: This distribution REQUIRES Law=44 data from the energy distribution\n"
+        "section (DLW/DLWH blocks). The ACE object must be provided to all methods that\n"
+        "calculate or sample angular distributions. Without this data, methods will raise\n"
+        "a Law44DataError exception.\n\n"
     )
     
     # Create a summary table of data information
@@ -439,6 +442,16 @@ def kalbach_mann_distribution_repr(self) -> str:
     # Distribution properties
     info_table += "{:<{width1}} {:<{width2}}\n".format(
         "Distribution Type", "Kalbach-Mann (Law=44)",
+        width1=property_col_width, width2=value_col_width)
+    
+    # Law 44 requirement
+    info_table += "{:<{width1}} {:<{width2}}\n".format(
+        "Requires Law=44 Data", "Yes",
+        width1=property_col_width, width2=value_col_width)
+    
+    # ACE requirement
+    info_table += "{:<{width1}} {:<{width2}}\n".format(
+        "Requires ACE Object", "Yes",
         width1=property_col_width, width2=value_col_width)
     
     # Reaction index information
@@ -463,6 +476,19 @@ def kalbach_mann_distribution_repr(self) -> str:
     
     info_table += "-" * header_width + "\n\n"
     
+    # Error handling section
+    error_section = "Error Handling:\n"
+    error_section += "-" * header_width + "\n"
+    error_section += (
+        "If Law=44 data is required but not available, methods will raise Law44DataError.\n"
+        "This can happen when:\n"
+        "  - ACE object is not provided to methods\n"
+        "  - ACE object doesn't contain energy distribution data\n"
+        "  - No Law=44 distribution is found for this reaction\n"
+        "  - Distribution data is incomplete or invalid\n"
+    )
+    error_section += "-" * header_width + "\n\n"
+    
     # Methods section
     methods = {
         ".sample_mu(energy, random_value, ace)": "Sample a cosine using Kalbach-Mann at the given energy",
@@ -481,13 +507,19 @@ def kalbach_mann_distribution_repr(self) -> str:
     example = (
         "Example:\n"
         "--------\n"
-        "# Sample a cosine at 14 MeV using the ACE object\n"
-        "mu = angular_distribution.sample_mu(energy=14.0, random_value=0.5, ace=ace_object)\n\n"
+        "# Sample a cosine at 14 MeV using the ACE object (required for Law=44 data)\n"
+        "try:\n"
+        "    mu = angular_distribution.sample_mu(energy=14.0, random_value=0.5, ace=ace_object)\n"
+        "except Law44DataError as e:\n"
+        "    print(f\"Error: {e}\")\n\n"
         "# Create a plot showing the Kalbach-Mann distribution at 14 MeV\n"
-        "fig, ax = angular_distribution.plot(energy=14.0, ace=ace_object)\n"
+        "try:\n"
+        "    fig, ax = angular_distribution.plot(energy=14.0, ace=ace_object)\n"
+        "except Law44DataError as e:\n"
+        "    print(f\"Error: {e}\")\n"
     )
     
-    return header + description + info_table + methods_section + "\n" + example
+    return header + description + info_table + error_section + methods_section + "\n" + example
 
 
 def angular_container_repr(self) -> str:
@@ -508,6 +540,9 @@ def angular_container_repr(self) -> str:
         "This container holds angular distributions for different reaction types and particles.\n"
         "Angular distributions describe the probability of a particle scattering at a specific angle,\n"
         "represented by the cosine of the scattering angle (μ) ranging from -1 to +1.\n\n"
+        "Note: Some distributions (Kalbach-Mann/Law=44) require additional data from the energy\n"
+        "distribution section. For these distributions, the ACE object must be provided when\n"
+        "calling methods to avoid Law44DataError exceptions.\n\n"
     )
     
     # Create a summary table of available data
@@ -615,18 +650,22 @@ def angular_container_repr(self) -> str:
         method_col_width=property_col_width
     )
     
-    # Add example section
+    # Add note about Kalbach-Mann to example section
     example = (
         "Example:\n"
         "--------\n"
         "# Get MT numbers for neutron reactions with angular distributions\n"
         "mt_numbers = container.get_neutron_reaction_mt_numbers()\n\n"
         "# Sample a scattering cosine for MT=16 at 14 MeV\n"
-        "mu = container.sample_mu(mt=16, energy=14.0, random_value=0.5)\n\n"
+        "# Note: For Kalbach-Mann distributions, you need to provide the ACE object\n"
+        "try:\n"
+        "    mu = container.sample_mu(mt=16, energy=14.0, random_value=0.5, ace=ace_object)\n"
+        "except Law44DataError as e:\n"
+        "    print(f\"Error: {e} - This MT likely uses Kalbach-Mann which requires ACE data\")\n\n"
         "# Plot the angular distribution for MT=16 at 14 MeV\n"
-        "fig, ax = container.plot(mt=16, energy=14.0)\n\n"
+        "fig, ax = container.plot(mt=16, energy=14.0, ace=ace_object)  # ACE needed for Kalbach-Mann\n\n"
         "# Compare angular distributions at different energies\n"
-        "fig, ax = container.plot_energy_comparison(mt=16, energies=[1.0, 5.0, 14.0])\n"
+        "fig, ax = container.plot_energy_comparison(mt=16, energies=[1.0, 5.0, 14.0], ace=ace_object)\n"
     )
     
     return header + description + info_table + data_access_section + "\n" + methods_section + "\n" + example

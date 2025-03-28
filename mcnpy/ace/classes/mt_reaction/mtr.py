@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.mt_reaction.mtr_repr import mtr_repr
 
 @dataclass
 class ReactionMTData:
@@ -51,3 +52,7 @@ class ReactionMTData:
     def get_num_particle_types(self) -> int:
         """Get the number of particle types with MT data."""
         return len(self.particle_production)
+        
+    def __repr__(self) -> str:
+        """Returns a formatted string representation of the ReactionMTData object."""
+        return mtr_repr(self)

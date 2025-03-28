@@ -155,7 +155,8 @@ class NuData:
         
         return fig, ax
     
-    __repr__ = nudata_repr
+    def __repr__(self):
+        return nudata_repr(self)
     
 
 @dataclass
@@ -356,4 +357,5 @@ class NuContainer:
         
         return fig, ax
     
-    __repr__ = nucontainer_repr
+    def __repr__(self):
+        return nucontainer_repr(self)

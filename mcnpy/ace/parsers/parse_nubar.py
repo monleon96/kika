@@ -34,51 +34,111 @@ def read_nubar_data(ace, debug=False):
     
     if debug:
         logger.debug(f"JXS(2) = {jxs2} → Locator for NU block")
+        logger.debug(f"Type of JXS(2): {type(jxs2)}")
     
     if jxs2 == 0:
-        # Case 1: No NU Block (JXS(2)=0)
+        # No NU Block exists
         if debug:
             logger.debug("No NU block present (JXS(2) = 0)")
         ace.nubar.has_nubar = False
     elif jxs2 > 0:
-        # Case 2: Either prompt or total ν is given (JXS(2) > 0)
+        # Ensure jxs2 is an integer
+        jxs2 = int(jxs2)
+        
+        if debug:
+            logger.debug(f"JXS(2) after int conversion: {jxs2}")
+        
+        # Check bounds
+        if jxs2 >= len(ace.xss_data):
+            if debug:
+                logger.debug(f"Error: JXS(2)={jxs2} is out of bounds for XSS array of length {len(ace.xss_data)}")
+            ace.nubar.has_nubar = False
+            return
+        
+        # NU Block exists - check XSS(JXS(2)) value to determine format
         ace.nubar.has_nubar = True
-        ace.nubar.has_both_nu_types = False
         
+        # Read the value at XSS(JXS(2)) to determine if one or two arrays
+        try:
+            if debug:
+                logger.debug(f"Attempting to access xss_data[{jxs2}]")
+                logger.debug(f"Type of xss_data: {type(ace.xss_data)}")
+                if jxs2 < len(ace.xss_data):
+                    logger.debug(f"Value at xss_data[{jxs2}]: {ace.xss_data[jxs2]}")
+                    logger.debug(f"Type of xss_data[{jxs2}]: {type(ace.xss_data[jxs2])}")
+            
+            xss_jxs2_value = ace.xss_data[jxs2].value
+            
+            if debug:
+                logger.debug(f"Value at XSS(JXS(2)) = {xss_jxs2_value}")
+                logger.debug(f"Type of XSS(JXS(2)): {type(xss_jxs2_value)}")
+        except (IndexError, AttributeError) as e:
+            if debug:
+                logger.debug(f"Error accessing XSS(JXS(2)): {e}")
+            ace.nubar.has_nubar = False
+            return
+        
+        if xss_jxs2_value > 0:
+            # Case 1: Only one ν array (either prompt or total)
+            ace.nubar.has_both_nu_types = False
+            
+            if debug:
+                logger.debug(f"Single NU type present (XSS(JXS(2)) > 0)")
+            
+            # The NU array begins at location XSS(KNU) where KNU=JXS(2)
+            single_nu_idx = jxs2
+            
+            if debug:
+                logger.debug(f"NU data starts at index {single_nu_idx}")
+                logger.debug(f"Type of single_nu_idx: {type(single_nu_idx)}")
+            
+            # Parse the single nubar array (assumed to be total nubar)
+            try:
+                ace.nubar.total = parse_nubar_array(ace.xss_data, single_nu_idx, debug)
+            except Exception as e:
+                if debug:
+                    logger.debug(f"Error parsing single nubar array: {e}")
+                raise
+        else:
+            # Case 2: Both prompt and total ν arrays are given (XSS(JXS(2)) < 0)
+            ace.nubar.has_both_nu_types = True
+            
+            if debug:
+                logger.debug(f"Both prompt and total NU types present (XSS(JXS(2)) < 0)")
+            
+            # The prompt ν array begins at XSS(KNU) where KNU=JXS(2) + 1
+            prompt_nu_idx = jxs2 + 1
+            
+            # The total ν array begins at XSS(KNU) where KNU = JXS(2) + ABS(XSS(JXS(2))) + 1
+            abs_xss_value = abs(float(xss_jxs2_value))
+            total_nu_idx = jxs2 + int(abs_xss_value) + 1
+            
+            if debug:
+                logger.debug(f"Prompt NU data starts at index {prompt_nu_idx}")
+                logger.debug(f"Total NU data starts at index {total_nu_idx}")
+                logger.debug(f"Type of prompt_nu_idx: {type(prompt_nu_idx)}")
+                logger.debug(f"Type of total_nu_idx: {type(total_nu_idx)}")
+            
+            # Parse prompt nubar data
+            try:
+                ace.nubar.prompt = parse_nubar_array(ace.xss_data, prompt_nu_idx, debug)
+            except Exception as e:
+                if debug:
+                    logger.debug(f"Error parsing prompt nubar array: {e}")
+                raise
+            
+            # Parse total nubar data
+            try:
+                ace.nubar.total = parse_nubar_array(ace.xss_data, total_nu_idx, debug)
+            except Exception as e:
+                if debug:
+                    logger.debug(f"Error parsing total nubar array: {e}")
+                raise
+    else:
+        # Invalid JXS(2) value
         if debug:
-            logger.debug(f"Single NU type present (JXS(2) = {jxs2} > 0)")
-        
-        # The NU array begins at location XSS(KNU) where KNU=JXS(2) + 1
-        single_nu_idx = jxs2 + 1
-        
-        if debug:
-            logger.debug(f"NU data starts at index {single_nu_idx}")
-        
-        # Parse the single nubar array (assumed to be total nubar, but could be prompt)
-        ace.nubar.total = parse_nubar_array(ace.xss_data, single_nu_idx, debug)
-    else:  # jxs2 < 0
-        # Case 3: Both prompt and total ν are given (JXS(2) < 0)
-        ace.nubar.has_nubar = True
-        ace.nubar.has_both_nu_types = True
-        
-        if debug:
-            logger.debug(f"Both prompt and total NU types present (JXS(2) = {jxs2} < 0)")
-        
-        # The prompt NU array begins at XSS(KNU) where KNU=|JXS(2)| + 1
-        prompt_nu_idx = abs(jxs2) + 1
-        
-        # The total NU array begins at XSS(KNU) where KNU = JXS(2) + ABS(JXS(2))
-        total_nu_idx = jxs2 + abs(jxs2)
-        
-        if debug:
-            logger.debug(f"Prompt NU data starts at index {prompt_nu_idx}")
-            logger.debug(f"Total NU data starts at index {total_nu_idx}")
-        
-        # Parse prompt nubar data
-        ace.nubar.prompt = parse_nubar_array(ace.xss_data, prompt_nu_idx, debug)
-        
-        # Parse total nubar data
-        ace.nubar.total = parse_nubar_array(ace.xss_data, total_nu_idx, debug)
+            logger.debug(f"Invalid JXS(2) value: {jxs2}")
+        ace.nubar.has_nubar = False
     
     # Read DNU block (delayed fission nubar data) if present
     dnu_idx = ace.header.jxs_array[24]  # JXS(24)
@@ -86,8 +146,21 @@ def read_nubar_data(ace, debug=False):
     if debug:
         logger.debug("\n===== DELAYED NUBAR BLOCK PARSING =====")
         logger.debug(f"JXS(24) = {dnu_idx} → Locator for DNU block")
+        logger.debug(f"Type of JXS(24): {type(dnu_idx)}")
     
     if dnu_idx > 0:
+        # Ensure dnu_idx is an integer
+        dnu_idx = int(dnu_idx)
+        
+        if debug:
+            logger.debug(f"JXS(24) after int conversion: {dnu_idx}")
+        
+        # Check bounds
+        if dnu_idx >= len(ace.xss_data):
+            if debug:
+                logger.debug(f"Error: JXS(24)={dnu_idx} is out of bounds for XSS array of length {len(ace.xss_data)}")
+            return
+        
         # Delayed ν is given when JXS(24) > 0
         ace.nubar.has_delayed = True
         
@@ -96,11 +169,34 @@ def read_nubar_data(ace, debug=False):
         
         # Delayed ν array begins at XSS(KNU) where KNU=JXS(24)
         # Parse the delayed nubar data (always in tabulated form)
-        ace.nubar.delayed = parse_nubar_array(ace.xss_data, dnu_idx, debug)
+        try:
+            ace.nubar.delayed = parse_nubar_array(ace.xss_data, dnu_idx, debug)
+        except Exception as e:
+            if debug:
+                logger.debug(f"Error parsing delayed nubar array: {e}")
+            raise
         
         # Validate that it's in tabulated form (LNU = 2)
         if ace.nubar.delayed.format != "tabulated":
             raise ValueError("Delayed nubar data must be in tabulated form (LNU = 2)")
+
+    # Add this at the end of the function to confirm data was found and initialized
+    if debug:
+        logger.debug("\n===== NUBAR SUMMARY =====")
+        logger.debug(f"Has nubar data: {ace.nubar.has_nubar}")
+        logger.debug(f"Has both types: {ace.nubar.has_both_nu_types}")
+        logger.debug(f"Has delayed: {ace.nubar.has_delayed}")
+        logger.debug(f"Total nubar: {ace.nubar.total is not None}")
+        if ace.nubar.total is not None:
+            logger.debug(f"  Format: {ace.nubar.total.format}")
+        logger.debug(f"Prompt nubar: {ace.nubar.prompt is not None}")
+        if ace.nubar.prompt is not None:
+            logger.debug(f"  Format: {ace.nubar.prompt.format}")
+        logger.debug(f"Delayed nubar: {ace.nubar.delayed is not None}")
+        if ace.nubar.delayed is not None:
+            logger.debug(f"  Format: {ace.nubar.delayed.format}")
+    
+    return ace.nubar  # Ensure we're explicitly returning the nubar object
 
 def parse_nubar_array(xss_data: List[XssEntry], idx: int, debug=False) -> NuData:
     """
@@ -120,14 +216,47 @@ def parse_nubar_array(xss_data: List[XssEntry], idx: int, debug=False) -> NuData
     NuData
         A NuData object containing the parsed data
     """
+    if debug:
+        logger.debug(f"Entering parse_nubar_array with idx={idx}, type(idx)={type(idx)}")
+    
+    # Ensure idx is an integer
+    if not isinstance(idx, int):
+        if debug:
+            logger.debug(f"Converting idx from {type(idx)} to int")
+        try:
+            idx = int(idx)
+        except (ValueError, TypeError) as e:
+            if debug:
+                logger.debug(f"Error converting idx to int: {e}")
+            raise ValueError(f"Invalid nubar array index (not an integer): {idx}")
+    
     if idx < 0 or idx >= len(xss_data):
-        raise ValueError(f"Invalid nubar array index: {idx}")
+        if debug:
+            logger.debug(f"Index check failed: idx={idx}, len(xss_data)={len(xss_data)}")
+        raise ValueError(f"Invalid nubar array index (out of bounds): {idx}")
     
     # Create a NuData object to hold the result
     result = NuData()
     
     # Get the format flag (LNU)
-    format_int = int(xss_data[idx].value)
+    try:
+        if debug:
+            logger.debug(f"Accessing xss_data[{idx}]")
+            logger.debug(f"xss_data[{idx}] = {xss_data[idx]}")
+            logger.debug(f"xss_data[{idx}].value = {xss_data[idx].value}")
+        
+        format_int = int(xss_data[idx].value)
+        
+        if debug:
+            logger.debug(f"Format flag (LNU) = {format_int}")
+    except (IndexError, AttributeError, TypeError, ValueError) as e:
+        if debug:
+            logger.debug(f"Error getting format flag: {e}")
+            logger.debug(f"Type of xss_data: {type(xss_data)}")
+            if isinstance(xss_data, list) and 0 <= idx < len(xss_data):
+                logger.debug(f"Type of xss_data[{idx}]: {type(xss_data[idx])}")
+        raise
+    
     if format_int == 1:
         result.format = "polynomial"
     elif format_int == 2:

@@ -1,12 +1,11 @@
 import logging
-from typing import List, Optional
+from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.xs_locators import CrossSectionLocators
-from mcnpy.ace.parsers.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)
 
-def read_xs_locator_blocks(ace, debug=False):
+def read_xs_locator_blocks(ace: Ace, debug=False):
     """
     Read LSIG, LSIGP, and LSIGH blocks from the XSS array if they exist.
     
@@ -16,6 +15,11 @@ def read_xs_locator_blocks(ace, debug=False):
         The Ace object with XSS data and header
     debug : bool, optional
         Whether to print debug information, defaults to False
+        
+    Returns
+    -------
+    CrossSectionLocators
+        The cross section locators object
     """
     if (ace.header is None or ace.header.jxs_array is None or 
         ace.header.nxs_array is None or ace.xss_data is None):
@@ -93,10 +97,6 @@ def read_xs_locator_blocks(ace, debug=False):
         # Initialize list for each particle type
         ace.xs_locators.particle_production = [[] for _ in range(num_particle_types)]
         
-        if debug:
-            logger.debug(f"JXS(31) 0-indexed = {jxs31}")
-            logger.debug(f"JXS(32) 0-indexed = {jxs32}")
-        
         # Process each particle type
         for i_python in range(num_particle_types):
             # Convert to FORTRAN 1-based indexing for the formula
@@ -144,9 +144,7 @@ def read_xs_locator_blocks(ace, debug=False):
             
             if debug:
                 logger.debug(f"  LSIGH = XSS[{lsigh_idx_ptr}] = {lsigh} → 1-indexed location of XS locators")
-            
-            if debug:
-                logger.debug(f"  LSIGH 0-indexed = {lsigh}")
+
             
             if lsigh < 0:
                 if debug:
@@ -166,3 +164,6 @@ def read_xs_locator_blocks(ace, debug=False):
                 logger.debug(f"  Successfully read {len(xs_locators)} XS locators for particle type {i}")
     elif debug:
         logger.debug(f"No LSIGH block to process: JXS(31)={jxs31}, JXS(32)={jxs32}, NXS(7)={num_particle_types}")
+    
+    # Return the xs_locators object
+    return ace.xs_locators
