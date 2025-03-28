@@ -101,27 +101,26 @@ def read_ace(filename, debug=False):
     ace.xs_data = read_xs_data_block(ace, debug1)
     
     # Angular distribution locators - Fix: Assign the return value instead of direct modification
-    ace.angular_locators = read_angular_locator_blocks(ace, debug)
+    ace.angular_locators = read_angular_locator_blocks(ace, debug1)
     
     # Angular distribution data - Fix: Assign the return value instead of direct modification
-    ace.angular_distributions = read_angular_distribution_blocks(ace, debug)
+    ace.angular_distributions = read_angular_distribution_blocks(ace, debug1)
     
     # Energy distribution locators
-    ace.energy_distribution_locators = read_energy_locator_blocks(ace, debug1)
+    ace.energy_distribution_locators = read_energy_locator_blocks(ace, debug)
     
     # NOTE: Energy distribution data will be loaded on-demand
     # when accessed to maintain lazy loading for this component
     
     # Photon production data
-    ace.photon_production_data = read_gpd_block(ace, debug)
+    ace.photon_production_data = read_gpd_block(ace, debug1)
     
     # Secondary particle types (PTYPE block)
     # This must be read first as other secondary particle blocks depend on it
-    ace.secondary_particles = parse_ptype_block(ace, debug)
-    ace.secondary_particle_types = ace.secondary_particles  # Set both attribute names
+    ace.secondary_particles = parse_ptype_block(ace, debug1)
     
     # Photon production cross sections
-    photon_xs, particle_xs = read_production_xs_blocks(ace, debug)
+    photon_xs, particle_xs = read_production_xs_blocks(ace, debug1)
     ace.photon_production_xs = photon_xs
     ace.particle_production_xs = particle_xs
     
@@ -138,7 +137,7 @@ def read_ace(filename, debug=False):
     ace.secondary_particle_data_locations = parse_ixs_block(ace, debug1)
     
     # Photon and secondary particle yield multipliers
-    photon_yield_multipliers, particle_yield_multipliers = read_yield_multiplier_blocks(ace, debug)
+    photon_yield_multipliers, particle_yield_multipliers = read_yield_multiplier_blocks(ace, debug1)
     ace.photon_yield_multipliers = photon_yield_multipliers
     ace.particle_yield_multipliers = particle_yield_multipliers
     

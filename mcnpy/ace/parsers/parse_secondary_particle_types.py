@@ -108,6 +108,3 @@ def parse_ptype_block(ace: Ace, debug=False) -> SecondaryParticleTypes:
             logger.debug(f"Successfully read {len(result.particle_ids)} secondary particle types")
     
     return result
-
-# Backward compatibility alias
-read_secondary_particle_types = parse_ptype_block

@@ -125,7 +125,7 @@ def read_and_block(ace: Ace, and_idx: int, debug: bool = False) -> None:
                 if mt_entry is None:
                     mt_entry = XssEntry(0, 2)  # MT=2 for elastic
                 
-                elastic_dist = read_angular_distribution(ace, elastic_data_idx, mt_entry, debug)
+                elastic_dist = read_angular_distribution(ace, elastic_data_idx, mt_entry, and_idx, debug)  # Pass and_idx as base_idx
                 if elastic_dist:
                     ace.angular_distributions.elastic = elastic_dist
                     if debug:
@@ -195,7 +195,7 @@ def read_and_block(ace: Ace, and_idx: int, debug: bool = False) -> None:
             
             try:
                 # Read the angular distribution
-                dist = read_angular_distribution(ace, data_idx, mt_entry, debug)
+                dist = read_angular_distribution(ace, data_idx, mt_entry, and_idx, debug)  # Pass and_idx as base_idx
                 if dist and i < 3:  # Print info for first 3 distributions
                     mt_value = int(mt_entry.value)
                     logger.debug(f"First few values from angular distribution for MT={mt_value}:")
@@ -589,7 +589,7 @@ def read_andh_blocks(ace: Ace, debug: bool = False) -> None:
             try:
                 # Read the angular distribution from the ANDH address
                 # The angular distribution at ANDH follows the same format as at AND
-                dist = read_angular_distribution(ace, data_idx, mt, debug)
+                dist = read_angular_distribution(ace, data_idx, mt, andh_ptr, debug)  # Pass andh_ptr as base_idx
                 if dist:
                     ace.angular_distributions.particle_production[particle_idx][mt_value] = dist
                     success_count += 1
@@ -604,7 +604,7 @@ def read_andh_blocks(ace: Ace, debug: bool = False) -> None:
             logger.debug(f"Particle {particle_idx} summary: {success_count} distributions successfully read "
                          f"({kalbach_mann_count} Kalbach-Mann), {error_count} errors/skipped")
 
-def read_angular_distribution(ace: Ace, data_idx: int, mt_entry: XssEntry, debug: bool = False) -> Optional[AngularDistribution]:
+def read_angular_distribution(ace: Ace, data_idx: int, mt_entry: XssEntry, base_idx: int, debug: bool = False) -> Optional[AngularDistribution]:
     """
     Read a single angular distribution from the XSS array.
     
@@ -622,6 +622,8 @@ def read_angular_distribution(ace: Ace, data_idx: int, mt_entry: XssEntry, debug
         Starting index of the angular distribution data in the XSS array
     mt_entry : XssEntry
         MT number entry for this reaction
+    base_idx : int
+        Base index (AND, ANDP, or ANDH) for calculating locator positions
     debug : bool, optional
         Whether to print debug information, defaults to False
         
@@ -637,6 +639,7 @@ def read_angular_distribution(ace: Ace, data_idx: int, mt_entry: XssEntry, debug
     """
     if debug:
         logger.debug(f"Reading angular distribution at index {data_idx} for MT={mt_entry.value}")
+        logger.debug(f"Using base index {base_idx} for locator calculations")
     
     if data_idx < 0 or data_idx >= len(ace.xss_data):
         raise ValueError(f"Angular distribution index out of bounds: {data_idx}")
@@ -676,10 +679,6 @@ def read_angular_distribution(ace: Ace, data_idx: int, mt_entry: XssEntry, debug
             locc_type = "isotropic" if locc_val == 0 else ("equiprobable" if locc_val > 0 else "tabulated")
             logger.debug(f"  Energy[{i}] = {e_val} MeV, LOCC = {locc_val} → {locc_type}")
     
-    # For tabulated and equiprobable distributions, we need the base of the block
-    # Find which block we're in based on the context (needed for locators)
-    and_idx = ace.header.jxs_array[9]  # Default to JXS(9) for AND block
-    
     # Check distribution type based on the locators
     # Handle special case: if all locators are 0, create isotropic distribution
     if all(lc_val == 0 for lc_val in locc_values):
@@ -693,13 +692,13 @@ def read_angular_distribution(ace: Ace, data_idx: int, mt_entry: XssEntry, debug
         if debug:
             logger.debug("All non-zero LOCC values are positive → equiprobable bin distribution")
         # All non-zero locators are positive - equiprobable bin distribution
-        return read_equiprobable_distribution(ace, and_idx, mt_entry, num_energies, energies, locc_entries, debug)
+        return read_equiprobable_distribution(ace, base_idx, mt_entry, num_energies, energies, locc_entries, debug)
     
     elif all(lc_val < 0 for lc_val in locc_values if lc_val != 0):
         if debug:
             logger.debug("All non-zero LOCC values are negative → tabulated distribution")
         # All non-zero locators are negative - tabulated distribution
-        return read_tabulated_distribution(ace, and_idx, mt_entry, num_energies, energies, locc_entries, debug)
+        return read_tabulated_distribution(ace, base_idx, mt_entry, num_energies, energies, locc_entries, debug)
     
     else:
         # Mixed locator signs - this shouldn't happen according to the format

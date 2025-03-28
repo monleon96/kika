@@ -1,10 +1,17 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Union, Tuple
 import numpy as np
+from mcnpy._utils import create_repr_section
 
 @dataclass
 class PhotonProductionData:
-    """Container for photon production data from the GPD block."""
+    """
+    Container for photon production data from the GPD block.
+    
+    The GPD Block contains the total photon production cross section tabulated
+    on the energy grid from the ESZ Block. It may also include outgoing photon
+    energies in an obsolete 30×20 matrix format used in older datasets.
+    """
     total_xs: List = field(default_factory=list)  # Total photon production cross section as XssEntry objects
     outgoing_energies: Optional[List[List]] = None  # 30x20 matrix of outgoing photon energies as XssEntry objects
     neutron_energy_boundaries: Optional[List[float]] = None  # 30 neutron energy group boundaries
@@ -184,7 +191,7 @@ class PhotonProductionData:
             for idx in sample_indices:
                 if idx < len(self.neutron_energy_boundaries) and idx < len(self.outgoing_energies):
                     e_neutron = self.neutron_energy_boundaries[idx]
-                    energies = self.outgoing_energies[idx]
+                    energies = [e.value for e in self.outgoing_energies[idx]]
                     probs = [1.0/len(energies)] * len(energies)
                     ax.step(energies, probs, where='post', 
                            label=f"E_neutron = {e_neutron:.2e} MeV", **kwargs)
@@ -196,3 +203,81 @@ class PhotonProductionData:
         ax.grid(True, which='both', linestyle='--', alpha=0.5)
         
         return ax
+    
+    def __repr__(self) -> str:
+        """
+        Returns a formatted string representation of the PhotonProductionData object.
+        
+        This representation provides an overview of the photon production data.
+        
+        Returns
+        -------
+        str
+            Formatted string representation
+        """
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Photon Production Data (GPD Block)':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        # Description
+        description = (
+            "The GPD Block contains the total photon production cross section tabulated\n"
+            "on the energy grid from the ESZ Block. It may also include outgoing photon\n"
+            "energies in an obsolete 30×20 matrix format used in older datasets.\n\n"
+        )
+        
+        # Create a summary table of data information
+        property_col_width = 40
+        value_col_width = header_width - property_col_width - 3
+        
+        info_table = "Data Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
+        
+        # Add data about total production cross section
+        xs_status = "Available" if self.has_data else "Not available"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Total Photon Production Cross Section", xs_status,
+            width1=property_col_width, width2=value_col_width)
+        
+        if self.has_data:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Number of Cross Section Points", len(self.total_xs),
+                width1=property_col_width, width2=value_col_width)
+        
+        # Add data about outgoing photon energies
+        energy_status = "Available (obsolete 30×20 matrix format)" if self.has_outgoing_energies else "Not available"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Outgoing Photon Energies", energy_status,
+            width1=property_col_width, width2=value_col_width)
+        
+        if self.has_outgoing_energies:
+            num_groups = len(self.outgoing_energies)
+            points_per_group = len(self.outgoing_energies[0]) if num_groups > 0 else 0
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Matrix Size", f"{num_groups} neutron groups × {points_per_group} photon energies",
+                width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Create sections for methods
+        methods = {
+            ".get_interpolated_xs(energy, energy_grid)": "Get interpolated photon production cross section",
+            ".get_photon_energy_group(neutron_energy)": "Get outgoing photon energies for a neutron energy",
+            ".get_photon_energy_distribution(neutron_energy)": "Get probability distribution for outgoing photons",
+            ".plot_xs(energy_grid, ax=None, **kwargs)": "Plot photon production cross section",
+            ".plot_outgoing_energies(neutron_energy=None, ax=None, **kwargs)": "Plot outgoing photon energy distribution"
+        }
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Combine all sections
+        return header + description + info_table + methods_section

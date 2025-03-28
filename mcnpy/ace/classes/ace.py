@@ -66,7 +66,7 @@ class Ace:
     unresolved_resonance: Optional[UnresolvedResonanceTables] = None
     
     # User-friendly attribute names for secondary particle data
-    secondary_particle_types: Optional[SecondaryParticleTypes] = None
+    secondary_particles: Optional[SecondaryParticleTypes] = None
     secondary_particle_reactions: Optional[SecondaryParticleReactions] = None
     secondary_particle_data_locations: Optional[SecondaryParticleDataLocators] = None
     secondary_particle_cross_sections: Optional[SecondaryParticleCrossSections] = None
