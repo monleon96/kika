@@ -1,5 +1,5 @@
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution import EnergyDistribution, KalbachMannDistribution
+from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution, KalbachMannDistribution
 
 def parse_kalbach_mann_distribution(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> KalbachMannDistribution:
     """

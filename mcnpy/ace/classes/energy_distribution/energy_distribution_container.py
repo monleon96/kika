@@ -1,7 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Union, Tuple
-from mcnpy.ace.classes.energy_distribution import EnergyDistribution
+from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution
 from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.energy_distribution.energy_distirbution_repr import energy_distribution_container_repr
 
 @dataclass
 class EnergyDistributionContainer:
@@ -207,79 +208,5 @@ class EnergyDistributionContainer:
         return self.delayed_neutron[group]
     
     def __repr__(self) -> str:
-        lines = ["Energy Distribution Data"]
-        
-        # Incident neutron distributions
-        if self.incident_neutron:
-            lines.append(f"  Incident Neutron Reactions: {len(self.incident_neutron)} MT numbers")
-            # Sort by converting keys to integers if they're XssEntry objects
-            sorted_items = sorted(self.incident_neutron.items(), 
-                                 key=lambda item: int(item[0].value) if hasattr(item[0], 'value') else int(item[0]))
-            for mt, dist_list in sorted_items:
-                mt_value = int(mt.value) if hasattr(mt, 'value') else int(mt)
-                law_names = [f"Law {d.law}" for d in dist_list]
-                lines.append(f"    MT={mt_value}: {len(dist_list)} distributions ({', '.join(law_names)})")
-        
-        # Photon production distributions
-        if self.photon_production:
-            lines.append(f"  Photon Production Reactions: {len(self.photon_production)} MT numbers")
-            # Sort by converting keys to integers if they're XssEntry objects
-            sorted_items = sorted(self.photon_production.items(), 
-                                 key=lambda item: int(item[0].value) if hasattr(item[0], 'value') else int(item[0]))
-            for mt, dist_list in sorted_items:
-                mt_value = int(mt.value) if hasattr(mt, 'value') else int(mt)
-                law_names = [f"Law {d.law}" for d in dist_list]
-                lines.append(f"    MT={mt_value}: {len(dist_list)} distributions ({', '.join(law_names)})")
-        
-        # Particle production distributions
-        if any(self.particle_production):
-            lines.append(f"  Particle Production: {len(self.particle_production)} particle types")
-            for i, mt_dict in enumerate(self.particle_production):
-                if mt_dict:
-                    lines.append(f"    Particle Type {i+1}: {len(mt_dict)} MT numbers")
-                    # Sort by converting keys to integers if they're XssEntry objects
-                    sorted_items = sorted(mt_dict.items(), 
-                                         key=lambda item: int(item[0].value) if hasattr(item[0], 'value') else int(item[0]))
-                    for mt, dist_list in sorted_items:
-                        mt_value = int(mt.value) if hasattr(mt, 'value') else int(mt)
-                        law_names = [f"Law {d.law}" for d in dist_list]
-                        lines.append(f"      MT={mt_value}: {len(dist_list)} distributions ({', '.join(law_names)})")
-        
-        # Delayed neutron distributions
-        if self.delayed_neutron:
-            lines.append(f"  Delayed Neutron Groups: {len(self.delayed_neutron)} groups")
-            for i, dist in enumerate(self.delayed_neutron):
-                lines.append(f"    Group {i+1}: Law {dist.law}")
-        
-        # Energy-dependent yields
-        if self.neutron_yields:
-            lines.append(f"  Energy-Dependent Neutron Yields: {len(self.neutron_yields)} reactions")
-            # Sort by converting keys to integers if they're XssEntry objects
-            sorted_keys = sorted(self.neutron_yields.keys(), 
-                                key=lambda k: int(k.value) if hasattr(k, 'value') else int(k))
-            for mt in sorted_keys:
-                mt_value = int(mt.value) if hasattr(mt, 'value') else int(mt)
-                lines.append(f"    MT={mt_value}")
-                
-        if self.photon_yields:
-            lines.append(f"  Energy-Dependent Photon Yields: {len(self.photon_yields)} reactions")
-            # Sort by converting keys to integers if they're XssEntry objects
-            sorted_keys = sorted(self.photon_yields.keys(), 
-                                key=lambda k: int(k.value) if hasattr(k, 'value') else int(k))
-            for mt in sorted_keys:
-                mt_value = int(mt.value) if hasattr(mt, 'value') else int(mt)
-                lines.append(f"    MT={mt_value}")
-                
-        if any(self.particle_yields):
-            lines.append(f"  Energy-Dependent Particle Yields: {len(self.particle_yields)} particle types")
-            for i, mt_dict in enumerate(self.particle_yields):
-                if mt_dict:
-                    lines.append(f"    Particle Type {i+1}: {len(mt_dict)} reactions")
-                    # Sort by converting keys to integers if they're XssEntry objects
-                    sorted_keys = sorted(mt_dict.keys(), 
-                                        key=lambda k: int(k.value) if hasattr(k, 'value') else int(k))
-                    for mt in sorted_keys:
-                        mt_value = int(mt.value) if hasattr(mt, 'value') else int(mt)
-                        lines.append(f"      MT={mt_value}")
-        
-        return "\n".join(lines)
+        """Return a string representation of the energy distribution container."""
+        return energy_distribution_container_repr(self)

@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.secondary_particle_reactions import SecondaryParticleReactions
+from mcnpy.ace.classes.secondary_particles.secondary_particle_reactions import SecondaryParticleReactions
 
 # Setup logger
 logger = logging.getLogger(__name__)

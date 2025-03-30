@@ -32,55 +32,55 @@ def mtr_repr(self) -> str:
     # Neutron MT numbers
     neutron_mt_count = len(self.incident_neutron)
     if neutron_mt_count > 0:
-        mt_str = f"{neutron_mt_count} MT numbers"
+        mt_str = f"Available - {neutron_mt_count} reactions"
         # Show a sample of MT numbers if there aren't too many
         if neutron_mt_count <= 10:
             mt_values = [str(int(mt.value)) for mt in self.incident_neutron]
-            mt_str += f": {', '.join(mt_values)}"
+            mt_str += f" (MT: {', '.join(mt_values)})"
         elif neutron_mt_count > 10:
             # Show first 5 and last 5 with ellipsis in between
             first_mt = [str(int(mt.value)) for mt in self.incident_neutron[:5]]
             last_mt = [str(int(mt.value)) for mt in self.incident_neutron[-5:]]
-            mt_str += f": {', '.join(first_mt)}, ..., {', '.join(last_mt)}"
+            mt_str += f" (MT: {', '.join(first_mt)}, ..., {', '.join(last_mt)})"
         info_table += "{:<{width1}} {:<{width2}}\n".format(
             "Neutron Reactions (MTR)", mt_str, width1=property_col_width, width2=value_col_width)
     else:
         info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Neutron Reactions (MTR)", "None available", width1=property_col_width, width2=value_col_width)
+            "Neutron Reactions (MTR)", "Not available", width1=property_col_width, width2=value_col_width)
     
     # Photon production MT numbers
     photon_mt_count = len(self.photon_production)
     if photon_mt_count > 0:
-        mt_str = f"{photon_mt_count} MT numbers"
+        mt_str = f"Available - {photon_mt_count} reactions"
         # Show a sample of MT numbers if there aren't too many
         if photon_mt_count <= 10:
             mt_values = [str(int(mt.value)) for mt in self.photon_production]
-            mt_str += f": {', '.join(mt_values)}"
+            mt_str += f" (MT: {', '.join(mt_values)})"
         info_table += "{:<{width1}} {:<{width2}}\n".format(
             "Photon Production (MTRP)", mt_str, width1=property_col_width, width2=value_col_width)
     else:
         info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Photon Production (MTRP)", "None available", width1=property_col_width, width2=value_col_width)
+            "Photon Production (MTRP)", "Not available", width1=property_col_width, width2=value_col_width)
     
     # Secondary neutron MT numbers
     sec_neutron_count = len(self.secondary_neutron_mt)
     if sec_neutron_count > 0:
-        mt_str = f"{sec_neutron_count} MT numbers"
+        mt_str = f"Available - {sec_neutron_count} reactions"
         # Show a sample of MT numbers if there aren't too many
         if sec_neutron_count <= 10:
             mt_values = [str(int(mt.value)) for mt in self.secondary_neutron_mt]
-            mt_str += f": {', '.join(mt_values)}"
+            mt_str += f" (MT: {', '.join(mt_values)})"
         info_table += "{:<{width1}} {:<{width2}}\n".format(
             "Secondary Neutron Reactions", mt_str, width1=property_col_width, width2=value_col_width)
     else:
         info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Secondary Neutron Reactions", "None available", width1=property_col_width, width2=value_col_width)
+            "Secondary Neutron Reactions", "Not available", width1=property_col_width, width2=value_col_width)
     
     # Particle production MT numbers
     num_particle_types = len(self.particle_production)
     if num_particle_types > 0:
         info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Particle Production (MTRH)", f"{num_particle_types} particle types", 
+            "Particle Production (MTRH)", f"Available - {num_particle_types} particle types", 
             width1=property_col_width, width2=value_col_width)
         
         # Add details for each particle type if there aren't too many
@@ -88,30 +88,30 @@ def mtr_repr(self) -> str:
             for i, mt_list in enumerate(self.particle_production):
                 mt_count = len(mt_list)
                 if mt_count > 0:
-                    mt_str = f"{mt_count} MT numbers"
+                    mt_str = f"{mt_count} reactions"
                     if mt_count <= 8:
                         mt_values = [str(int(mt.value)) for mt in mt_list]
-                        mt_str += f": {', '.join(mt_values)}"
+                        mt_str += f" (MT: {', '.join(mt_values)})"
                     info_table += "{:<{width1}} {:<{width2}}\n".format(
                         f"  Particle Type {i+1}", mt_str, width1=property_col_width, width2=value_col_width)
     else:
         info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Particle Production (MTRH)", "None available", width1=property_col_width, width2=value_col_width)
+            "Particle Production (MTRH)", "Not available", width1=property_col_width, width2=value_col_width)
     
     info_table += "-" * header_width + "\n\n"
     
-    # Create a section for available methods
-    methods = {
-        ".get_particle_production_mt_numbers(particle_idx)": "Get MT numbers for a specific particle type",
-        ".has_neutron_mt_data": "Property: True if neutron reaction data exists",
-        ".has_photon_production_mt_data": "Property: True if photon production data exists",
-        ".has_particle_production_mt_data": "Property: True if particle production data exists",
-        ".has_secondary_neutron_data": "Property: True if secondary neutron data exists"
+    # Create a section for how to access data
+    access_methods = {
+        ".get_mt_values('neutron')": "Get list of MT numbers for incident neutron reactions",
+        ".get_mt_values('photon')": "Get list of MT numbers for photon production reactions",
+        ".get_mt_values('secondary')": "Get list of MT numbers for secondary neutron reactions",
+        ".get_particle_production_mt_dict()": "Get dictionary of MT numbers for all particle types",
+        ".get_mt_values('particle', idx=0)": "Get list of MT numbers for specific particle type (0-indexed)"
     }
     
     methods_section = create_repr_section(
-        "Available Methods and Properties:", 
-        methods, 
+        "How to Access MT Numbers:", 
+        access_methods, 
         total_width=header_width, 
         method_col_width=property_col_width
     )

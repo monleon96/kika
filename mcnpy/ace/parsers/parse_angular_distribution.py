@@ -198,13 +198,16 @@ def read_and_block(ace: Ace, and_idx: int, debug: bool = False) -> None:
                 dist = read_angular_distribution(ace, data_idx, mt_entry, and_idx, debug)  # Pass and_idx as base_idx
                 if dist and i < 3:  # Print info for first 3 distributions
                     mt_value = int(mt_entry.value)
-                    logger.debug(f"First few values from angular distribution for MT={mt_value}:")
+                    if debug:
+                        logger.debug(f"First few values from angular distribution for MT={mt_value}:")
                     if isinstance(dist, EquiprobableAngularDistribution) and len(dist.cosine_bins) > 0:
                         sample = [dist.cosine_bins[0][j].value for j in range(min(3, len(dist.cosine_bins[0])))]
-                        logger.debug(f"  First 3 cosine values: {sample}")
+                        if debug:
+                            logger.debug(f"  First 3 cosine values: {sample}")
                     elif isinstance(dist, TabulatedAngularDistribution) and len(dist.cosine_grid) > 0:
                         sample = [dist.cosine_grid[0][j].value for j in range(min(3, len(dist.cosine_grid[0])))]
-                        logger.debug(f"  First 3 cosine grid values: {sample}")
+                        if debug:
+                            logger.debug(f"  First 3 cosine grid values: {sample}")
                     
                     # Store using the MT value as the key
                     ace.angular_distributions.incident_neutron[mt_value] = dist

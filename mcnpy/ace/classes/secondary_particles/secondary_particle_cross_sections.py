@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple, Callable
 import numpy as np
-from mcnpy.ace.classes.secondary_particle_cross_section_repr import (
+from mcnpy.ace.classes.secondary_particles.secondary_particle_cross_section_repr import (
     particle_production_cross_section_repr,
     secondary_particle_cross_sections_repr
 )

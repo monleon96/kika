@@ -1,10 +1,17 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
 from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.particle_release.particle_release_repr import particle_release_repr
 
 @dataclass
 class ParticleRelease:
-    """Container for particle release data from TYR and TYRH blocks."""
+    """
+    Container for particle release data from TYR and TYRH blocks.
+    
+    TY values in the TYR and TYRH blocks indicate how many particles are released
+    in a reaction and in what reference frame. Values with absolute value > 100
+    indicate energy-dependent yields, which are stored in the DLW, DLWP, or DLWH blocks.
+    """
     incident_neutron: List[XssEntry] = field(default_factory=list)  # TYR Block - neutron reaction particle release
     particle_production: List[List[XssEntry]] = field(default_factory=list)  # TYRH Block - particle production particle release
     
@@ -88,6 +95,49 @@ class ParticleRelease:
         ty_value = int(ty_entry.value)
         return self._get_ty_description_value(ty_value)
 
+    def has_energy_dependent_yield(self, ty_entry: XssEntry) -> bool:
+        """
+        Check if a TY entry indicates an energy-dependent yield.
+        
+        According to the ACE format specification, TY values with absolute
+        value > 100 indicate energy-dependent yields, which are stored in
+        the DLW, DLWP, or DLWH blocks.
+        
+        Parameters
+        ----------
+        ty_entry : XssEntry
+            TY entry from TYR or TYRH block
+            
+        Returns
+        -------
+        bool
+            True if the TY value indicates an energy-dependent yield
+        """
+        ty_value = int(ty_entry.value) if hasattr(ty_entry, 'value') else int(ty_entry)
+        return abs(ty_value) > 100
+    
+    def get_energy_yield_offset(self, ty_entry: XssEntry, jed: int) -> int:
+        """
+        Calculate the offset for energy-dependent yield data.
+        
+        According to Table 52, for TY values > 100 in absolute value,
+        the offset is calculated as KY = JED + |TY_i| - 101.
+        
+        Parameters
+        ----------
+        ty_entry : XssEntry
+            TY entry from TYR or TYRH block
+        jed : int
+            JED value (starting index of the corresponding energy distribution block)
+            
+        Returns
+        -------
+        int
+            KY offset where the energy-dependent yield data begins
+        """
+        ty_value = int(ty_entry.value) if hasattr(ty_entry, 'value') else int(ty_entry)
+        return jed + abs(ty_value) - 101
+    
     def _get_ty_description_value(self, ty_value: int) -> str:
         """
         Get a description for a given TY value.
@@ -109,7 +159,7 @@ class ParticleRelease:
         elif abs(ty_value) == 5:
             return f"5 particles ({self.get_reaction_frame(type('TempEntry', (), {'value': ty_value}))} frame)"
         elif abs(ty_value) > 100:
-            return f"{abs(ty_value)} (energy-dependent, see DLW/DLWH block)"
+            return f"energy-dependent yield (KY = JED + {abs(ty_value) - 101})"
         else:
             frame = "COM" if ty_value < 0 else "LAB"
             return f"{abs(ty_value)} particles ({frame} frame)"
@@ -149,3 +199,7 @@ class ParticleRelease:
                     summary.append(f"  Particle type {i+1}: {len(ty_values)} reactions")
         
         return "\n".join(summary) if summary else "No particle release data available"
+    
+    def __repr__(self) -> str:
+        """Returns a formatted string representation of the ParticleRelease object."""
+        return particle_release_repr(self)

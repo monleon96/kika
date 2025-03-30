@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Union, Tuple
 import numpy as np
 from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.energy_distribution.energy_distirbution_repr import energy_distribution_repr
 
 @dataclass
 class EnergyDistribution:
@@ -71,7 +72,10 @@ class EnergyDistribution:
         # to determine the interpolation scheme for each region
         # For simplicity, we use linear interpolation here
         return np.interp(energy, energy_values, prob_values)
-
+    
+    def __repr__(self) -> str:
+        """Return a string representation of the energy distribution."""
+        return energy_distribution_repr(self)
 
 @dataclass
 class TabularEnergyDistribution(EnergyDistribution):
@@ -944,7 +948,7 @@ class EnergyDependentWattSpectrum(EnergyDistribution):
         if a <= 0.0 or b <= 0.0:
             return 1.0
         
-        # Calculate (E - U)
+        # Calculate (E − U)
         e_minus_u = incident_energy - self.restriction_energy
         if e_minus_u <= 0:
             return 1.0  # Default value if restriction exceeds incident energy
@@ -1031,7 +1035,7 @@ class TabularLinearFunctions(EnergyDistribution):
     Law 22: Tabular Linear Functions of Incident Energy Out.
     
     From UK Law 2, this represents a tabular function form where the outgoing 
-    energy is a linear function of the incident energy: E_out = C_ik * (E - T_ik).
+    energy is a linear function of the incident energy: E_out = C_ik * (E − T_ik).
     
     Data format (Table 41):
     - N_R: Number of interpolation regions

@@ -40,7 +40,7 @@ def ace_repr(self):
         ("Reaction Q-values", "q_values", self.q_values),
         ("Particle Release Data", "particle_release", self.particle_release),
         ("Cross Section Locators", "xs_locators", self.xs_locators),
-        ("Cross Section Data", "xs_data", self.xs_data),
+        ("Cross Section Data", "cross_section", self.cross_section),
         ("Angular Distribution Locators", "angular_locators", self.angular_locators),
         ("Angular Distributions", "angular_distributions", self.angular_distributions),
         ("Energy Distribution Locators", "energy_distribution_locators", self.energy_distribution_locators),
@@ -53,7 +53,7 @@ def ace_repr(self):
         ("Particle Yield Multipliers", "particle_yield_multipliers", self.particle_yield_multipliers),
         ("Total Fission Cross Section", "fission_xs", self.fission_xs),
         ("Unresolved Resonance Tables", "unresolved_resonance", self.unresolved_resonance),
-        ("Secondary Particle Types", "secondary_particle_types", self.secondary_particles),
+        ("Secondary Particle Types", "secondary_particle_types", self.secondary_particle_types),
         ("Secondary Particle Reaction Counts", "secondary_particle_reactions", self.secondary_particle_reactions),
         ("Secondary Particle Data Locations", "secondary_particle_data_locations", self.secondary_particle_data_locations),
         ("Secondary Particle Cross Sections", "secondary_particle_cross_sections", self.secondary_particle_cross_sections)

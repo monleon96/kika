@@ -1,5 +1,5 @@
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution import EnergyDistribution, ContinuousTabularDistribution
+from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution, ContinuousTabularDistribution
 from mcnpy.ace.parsers.xss import XssEntry
 from typing import List
 

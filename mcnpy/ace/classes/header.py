@@ -67,7 +67,7 @@ class Header:
         :returns: Length of the XSS array or None if not available
         :rtype: int, optional
         """
-        return self.nxs_array[0] if self.nxs_array and len(self.nxs_array) > 0 else None
+        return self.nxs_array[1] if self.nxs_array and len(self.nxs_array) > 1 else None
     
     @property
     def num_energies(self) -> Optional[int]:
@@ -76,7 +76,7 @@ class Header:
         :returns: Number of energy points or None if not available
         :rtype: int, optional
         """
-        return self.nxs_array[2] if self.nxs_array and len(self.nxs_array) > 2 else None
+        return self.nxs_array[3] if self.nxs_array and len(self.nxs_array) > 3 else None
     
     @property
     def num_reactions(self) -> Optional[int]:
@@ -85,7 +85,7 @@ class Header:
         :returns: Number of reactions or None if not available
         :rtype: int, optional
         """
-        return self.nxs_array[3] if self.nxs_array and len(self.nxs_array) > 3 else None
+        return self.nxs_array[4] if self.nxs_array and len(self.nxs_array) > 4 else None
     
     @property
     def num_secondary_neutron_reactions(self) -> Optional[int]:
@@ -94,7 +94,7 @@ class Header:
         :returns: Number of secondary neutron reactions or None if not available
         :rtype: int, optional
         """
-        return self.nxs_array[4] if self.nxs_array and len(self.nxs_array) > 4 else None
+        return self.nxs_array[5] if self.nxs_array and len(self.nxs_array) > 5 else None
     
     @property
     def num_photon_production_reactions(self) -> Optional[int]:
@@ -103,7 +103,7 @@ class Header:
         :returns: Number of photon production reactions or None if not available
         :rtype: int, optional
         """
-        return self.nxs_array[5] if self.nxs_array and len(self.nxs_array) > 5 else None
+        return self.nxs_array[6] if self.nxs_array and len(self.nxs_array) > 6 else None
     
     @property
     def num_particle_types(self) -> Optional[int]:
@@ -112,7 +112,7 @@ class Header:
         :returns: Number of particle types or None if not available
         :rtype: int, optional
         """
-        return self.nxs_array[6] if self.nxs_array and len(self.nxs_array) > 6 else None
+        return self.nxs_array[7] if self.nxs_array and len(self.nxs_array) > 7 else None
     
     @property
     def num_delayed_neutron_precursors(self) -> Optional[int]:
@@ -121,7 +121,7 @@ class Header:
         :returns: Number of delayed neutron precursor families or None if not available
         :rtype: int, optional
         """
-        return self.nxs_array[7] if self.nxs_array and len(self.nxs_array) > 7 else None
+        return self.nxs_array[8] if self.nxs_array and len(self.nxs_array) > 8 else None
     
     def __repr__(self) -> str:
         """Returns a formatted string representation of the Header object.

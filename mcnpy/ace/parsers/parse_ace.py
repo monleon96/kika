@@ -14,6 +14,7 @@ from mcnpy.ace.parsers.parse_angular_locators import read_angular_locator_blocks
 from mcnpy.ace.parsers.parse_angular_distribution import read_angular_distribution_blocks
 from mcnpy.ace.parsers.parse_energy_distribution_locators import read_energy_locator_blocks
 from mcnpy.ace.parsers.parse_energy_distributions import read_energy_distribution_blocks
+from mcnpy.ace.classes.energy_distribution.energy_distribution_container import EnergyDistributionContainer
 from mcnpy.ace.parsers.parse_gpd import read_gpd_block
 from mcnpy.ace.parsers.parse_photon_production_xs import read_production_xs_blocks
 from mcnpy.ace.parsers.parse_yield_multipliers import read_yield_multiplier_blocks
@@ -69,7 +70,7 @@ def read_ace(filename, debug=False):
         logger.debug(f"ACE format version: {ace.header.format_version}")
     
     # Read the entire header (opening and arrays)
-    line_idx = read_header(ace.header, lines, debug=debug1)
+    line_idx = read_header(ace.header, lines, debug=debug)
     
     # Read the XSS array - essential data needed for all parsers
     ace.xss_data = read_xss(lines[line_idx:])
@@ -77,72 +78,72 @@ def read_ace(filename, debug=False):
     # Eagerly load all components except energy distribution data
     
     # ESZ Block
-    ace.esz_block = read_esz_block(ace, debug1)
+    ace.esz_block = read_esz_block(ace, debug)
     
     # Nubar data
-    ace.nubar = read_nubar_data(ace, debug1)
+    ace.nubar = read_nubar_data(ace, debug)
     
     # Delayed neutron data
-    ace.delayed_neutron_data = read_delayed_neutron_data(ace, debug1)
+    ace.delayed_neutron_data = read_delayed_neutron_data(ace, debug)
     
     # MT Reaction data
-    ace.reaction_mt_data = read_mtr_blocks(ace, debug1)
+    ace.reaction_mt_data = read_mtr_blocks(ace, debug)
     
     # Q values
-    ace.q_values = read_lqr_block(ace, debug1)
+    ace.q_values = read_lqr_block(ace, debug)
     
     # Particle release data
-    ace.particle_release = read_tyr_blocks(ace, debug1)
+    ace.particle_release = read_tyr_blocks(ace, debug)
     
     # Cross section locators
-    ace.xs_locators = read_xs_locator_blocks(ace, debug1)
+    ace.xs_locators = read_xs_locator_blocks(ace, debug)
     
     # Cross section data
-    ace.xs_data = read_xs_data_block(ace, debug1)
+    ace.xs_data = read_xs_data_block(ace, debug)
     
     # Angular distribution locators - Fix: Assign the return value instead of direct modification
-    ace.angular_locators = read_angular_locator_blocks(ace, debug1)
+    ace.angular_locators = read_angular_locator_blocks(ace, debug)
     
     # Angular distribution data - Fix: Assign the return value instead of direct modification
-    ace.angular_distributions = read_angular_distribution_blocks(ace, debug1)
+    ace.angular_distributions = read_angular_distribution_blocks(ace, debug)
     
     # Energy distribution locators
     ace.energy_distribution_locators = read_energy_locator_blocks(ace, debug)
     
-    # NOTE: Energy distribution data will be loaded on-demand
-    # when accessed to maintain lazy loading for this component
-    
+    # Energy distribution data
+    ace.energy_distributions = read_energy_distribution_blocks(ace, debug)
+
     # Photon production data
-    ace.photon_production_data = read_gpd_block(ace, debug1)
+    ace.photon_production_data = read_gpd_block(ace, debug)
     
     # Secondary particle types (PTYPE block)
     # This must be read first as other secondary particle blocks depend on it
-    ace.secondary_particles = parse_ptype_block(ace, debug1)
+    ace.secondary_particle_types = parse_ptype_block(ace, debug)
     
     # Photon production cross sections
-    photon_xs, particle_xs = read_production_xs_blocks(ace, debug1)
+    photon_xs, particle_xs = read_production_xs_blocks(ace, debug)
     ace.photon_production_xs = photon_xs
     ace.particle_production_xs = particle_xs
     
     # Fission cross section
-    ace.fission_xs = read_fission_xs_block(ace, debug1)
+    ace.fission_xs = read_fission_xs_block(ace, debug)
     
     # Unresolved resonance tables
-    ace.unresolved_resonance = read_unresolved_resonance_block(ace, debug1)
+    ace.unresolved_resonance = read_unresolved_resonance_block(ace, debug)
     
     # Secondary particle reaction counts (NTRO block)
-    ace.secondary_particle_reactions = parse_ntro_block(ace, debug1)
+    ace.secondary_particle_reactions = parse_ntro_block(ace, debug)
     
     # Secondary particle data locations (IXS block)
-    ace.secondary_particle_data_locations = parse_ixs_block(ace, debug1)
+    ace.secondary_particle_data_locations = parse_ixs_block(ace, debug)
     
     # Photon and secondary particle yield multipliers
-    photon_yield_multipliers, particle_yield_multipliers = read_yield_multiplier_blocks(ace, debug1)
+    photon_yield_multipliers, particle_yield_multipliers = read_yield_multiplier_blocks(ace, debug)
     ace.photon_yield_multipliers = photon_yield_multipliers
     ace.particle_yield_multipliers = particle_yield_multipliers
     
     # Secondary particle cross sections (HPD block)
-    ace.secondary_particle_cross_sections = parse_hpd_block(ace, debug1)
+    ace.secondary_particle_cross_sections = parse_hpd_block(ace, debug)
     
     return ace
 

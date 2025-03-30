@@ -7,11 +7,11 @@ from mcnpy.ace.classes.ace import Ace
 def compare_particle_production_locators(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool = True) -> bool:
     """Compare particle production locators between two ACE objects."""
     # Check if both objects have particle production locators
-    has_locators1 = (ace1.particle_production_locators is not None and 
-                    ace1.particle_production_locators.has_data)
+    has_locators1 = (ace1.secondary_particle_data_locations is not None and 
+                    ace1.secondary_particle_data_locations.has_data)
     
-    has_locators2 = (ace2.particle_production_locators is not None and 
-                    ace2.particle_production_locators.has_data)
+    has_locators2 = (ace2.secondary_particle_data_locations is not None and 
+                    ace2.secondary_particle_data_locations.has_data)
     
     if not has_locators1 and not has_locators2:
         return True
@@ -22,8 +22,8 @@ def compare_particle_production_locators(ace1: Ace, ace2: Ace, tolerance: float 
         return False
     
     # Compare number of particle types
-    n_types1 = len(ace1.particle_production_locators.locator_sets)
-    n_types2 = len(ace2.particle_production_locators.locator_sets)
+    n_types1 = len(ace1.secondary_particle_data_locations.locator_sets)
+    n_types2 = len(ace2.secondary_particle_data_locations.locator_sets)
     
     if n_types1 != n_types2:
         if verbose:
@@ -32,8 +32,8 @@ def compare_particle_production_locators(ace1: Ace, ace2: Ace, tolerance: float 
         return False
     
     # Compare each particle's locator set
-    for i, (loc_set1, loc_set2) in enumerate(zip(ace1.particle_production_locators.locator_sets,
-                                                ace2.particle_production_locators.locator_sets)):
+    for i, (loc_set1, loc_set2) in enumerate(zip(ace1.secondary_particle_data_locations.locator_sets,
+                                                ace2.secondary_particle_data_locations.locator_sets)):
         particle_idx = i + 1  # 1-based indexing for reporting
         
         # Compare each individual locator

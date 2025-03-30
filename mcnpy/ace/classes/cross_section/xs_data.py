@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.cross_section.xs_repr import reaction_xs_repr, xs_data_repr
 import numpy as np
+import matplotlib.pyplot as plt
 
 @dataclass
 class ReactionCrossSection:
@@ -29,21 +31,36 @@ class ReactionCrossSection:
             return []
         end_idx = min(self.energy_idx + self.num_energies, len(energy_grid))
         return [e.value for e in energy_grid[self.energy_idx:end_idx]]
+    
+    def __repr__(self):
+        return reaction_xs_repr(self)
 
 @dataclass
 class CrossSectionData:
     """Container for all reaction cross sections from the SIG block."""
-    reactions: Dict[int, ReactionCrossSection] = field(default_factory=dict)  # MT number -> cross section data
+    reaction: Dict[int, ReactionCrossSection] = field(default_factory=dict)  # MT number -> cross section data
+    energy_grid: Optional[List[XssEntry]] = None  # Store energy grid for convenience
+    
+    def set_energy_grid(self, energy_grid: List[XssEntry]) -> None:
+        """
+        Set the energy grid for this cross section data.
+        
+        Parameters
+        ----------
+        energy_grid : List[XssEntry]
+            The energy grid to use for plotting and interpolation
+        """
+        self.energy_grid = energy_grid
     
     @property
     def has_data(self) -> bool:
         """Check if any reaction cross section data is available."""
-        return len(self.reactions) > 0
+        return len(self.reaction) > 0
     
     @property
     def mt_numbers(self) -> List[int]:
         """Get a list of available MT numbers."""
-        return list(self.reactions.keys())
+        return list(self.reaction.keys())
     
     def get_reaction_xs(self, mt: int) -> Optional[ReactionCrossSection]:
         """
@@ -59,9 +76,9 @@ class CrossSectionData:
         ReactionCrossSection or None
             Cross section data for the reaction, or None if not available
         """
-        return self.reactions.get(mt)
+        return self.reaction.get(mt)
     
-    def get_interpolated_xs(self, mt: int, energy: float, energy_grid: List[float]) -> Optional[float]:
+    def get_interpolated_xs(self, mt: int, energy: float, energy_grid: Optional[List[float]] = None) -> Optional[float]:
         """
         Get an interpolated cross section value for a specific reaction at a given energy.
         
@@ -71,8 +88,8 @@ class CrossSectionData:
             MT number of the reaction
         energy : float
             Energy point (in MeV)
-        energy_grid : List[float]
-            Full energy grid
+        energy_grid : List[float], optional
+            Full energy grid, if None uses the stored energy_grid
             
         Returns
         -------
@@ -83,6 +100,13 @@ class CrossSectionData:
         if not reaction or not reaction.xs_values:
             return None
         
+        # Use stored energy grid if available and no grid was passed
+        if energy_grid is None and self.energy_grid is not None:
+            energy_grid = self.energy_grid
+            
+        if energy_grid is None:
+            return None
+            
         # Get the energy points for this reaction
         rx_energies = reaction.get_energies(energy_grid)
         if not rx_energies:
@@ -100,7 +124,7 @@ class CrossSectionData:
         # Use numpy for efficient interpolation
         return np.interp(energy, rx_energies, xs_values)
     
-    def plot_reaction_xs(self, mt: int, energy_grid: List[XssEntry], ax=None, **kwargs):
+    def plot_reaction_xs(self, mt: int, energy_grid: Optional[List[XssEntry]] = None, ax=None, **kwargs):
         """
         Plot cross section for a specific reaction.
         
@@ -108,8 +132,8 @@ class CrossSectionData:
         ----------
         mt : int
             MT number of the reaction
-        energy_grid : List[XssEntry]
-            Full energy grid
+        energy_grid : List[XssEntry], optional
+            Full energy grid, if None uses the stored energy_grid 
         ax : matplotlib.axes.Axes, optional
             Axes to plot on, if None a new figure is created
         **kwargs
@@ -120,10 +144,16 @@ class CrossSectionData:
         matplotlib.axes.Axes
             The matplotlib axes containing the plot
         """
-        import matplotlib.pyplot as plt
         
         if ax is None:
             _, ax = plt.subplots(figsize=(10, 6))
+        
+        # Use stored energy grid if available and none was passed
+        if energy_grid is None and self.energy_grid is not None:
+            energy_grid = self.energy_grid
+            
+        if energy_grid is None:
+            raise ValueError("Energy grid is required for plotting but none is available")
         
         reaction = self.get_reaction_xs(mt)
         if reaction and reaction.xs_values:
@@ -138,3 +168,6 @@ class CrossSectionData:
             ax.grid(True, which='both', linestyle='--', alpha=0.5)
         
         return ax
+    
+    def __repr__(self):
+        return xs_data_repr(self)

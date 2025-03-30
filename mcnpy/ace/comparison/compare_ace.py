@@ -5,7 +5,7 @@ This is useful for validating read/write operations to ensure data integrity.
 
 from typing import Dict, Tuple
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.parse_ace import read_ace
+from mcnpy.ace.parsers.parse_ace import read_ace
 
 # Import utility functions
 from mcnpy.ace.comparison.compare_utils import compare_arrays
@@ -330,17 +330,20 @@ def compare_xss_data(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: boo
             print(f"XSS data mismatch: Length differs ({len(ace1.xss_data)} vs {len(ace2.xss_data)})")
         return False
     
+    # Skip the 0th element for 1-indexed arrays
+    # Only compare values from index 1 onwards if arrays have more than 1 element
+    start_idx = 1 if len(ace1.xss_data) > 1 else 0
+    
     # Compare each XSS entry value (ignoring indices since they might differ between files)
-    xss_values1 = [entry.value for entry in ace1.xss_data]
-    xss_values2 = [entry.value for entry in ace2.xss_data]
+    xss_values1 = [entry.value for entry in ace1.xss_data[start_idx:]]
+    xss_values2 = [entry.value for entry in ace2.xss_data[start_idx:]]
     
     if not compare_arrays(xss_values1, xss_values2, tolerance, "XSS data values", verbose):
         return False
     
-    # Optionally, if you also want to compare indices (though this might be too strict)
     if verbose:
-        xss_indices1 = [entry.index for entry in ace1.xss_data]
-        xss_indices2 = [entry.index for entry in ace2.xss_data]
+        xss_indices1 = [entry.index for entry in ace1.xss_data[start_idx:]]
+        xss_indices2 = [entry.index for entry in ace2.xss_data[start_idx:]]
         
         # This is just for information, not affecting the result
         different_indices = sum(1 for i1, i2 in zip(xss_indices1, xss_indices2) if i1 != i2)

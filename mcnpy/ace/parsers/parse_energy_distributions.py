@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution import EnergyDistribution
-from mcnpy.ace.classes.energy_distribution_container import EnergyDistributionContainer
+from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution
+from mcnpy.ace.classes.energy_distribution.energy_distribution_container import EnergyDistributionContainer
 from mcnpy.ace.parsers.laws import (
     parse_tabular_energy_distribution,
     parse_discrete_energy_distribution,
@@ -25,7 +25,7 @@ import logging
 # Setup logger
 logger = logging.getLogger(__name__)
 
-def read_energy_distribution_blocks(ace: Ace, debug: bool = False) -> None:
+def read_energy_distribution_blocks(ace: Ace, debug: bool = False) -> EnergyDistributionContainer:
     """
     Read the DLW, DLWP, DLWH, and DNED blocks from the ACE file.
     
@@ -38,9 +38,14 @@ def read_energy_distribution_blocks(ace: Ace, debug: bool = False) -> None:
     Parameters
     ----------
     ace : Ace
-        The Ace object to update
+        The Ace object containing the XSS data and headers
     debug : bool, optional
         Whether to print debug information, defaults to False
+        
+    Returns
+    -------
+    EnergyDistributionContainer
+        Container with the energy distribution data
         
     Raises
     ------
@@ -48,16 +53,16 @@ def read_energy_distribution_blocks(ace: Ace, debug: bool = False) -> None:
         If required data is missing or indices are invalid
     """
     if debug: 
-        logger.debug("Starting read_energy_distribution_blocks")
+        logger.debug("\n===== ENERGY DISTRIBUTION BLOCKS PARSING =====")
+        logger.debug(f"Header info: ZAID={ace.header.zaid}")
         
     if (ace.header is None or ace.header.jxs_array is None or 
         ace.header.nxs_array is None or ace.xss_data is None or
         ace.energy_distribution_locators is None):
         raise ValueError("Cannot read energy distribution blocks: header, XSS data, or locators missing")
     
-    # Create a new container if not present
-    if ace.energy_distributions is None:
-        ace.energy_distributions = EnergyDistributionContainer()
+    # Create a new container for the return value
+    result = EnergyDistributionContainer()
     
     # Get the JXS values for the energy distribution blocks
     jxs_dlw = ace.header.jxs_array[11]    # JXS(11)
@@ -65,46 +70,75 @@ def read_energy_distribution_blocks(ace: Ace, debug: bool = False) -> None:
     jxs_dned = ace.header.jxs_array[27]   # JXS(27)
     
     if debug:
-        logger.debug(f"JXS indices: jxs_dlw={jxs_dlw}, jxs_dlwp={jxs_dlwp}, jxs_dned={jxs_dned}")
-        logger.debug(f"XSS data length: {len(ace.xss_data)}")
+        logger.debug(f"JXS(11) = {jxs_dlw} → DLW block for incident neutron reactions")
+        logger.debug(f"JXS(19) = {jxs_dlwp} → DLWP block for photon production reactions")
+        logger.debug(f"JXS(27) = {jxs_dned} → DNED block for delayed neutron precursors")
     
+    # Store the container reference to be used by the helper functions
+    _process_energy_distributions(ace, result, jxs_dlw, jxs_dlwp, jxs_dned, debug)
+    
+    return result
+
+
+def _process_energy_distributions(ace: Ace, result: EnergyDistributionContainer, 
+                                 jxs_dlw: int, jxs_dlwp: int, jxs_dned: int, debug: bool = False) -> None:
+    """
+    Process all energy distribution blocks and fill the result container.
+    
+    Parameters
+    ----------
+    ace : Ace
+        The Ace object with XSS data and headers
+    result : EnergyDistributionContainer
+        Container to be filled with energy distribution data
+    jxs_dlw : int
+        JXS(11) - Starting index of the DLW block 
+    jxs_dlwp : int
+        JXS(19) - Starting index of the DLWP block
+    jxs_dned : int
+        JXS(27) - Starting index of the DNED block
+    debug : bool, optional
+        Whether to print debug information, defaults to False
+    """
     # 1. Read DLW block (neutron energy distributions)
     if ace.energy_distribution_locators.has_neutron_data and jxs_dlw > 0:
         if debug: logger.debug(f"Reading DLW block starting at index {jxs_dlw}")
-        read_dlw_block(ace, jxs_dlw, debug=debug)
+        read_dlw_block(ace, result, jxs_dlw, debug=debug)
     elif debug: logger.debug("Skipping DLW block (no neutron data or invalid JXS index)")
     
     # 2. Read DLWP block (photon production energy distributions)
     if ace.energy_distribution_locators.has_photon_production_data and jxs_dlwp > 0:
         if debug: logger.debug(f"Reading DLWP block starting at index {jxs_dlwp}")
-        read_dlwp_block(ace, jxs_dlwp, debug=debug)
+        read_dlwp_block(ace, result, jxs_dlwp, debug=debug)
     elif debug: logger.debug("Skipping DLWP block (no photon production data or invalid JXS index)")
     
     # 3. Read DLWH block (other particle production energy distributions)
     if ace.energy_distribution_locators.has_particle_production_data:
         if debug: logger.debug("Reading DLWH block")
-        read_dlwh_block(ace, debug=debug)
+        read_dlwh_block(ace, result, debug=debug)
     elif debug: logger.debug("Skipping DLWH block (no particle production data)")
     
     # 4. Read DNED block (delayed neutron energy distributions)
     if ace.energy_distribution_locators.has_delayed_neutron_data and jxs_dned > 0:
         if debug: logger.debug(f"Reading DNED block starting at index {jxs_dned}")
-        read_dned_block(ace, jxs_dned, debug=debug)
+        read_dned_block(ace, result, jxs_dned, debug=debug)
     elif debug: logger.debug("Skipping DNED block (no delayed neutron data or invalid JXS index)")
     
     if debug: logger.debug("Finished read_energy_distribution_blocks")
 
 
-def read_dlw_block(ace: Ace, jxs_dlw: int, debug: bool = False) -> None:
+def read_dlw_block(ace: Ace, result: EnergyDistributionContainer, jxs_dlw: int, debug: bool = False) -> None:
     """
     Read the DLW block for neutron energy distributions.
     
     Parameters
     ----------
     ace : Ace
-        The Ace object to update
+        The Ace object with XSS data and headers
+    result : EnergyDistributionContainer
+        Container to be filled with energy distribution data
     jxs_dlw : int
-        Starting index of the DLW block in the XSS array (JXS(11))
+        JXS(11) - Starting index of the DLW block in the XSS array
     debug : bool, optional
         Whether to print debug information, defaults to False
     """
@@ -116,10 +150,14 @@ def read_dlw_block(ace: Ace, jxs_dlw: int, debug: bool = False) -> None:
     
     # Get the MT numbers for reactions with secondary neutrons
     neutron_mts = ace.reaction_mt_data.secondary_neutron_mt
-    if debug: logger.debug(f"Found {len(neutron_mts)} secondary neutron MT numbers")
+    if debug: 
+        logger.debug(f"Found {len(neutron_mts)} secondary neutron MT numbers")
+        # Print the first few MT values
+        sample_size = min(3, len(neutron_mts))
+        mt_sample = [int(neutron_mts[i].value) if hasattr(neutron_mts[i], 'value') else neutron_mts[i] for i in range(sample_size)]
+        logger.debug(f"First {sample_size} MT values: {mt_sample}")
     
     # Get the corresponding locators from the energy distribution locators
-    # The locators should be in the same order as the MT numbers in the full incident_neutron list
     locators = []
     
     # Extract integer values from XssEntry objects before creating the map
@@ -128,7 +166,17 @@ def read_dlw_block(ace: Ace, jxs_dlw: int, debug: bool = False) -> None:
         mt_value = int(mt_entry.value) if hasattr(mt_entry, 'value') else int(mt_entry)
         mt_idx_map[mt_value] = i
     
-    for mt_item in neutron_mts:
+    if debug:
+        logger.debug(f"Created MT index map with {len(mt_idx_map)} entries")
+        logger.debug(f"Total incident_neutron MT entries: {len(ace.reaction_mt_data.incident_neutron)}")
+        logger.debug(f"Total energy_distribution_locators: {len(ace.energy_distribution_locators.incident_neutron)}")
+    
+    # Debugging: print the full incident_neutron and LDLW arrays length
+    if debug:
+        logger.debug(f"Incident neutron MTs array length: {len(ace.reaction_mt_data.incident_neutron)}")
+        logger.debug(f"LDLW locators array length: {len(ace.energy_distribution_locators.incident_neutron)}")
+    
+    for i, mt_item in enumerate(neutron_mts):
         # Make sure we're using integer MT values
         mt_value = int(mt_item.value) if hasattr(mt_item, 'value') else int(mt_item)
         
@@ -137,9 +185,17 @@ def read_dlw_block(ace: Ace, jxs_dlw: int, debug: bool = False) -> None:
             locators.append(locator_entry)
             if debug:
                 locator_value = int(locator_entry.value) if hasattr(locator_entry, 'value') else int(locator_entry)
-                logger.debug(f"MT={mt_value}, locator={locator_value}, absolute index={jxs_dlw + locator_value if locator_value > 0 else 'N/A'}")
+                logger.debug(f"MT={mt_value}, locator={locator_value}, absolute index={jxs_dlw + locator_value - 1 if locator_value > 0 else 'N/A'}")
+                # Print additional info about the mapping
+                logger.debug(f"  MT index in incident_neutron: {mt_idx_map[mt_value]}")
+                logger.debug(f"  Locator entry: {locator_entry.index}:{locator_entry.value}")
         elif debug:
             logger.debug(f"Could not find locator for MT={mt_value}")
+            if mt_value in mt_idx_map:
+                logger.debug(f"  MT index in map: {mt_idx_map[mt_value]}")
+                logger.debug(f"  But this index is >= {len(ace.energy_distribution_locators.incident_neutron)}")
+            else:
+                logger.debug(f"  MT not found in incident_neutron array")
     
     # Make sure we have the same number of MT numbers and locators
     num_secondary_neutron_reactions = ace.header.nxs_array[4]  # NXS(5) in 1-indexed notation
@@ -154,7 +210,6 @@ def read_dlw_block(ace: Ace, jxs_dlw: int, debug: bool = False) -> None:
             if debug: logger.debug(f"Skipping MT={mt_item}, index {i} out of range for locators array")
             continue
         
-        # Ensure we're working with integer MT values
         mt_value = int(mt_item.value) if hasattr(mt_item, 'value') else int(mt_item)
             
         locator_entry = locators[i]
@@ -164,8 +219,9 @@ def read_dlw_block(ace: Ace, jxs_dlw: int, debug: bool = False) -> None:
             if debug: logger.debug(f"Skipping MT={mt_value}, invalid locator: {locator_value}")
             continue  # Skip if the locator is invalid
         
-        # The locator is relative to JXS(11)
-        offset = jxs_dlw + locator_value
+        # According to Table 30, the energy distribution starts at JED + LOCC - 1
+        offset = jxs_dlw + locator_value - 1  # Subtract 1 to match the documentation
+        
         if debug: logger.debug(f"Processing MT={mt_value}, locator={locator_value}, offset={offset} (XSS length: {len(ace.xss_data)})")
         
         if offset >= len(ace.xss_data):
@@ -177,75 +233,84 @@ def read_dlw_block(ace: Ace, jxs_dlw: int, debug: bool = False) -> None:
             distributions = read_energy_distribution(ace, offset, debug=debug)
             if distributions:
                 if debug: logger.debug(f"Successfully read {len(distributions)} distributions for MT={mt_value}")
-                # Store with integer MT values
-                ace.energy_distributions.incident_neutron[mt_value] = distributions
+                result.incident_neutron[mt_value] = distributions
                 if debug: logger.debug(f"Stored distributions for MT={mt_value} (type: {type(mt_value)})")
             elif debug: logger.debug(f"No distributions found for MT={mt_value}")
         except ValueError as e:
-            # Log the error but continue parsing other entries
             if debug: logger.debug(f"Error parsing energy distribution for MT={mt_value}: {e}")
         except IndexError as e:
             if debug:
                 logger.debug(f"Index error parsing energy distribution for MT={mt_value}: {e}")
                 logger.debug(f"Problematic offset: {offset}, locator: {locator_value}, jxs_dlw: {jxs_dlw}")
                 
-    # Debug info about what was actually stored
-    if debug:
-        logger.debug(f"Final incident_neutron keys: {list(ace.energy_distributions.incident_neutron.keys())}")
-        logger.debug(f"Types of keys: {[type(k) for k in ace.energy_distributions.incident_neutron.keys()]}")
-    
-    # Look for energy-dependent yields in the neutron reactions
+    # Process energy-dependent yields for neutron reactions
     if ace.particle_release and ace.particle_release.has_neutron_data:
         if debug: logger.debug("Processing energy-dependent yields for neutron reactions")
-        # For each reaction with |TY| > 100, find and parse the yield
         for i, ty in enumerate(ace.particle_release.incident_neutron):
-            # Extract the value from XssEntry before using abs()
-            ty_value = ty.value if hasattr(ty, 'value') else ty
+            ty_value = int(ty.value) if hasattr(ty, 'value') else int(ty)
+            
+            # According to documentation, yields are specified for TY values > 100 in absolute value
             if abs(ty_value) > 100 and i < len(neutron_mts):
-                mt_value = neutron_mts[i]
+                mt_item = neutron_mts[i]
+                mt_value = int(mt_item.value) if hasattr(mt_item, 'value') else int(mt_item)
                 
-                # Calculate KY = JED + |TY_i| - 101, ensure it's an integer
-                ky = int(jxs_dlw + abs(ty_value) - 101)
-                if debug: logger.debug(f"Yield for MT={mt_value}, TY={ty_value}, KY={ky} (jxs_dlw={jxs_dlw}, |TY|-101={abs(ty_value)-101})")
+                # Formula from Table 52: KY = JED + |TY_i| - 101
+                ky = jxs_dlw + abs(ty_value) - 101
+                
+                if debug: 
+                    logger.debug(f"Energy-dependent yield for MT={mt_value}, TY={ty_value}")
+                    logger.debug(f"KY calculation: JED + |TY_i| - 101 = {jxs_dlw} + {abs(ty_value)} - 101 = {ky}")
                 
                 if ky >= len(ace.xss_data):
                     if debug: logger.debug(f"Warning: KY={ky} out of range for XSS data of length {len(ace.xss_data)}")
                     continue
                 
                 try:
-                    # Parse the yield data
                     yield_data = parse_energy_dependent_yield(ace, ky)
-                    
-                    # Store the yield data
-                    ace.energy_distributions.neutron_yields[mt_value] = yield_data
-                    if debug: logger.debug(f"Successfully parsed yield data for MT={mt_value}")
+                    result.neutron_yields[mt_value] = yield_data
+                    if debug: 
+                        logger.debug(f"Successfully parsed energy-dependent yield data for MT={mt_value}")
+                        if yield_data and hasattr(yield_data, 'energies') and yield_data.energies:
+                            num_points = len(yield_data.energies)
+                            logger.debug(f"Yield has {num_points} energy points")
+                            if num_points > 0:
+                                first_e = yield_data.energies[0].value if hasattr(yield_data.energies[0], 'value') else yield_data.energies[0]
+                                last_e = yield_data.energies[-1].value if hasattr(yield_data.energies[-1], 'value') else yield_data.energies[-1]
+                                logger.debug(f"Energy range: {first_e} to {last_e} MeV")
                 except ValueError as e:
-                    # Log the error but continue parsing
                     if debug: logger.debug(f"Error parsing energy-dependent yield for MT={mt_value}: {e}")
                 except IndexError as e:
                     if debug:
                         logger.debug(f"Index error parsing yield for MT={mt_value}: {e}")
-                        logger.debug(f"Problematic KY: {ky}, TY: {ty}, jxs_dlw: {jxs_dlw}")
+                        logger.debug(f"Problematic KY: {ky}, TY: {ty_value}, jxs_dlw: {jxs_dlw}")
+    
+    if debug:
+        logger.debug(f"Final incident_neutron keys: {list(result.incident_neutron.keys())}")
+        logger.debug(f"Types of keys: {[type(k) for k in result.incident_neutron.keys()]}")
     
     if debug:
         logger.debug("Finished read_dlw_block")
 
 
-def read_dlwp_block(ace: Ace, jxs_dlwp: int, debug: bool = False) -> None:
+def read_dlwp_block(ace: Ace, result: EnergyDistributionContainer, jxs_dlwp: int, debug: bool = False) -> None:
     """
     Read the DLWP block for photon energy distributions.
+    
+    According to Table 30, the energy distribution for reaction MT starts at:
+    JED + LOCC - 1, where JED is JXS(19) and LOCC is provided by the LDLWP block.
     
     Parameters
     ----------
     ace : Ace
-        The Ace object to update
+        The Ace object with XSS data and headers
+    result : EnergyDistributionContainer
+        Container to be filled with energy distribution data
     jxs_dlwp : int
-        Starting index of the DLWP block in the XSS array (JXS(19))
+        JXS(19) - Starting index of the DLWP block in the XSS array
     debug : bool, optional
         Whether to print debug information, defaults to False
     """
     if debug: logger.debug(f"Starting read_dlwp_block at index {jxs_dlwp}")
-    # Similar implementation to read_dlw_block but for photon production
     if not ace.reaction_mt_data or not ace.reaction_mt_data.has_photon_production_mt_data:
         if debug: logger.debug("Exiting read_dlwp_block: no photon production MT data available")
         return
@@ -255,132 +320,138 @@ def read_dlwp_block(ace: Ace, jxs_dlwp: int, debug: bool = False) -> None:
     
     if debug: logger.debug(f"Found {len(photon_mts)} photon MT numbers and {len(locators)} locators")
     
-    # Make sure we have the same number of MT numbers and locators
     if len(photon_mts) != len(locators) and debug:
         logger.debug(f"Warning: Mismatch between photon MT numbers ({len(photon_mts)}) and locators ({len(locators)})")
     
-    # Process each MT number with its corresponding locator
     for i, mt in enumerate(photon_mts):
         if i >= len(locators):
             if debug: logger.debug(f"Skipping MT={mt}, index {i} out of range for locators array")
             continue
             
         locator = locators[i]
-        # Extract the value from XssEntry before comparison
         locator_value = int(locator.value) if hasattr(locator, 'value') else int(locator)
         
-        if locator_value <= 0:
-            if debug: logger.debug(f"Skipping MT={mt}, invalid locator: {locator_value}")
-            continue  # Skip if the locator is invalid
+        # Get the actual MT value, not the XssEntry
+        mt_value = int(mt.value) if hasattr(mt, 'value') else int(mt)
         
-        # The locator is relative to JXS(19)
-        offset = jxs_dlwp + locator_value
-        if debug: logger.debug(f"Processing MT={mt}, locator={locator_value}, offset={offset} (XSS length: {len(ace.xss_data)})")
+        if locator_value <= 0:
+            if debug: logger.debug(f"Skipping MT={mt_value}, invalid locator: {locator_value}")
+            continue
+        
+        # According to Table 30, the energy distribution starts at JED + LOCC - 1
+        offset = jxs_dlwp + locator_value - 1  # Subtract 1 to match the documentation
+        
+        if debug: logger.debug(f"Processing MT={mt_value}, locator={locator_value}, offset={offset} (XSS length: {len(ace.xss_data)})")
         
         if offset >= len(ace.xss_data):
             if debug: logger.debug(f"Warning: Offset {offset} out of range for XSS data of length {len(ace.xss_data)}")
             continue
         
         try:
-            if debug: logger.debug(f"Calling read_energy_distribution for MT={mt}")
+            if debug: logger.debug(f"Calling read_energy_distribution for MT={mt_value}")
             distributions = read_energy_distribution(ace, offset, debug=debug)
             if distributions:
-                if debug: logger.debug(f"Successfully read {len(distributions)} distributions for MT={mt}")
-                ace.energy_distributions.photon_production[mt] = distributions
-            elif debug: logger.debug(f"No distributions found for MT={mt}")
+                if debug: logger.debug(f"Successfully read {len(distributions)} distributions for MT={mt_value}")
+                result.photon_production[mt_value] = distributions
+            elif debug: logger.debug(f"No distributions found for MT={mt_value}")
         except ValueError as e:
-            # Log the error but continue parsing other entries
-            if debug: logger.debug(f"Error parsing photon energy distribution for MT={mt}: {e}")
+            if debug: logger.debug(f"Error parsing photon energy distribution for MT={mt_value}: {e}")
         except IndexError as e:
             if debug:
-                logger.debug(f"Index error parsing photon energy distribution for MT={mt}: {e}")
+                logger.debug(f"Index error parsing photon energy distribution for MT={mt_value}: {e}")
                 logger.debug(f"Problematic offset: {offset}, locator: {locator}, jxs_dlwp: {jxs_dlwp}")
     
-    # Look for energy-dependent yields in the photon production reactions
+    # Process energy-dependent yields for photon production similarly to neutron reactions
     if ace.particle_release and ace.particle_release.has_neutron_data:
         if debug: logger.debug("Processing energy-dependent yields for photon production")
-        # The yield data would be connected to the incident neutron reactions
-        # But stored in the photon section if the TY value indicates photon production
         if ace.reaction_mt_data and ace.reaction_mt_data.has_neutron_mt_data:
             neutron_mts = ace.reaction_mt_data.incident_neutron
             
             for i, ty in enumerate(ace.particle_release.incident_neutron):
-                # Extract the value from XssEntry before using abs()
-                ty_value = ty.value if hasattr(ty, 'value') else ty
+                ty_value = int(ty.value) if hasattr(ty, 'value') else int(ty)
+                
+                # According to documentation, yields are specified for TY values > 100 in absolute value
                 if abs(ty_value) > 100 and i < len(neutron_mts):
-                    mt = neutron_mts[i]
+                    mt_item = neutron_mts[i]
+                    mt_value = int(mt_item.value) if hasattr(mt_item, 'value') else int(mt_item)
                     
-                    # Calculate KY = JED + |TY_i| - 101, ensure it's an integer
+                    # Formula from Table 52: KY = JED + |TY_i| - 101 (where JED is DLWP block)
                     ky = int(jxs_dlwp + abs(ty_value) - 101)
-                    if debug: logger.debug(f"Yield for MT={mt}, TY={ty_value}, KY={ky} (jxs_dlwp={jxs_dlwp}, |TY|-101={abs(ty_value)-101})")
+                    
+                    if debug: 
+                        logger.debug(f"Energy-dependent yield for MT={mt_value}, TY={ty_value}")
+                        logger.debug(f"KY calculation: JED + |TY_i| - 101 = {jxs_dlwp} + {abs(ty_value)} - 101 = {ky}")
                     
                     if ky >= len(ace.xss_data):
                         if debug: logger.debug(f"Warning: KY={ky} out of range for XSS data of length {len(ace.xss_data)}")
                         continue
                     
                     try:
-                        # Parse the yield data
                         yield_data = parse_energy_dependent_yield(ace, ky)
-                        
-                        # Store the yield data
-                        ace.energy_distributions.photon_yields[mt] = yield_data
-                        if debug: logger.debug(f"Successfully parsed yield data for MT={mt}")
+                        result.photon_yields[mt_value] = yield_data
+                        if debug: 
+                            logger.debug(f"Successfully parsed energy-dependent yield data for MT={mt_value}")
+                            if yield_data and hasattr(yield_data, 'energies') and yield_data.energies:
+                                num_points = len(yield_data.energies)
+                                logger.debug(f"Yield has {num_points} energy points")
+                                if num_points > 0:
+                                    first_e = yield_data.energies[0].value if hasattr(yield_data.energies[0], 'value') else yield_data.energies[0]
+                                    last_e = yield_data.energies[-1].value if hasattr(yield_data.energies[-1], 'value') else yield_data.energies[-1]
+                                    logger.debug(f"Energy range: {first_e} to {last_e} MeV")
                     except ValueError as e:
-                        # Log the error but continue parsing
-                        if debug: logger.debug(f"Error parsing energy-dependent yield for photon MT={mt}: {e}")
+                        if debug: logger.debug(f"Error parsing energy-dependent yield for MT={mt_value}: {e}")
                     except IndexError as e:
                         if debug:
-                            logger.debug(f"Index error parsing yield for photon MT={mt}: {e}")
-                            logger.debug(f"Problematic KY: {ky}, TY: {ty}, jxs_dlwp: {jxs_dlwp}")
+                            logger.debug(f"Index error parsing yield for MT={mt_value}: {e}")
+                            logger.debug(f"Problematic KY: {ky}, TY: {ty_value}, jxs_dlwp: {jxs_dlwp}")
     
     if debug:
         logger.debug("Finished read_dlwp_block")
 
 
-def read_dlwh_block(ace: Ace, debug: bool = False) -> None:
+def read_dlwh_block(ace: Ace, result: EnergyDistributionContainer, debug: bool = False) -> None:
     """
     Read the DLWH block for other particle energy distributions.
     
-    For each particle type i (1 to NXS(7)), the DLWH block starts at
-    XSS(JXS(32)+10*(i-1)+8) and has XSS(JXS(31)+i-1) entries.
+    According to Table 30, the energy distribution for reaction MT starts at:
+    JED + LOCC - 1, where JED is XSS(JXS(32) + 10*(i-1) + 8) and LOCC is 
+    provided by the LDLWH block.
+    
+    Note: According to the documentation, energy-dependent neutron yields are only 
+    available in the DLW and DLWP blocks, not in the DLWH block.
     
     Parameters
     ----------
     ace : Ace
-        The Ace object to update
+        The Ace object with XSS data and headers
+    result : EnergyDistributionContainer
+        Container to be filled with energy distribution data
     debug : bool, optional
         Whether to print debug information, defaults to False
     """
     if debug: logger.debug("Starting read_dlwh_block")
-    # Implementation similar to read_landh_block in parse_angular_locators.py
-    # Each particle type has its own JED value and number of MT values
     if not ace.reaction_mt_data or not ace.reaction_mt_data.has_particle_production_mt_data:
         if debug: logger.debug("Exiting read_dlwh_block: no particle production MT data available")
         return
     
-    # Get the base index for JXS(32)
-    jxs32_idx = ace.header.jxs_array[32] # JXS(32)
+    jxs32_idx = ace.header.jxs_array[32]
     if jxs32_idx <= 0:
         if debug: logger.debug(f"Invalid JXS(32) index: {jxs32_idx}")
         return
     
-    # Get the base index for JXS(31)
-    jxs31_idx = ace.header.jxs_array[31] # JXS(31)
+    jxs31_idx = ace.header.jxs_array[31]
     if jxs31_idx <= 0:
         if debug: logger.debug(f"Invalid JXS(31) index: {jxs31_idx}")
         return
     
     if debug: logger.debug(f"JXS(31) index: {jxs31_idx}, JXS(32) index: {jxs32_idx}")
     
-    # Prepare the particle_production list in the container
     num_particle_types = ace.header.num_particle_types
     if debug: logger.debug(f"Number of particle types: {num_particle_types}")
-    ace.energy_distributions.particle_production = [{} for _ in range(num_particle_types)]
+    result.particle_production = [{} for _ in range(num_particle_types)]
     
-    # For each particle type i, process its energy distributions
     for i in range(num_particle_types):
         if debug: logger.debug(f"Processing particle type {i+1}")
-        # Skip if no locators for this particle
         if i >= len(ace.energy_distribution_locators.particle_production):
             if debug: logger.debug(f"Skipping particle type {i+1}: no locators available")
             continue
@@ -390,13 +461,11 @@ def read_dlwh_block(ace: Ace, debug: bool = False) -> None:
             if debug: logger.debug(f"Skipping particle type {i+1}: empty locators list")
             continue
             
-        # Get MTs for this particle type
         particle_mts = ace.reaction_mt_data.particle_production[i] if i < len(ace.reaction_mt_data.particle_production) else []
         if not particle_mts or len(particle_mts) != len(locators):
             if debug: logger.debug(f"Issue with particle type {i+1}: MT count={len(particle_mts)}, locator count={len(locators)}")
             continue
         
-        # Get the JED value for this particle type
         jed_idx = jxs32_idx + 10 * i + 8 
         if jed_idx >= len(ace.xss_data):
             if debug: logger.debug(f"JED index {jed_idx} out of range for XSS data of length {len(ace.xss_data)}")
@@ -405,110 +474,63 @@ def read_dlwh_block(ace: Ace, debug: bool = False) -> None:
         jed = int(ace.xss_data[jed_idx].value)
         if debug: logger.debug(f"Particle type {i+1} JED={jed}, calculated at index {jed_idx}")
         
-        # Process each MT number with its corresponding locator
         for j, mt in enumerate(particle_mts):
             locator = locators[j]
-            # Extract the value from XssEntry before comparison
             locator_value = int(locator.value) if hasattr(locator, 'value') else int(locator)
             
-            if locator_value <= 0:
-                if debug: logger.debug(f"Skipping MT={mt}, invalid locator: {locator_value}")
-                continue  # Skip if the locator is invalid
+            # Get the actual MT value, not the XssEntry
+            mt_value = int(mt.value) if hasattr(mt, 'value') else int(mt)
             
-            # The locator is relative to JED for this particle
-            offset = jed + locator_value
-            if debug: logger.debug(f"Processing MT={mt}, locator={locator_value}, JED={jed}, offset={offset} (XSS length: {len(ace.xss_data)})")
+            if locator_value <= 0:
+                if debug: logger.debug(f"Skipping MT={mt_value}, invalid locator: {locator_value}")
+                continue
+            
+            # According to Table 30, the energy distribution starts at JED + LOCC - 1
+            offset = jed + locator_value - 1  # Subtract 1 to match the documentation
+            
+            if debug: logger.debug(f"Processing MT={mt_value}, locator={locator_value}, JED={jed}, offset={offset} (XSS length: {len(ace.xss_data)})")
             
             if offset >= len(ace.xss_data):
                 if debug: logger.debug(f"Warning: Offset {offset} out of range for XSS data of length {len(ace.xss_data)}")
                 continue
             
             try:
-                if debug: logger.debug(f"Calling read_energy_distribution for MT={mt}")
+                if debug: logger.debug(f"Calling read_energy_distribution for MT={mt_value}")
                 distributions = read_energy_distribution(ace, offset, debug=debug)
                 if distributions:
-                    if debug: logger.debug(f"Successfully read {len(distributions)} distributions for MT={mt}")
-                    ace.energy_distributions.particle_production[i][mt] = distributions
-                elif debug: logger.debug(f"No distributions found for MT={mt}")
+                    if debug: logger.debug(f"Successfully read {len(distributions)} distributions for MT={mt_value}")
+                    result.particle_production[i][mt_value] = distributions
+                elif debug: logger.debug(f"No distributions found for MT={mt_value}")
             except ValueError as e:
-                # Log the error but continue parsing other entries
-                if debug: logger.debug(f"Error parsing particle energy distribution for particle {i+1}, MT={mt}: {e}")
+                if debug: logger.debug(f"Error parsing particle energy distribution for particle {i+1}, MT={mt_value}: {e}")
             except IndexError as e:
                 if debug:
-                    logger.debug(f"Index error parsing distribution for particle {i+1}, MT={mt}: {e}")
+                    logger.debug(f"Index error parsing distribution for particle {i+1}, MT={mt_value}: {e}")
                     logger.debug(f"Problematic offset: {offset}, locator: {locator_value}, JED: {jed}")
-    
-    # Look for energy-dependent yields in particle production
-    if ace.particle_release and ace.particle_release.has_particle_production_data:
-        if debug: logger.debug("Processing energy-dependent yields for particle production")
-        # Initialize the particle_yields list if needed
-        if not ace.energy_distributions.particle_yields:
-            ace.energy_distributions.particle_yields = [{} for _ in range(num_particle_types)]
-            
-        # For each particle type
-        for i in range(num_particle_types):
-            if i >= len(ace.particle_release.particle_production):
-                if debug: logger.debug(f"Skipping particle type {i+1}: no particle release data")
-                continue
-                
-            # For each reaction with |TY| > 100, find and parse the yield
-            for j, ty in enumerate(ace.particle_release.particle_production[i]):
-                # Extract the value from XssEntry before using abs()
-                ty_value = ty.value if hasattr(ty, 'value') else ty
-                if abs(ty_value) > 100 and i < len(ace.reaction_mt_data.particle_production):
-                    if j < len(ace.reaction_mt_data.particle_production[i]):
-                        mt = ace.reaction_mt_data.particle_production[i][j]
-                        
-                        # Get the JED value for this particle type
-                        jed_idx = jxs32_idx + 10 * i + 8
-                        if jed_idx >= len(ace.xss_data):
-                            if debug: logger.debug(f"JED index {jed_idx} out of range for XSS data")
-                            continue
-                            
-                        jed = int(ace.xss_data[jed_idx].value)
-                        
-                        # Calculate KY = JED + |TY_i| - 101, ensure it's an integer
-                        ky = int(jed + abs(ty_value) - 101)
-                        if debug: logger.debug(f"Yield for particle {i+1}, MT={mt}, TY={ty_value}, KY={ky} (JED={jed}, |TY|-101={abs(ty_value)-101})")
-                        
-                        if ky >= len(ace.xss_data):
-                            if debug: logger.debug(f"Warning: KY={ky} out of range for XSS data of length {len(ace.xss_data)}")
-                            continue
-                        
-                        try:
-                            # Parse the yield data
-                            yield_data = parse_energy_dependent_yield(ace, ky)
-                            
-                            # Store the yield data
-                            ace.energy_distributions.particle_yields[i][mt] = yield_data
-                            if debug: logger.debug(f"Successfully parsed yield data for particle {i+1}, MT={mt}")
-                        except ValueError as e:
-                            # Log the error but continue parsing
-                            if debug: logger.debug(f"Error parsing energy-dependent yield for particle {i+1}, MT={mt}: {e}")
-                        except IndexError as e:
-                            if debug:
-                                logger.debug(f"Index error parsing yield for particle {i+1}, MT={mt}: {e}")
-                                logger.debug(f"Problematic KY: {ky}, TY: {ty}, JED: {jed}")
     
     if debug:
         logger.debug("Finished read_dlwh_block")
 
 
-def read_dned_block(ace: Ace, jxs_dned: int, debug: bool = False) -> None:
+def read_dned_block(ace: Ace, result: EnergyDistributionContainer, jxs_dned: int, debug: bool = False) -> None:
     """
     Read the DNED block for delayed neutron energy distributions.
+    
+    According to Table 30, the energy distribution for delayed neutron group starts at:
+    JED + LOCC - 1, where JED is JXS(27) and LOCC is provided by the DNEDL block.
     
     Parameters
     ----------
     ace : Ace
-        The Ace object to update
+        The Ace object with XSS data and headers
+    result : EnergyDistributionContainer
+        Container to be filled with energy distribution data
     jxs_dned : int
-        Starting index of the DNED block in the XSS array (JXS(27))
+        JXS(27) - Starting index of the DNED block in the XSS array
     debug : bool, optional
         Whether to print debug information, defaults to False
     """
     if debug: logger.debug(f"Starting read_dned_block at index {jxs_dned}")
-    # Implementation for delayed neutron energy distributions
     if not ace.energy_distribution_locators.has_delayed_neutron_data:
         if debug: logger.debug("Exiting read_dned_block: no delayed neutron data available")
         return
@@ -517,18 +539,17 @@ def read_dned_block(ace: Ace, jxs_dned: int, debug: bool = False) -> None:
     num_groups = len(locators)
     if debug: logger.debug(f"Found {num_groups} delayed neutron groups")
     
-    # Process each delayed neutron group
     for i in range(num_groups):
         locator = locators[i]
-        # Extract the value from XssEntry before comparison
         locator_value = int(locator.value) if hasattr(locator, 'value') else int(locator)
         
         if locator_value <= 0:
             if debug: logger.debug(f"Skipping group {i+1}, invalid locator: {locator_value}")
-            continue  # Skip if the locator is invalid
+            continue
         
-        # The locator is relative to JXS(27)
-        offset = jxs_dned + locator_value
+        # According to Table 30, the energy distribution starts at JED + LOCC - 1
+        offset = jxs_dned + locator_value - 1  # Subtract 1 to match the documentation
+        
         if debug: logger.debug(f"Processing group {i+1}, locator={locator_value}, offset={offset} (XSS length: {len(ace.xss_data)})")
         
         if offset >= len(ace.xss_data):
@@ -539,12 +560,10 @@ def read_dned_block(ace: Ace, jxs_dned: int, debug: bool = False) -> None:
             if debug: logger.debug(f"Calling read_energy_distribution for group {i+1}")
             distributions = read_energy_distribution(ace, offset, debug=debug)
             if distributions and len(distributions) > 0:
-                # For delayed neutrons, we only expect one distribution per group
-                ace.energy_distributions.delayed_neutron.append(distributions[0])
+                result.delayed_neutron.append(distributions[0])
                 if debug: logger.debug(f"Successfully read distribution for group {i+1}")
             elif debug: logger.debug(f"No distributions found for group {i+1}")
         except ValueError as e:
-            # Log the error but continue parsing other entries
             if debug: logger.debug(f"Error parsing delayed neutron energy distribution for group {i+1}: {e}")
         except IndexError as e:
             if debug:
@@ -558,21 +577,27 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
     """
     Read energy distribution data starting at the given offset in the XSS array.
     
-    Each energy distribution starts with a header containing:
+    According to Table 31, each energy distribution consists of:
     - LNW: Locator for the next law (0 if this is the last one)
     - LAW: Law number for the distribution
     - IDAT: Locator for the law data (relative to JED)
-    - N_R: Number of interpolation regions to define law applicability
+    - NR: Number of interpolation regions to define law applicability
     - NBT, INT arrays: ENDF interpolation parameters
-    - N_E: Number of energies for law applicability
+    - NE: Number of energies for law applicability
     - E, P arrays: Energy points and probability for law validity
+    
+    For multiple laws:
+    - If LNW=0, this is the last law (always used regardless of other conditions)
+    - For a given incident energy E, LAW is used only if random_number < P(E)
+    - If E < E(1), use P(1)
+    - If E > E(NE), use P(NE)
     
     Parameters
     ----------
     ace : Ace
         The Ace object containing the XSS array
     offset : int
-        Starting index in the XSS array
+        Starting index in the XSS array (JED + LOCC - 1)
     debug : bool, optional
         Whether to print debug information, defaults to False
         
@@ -586,23 +611,19 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
     
     current_offset = offset
     while current_offset < len(ace.xss_data):
-        # Read the energy distribution header
-        lnw_entry = ace.xss_data[current_offset]      # Location of next law relative to JED
-        law_entry = ace.xss_data[current_offset + 1]  # Law number
-        idat_entry = ace.xss_data[current_offset + 2] # Location of data for this law relative to JED
+        lnw_entry = ace.xss_data[current_offset]
+        law_entry = ace.xss_data[current_offset + 1]
+        idat_entry = ace.xss_data[current_offset + 2]
         
-        # Convert to integer values for processing
         lnw = int(lnw_entry.value)
         law = int(law_entry.value)
         idat = int(idat_entry.value)
         
-        # Read law applicability regime parameters
-        n_r_entry = ace.xss_data[current_offset + 3]  # Number of interpolation regions
+        n_r_entry = ace.xss_data[current_offset + 3]
         n_r = int(n_r_entry.value)
         
         idx = current_offset + 4
         
-        # Read interpolation parameters if present
         nbt = []
         interp = []
         if n_r > 0:
@@ -611,7 +632,6 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
             interp = [int(ace.xss_data[idx + i].value) for i in range(n_r)]
             idx += n_r
         
-        # Read energy points and probability of law validity
         n_e_entry = ace.xss_data[idx]
         n_e = int(n_e_entry.value)
         idx += 1
@@ -619,13 +639,11 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
         energies = []
         probabilities = []
         if n_e > 0:
-            # Store XssEntry objects directly
             energies = ace.xss_data[idx:idx + n_e]
             idx += n_e
             probabilities = ace.xss_data[idx:idx + n_e]
             idx += n_e
         
-        # Calculate absolute index for law data
         idat_absolute = jed + idat 
         
         if debug: 
@@ -636,7 +654,6 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
                 logger.debug(f"Energy points: {[entry.value for entry in energies]}")
                 logger.debug(f"Probabilities: {[entry.value for entry in probabilities]}")
         
-        # Create the appropriate energy distribution object based on the law
         distribution = create_energy_distribution(
             ace, law, idat, idat_absolute, 
             energies, probabilities, nbt, interp,
@@ -648,13 +665,11 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
             if debug: logger.debug(f"Successfully created distribution for law {law}")
         elif debug: logger.debug(f"Failed to create distribution for law {law}")
         
-        # Check if this is the last law
         if lnw == 0:
             if debug: logger.debug("Reached last law (LNW=0)")
             break
             
-        # Move to the next law
-        current_offset = jed + lnw  # LNW is relative to JED
+        current_offset = jed + lnw
         if debug:  logger.debug(f"Moving to next law at offset {current_offset}")
     
     if debug: logger.debug(f"Finished reading distributions, found {len(distributions)} laws")
@@ -697,7 +712,6 @@ def create_energy_distribution(
     Optional[EnergyDistribution]
         Energy distribution object, or None if the law is not supported
     """
-    # Create a base distribution with applicability information
     base_distribution = EnergyDistribution(
         law=law, 
         idat=idat
@@ -709,64 +723,48 @@ def create_energy_distribution(
     
     if debug: logger.debug(f"Creating energy distribution for law {law}")
     
-    # Parse the law-specific data based on the law number
     if law == 1:
-        # Law 1: Tabular energy distribution
         if debug: logger.debug("Parsing tabular energy distribution (Law 1)")
         return parse_tabular_energy_distribution(ace, base_distribution, idat_absolute)
     elif law == 2:
-        # Law 2: Discrete energy distribution
         if debug: logger.debug("Parsing discrete energy distribution (Law 2)")
         return parse_discrete_energy_distribution(ace, base_distribution, idat_absolute)
     elif law == 3:
-        # Law 3: Level scattering
         if debug: logger.debug("Parsing level scattering (Law 3)")
         return parse_level_scattering(ace, base_distribution, idat_absolute)
     elif law == 4:
-        # Law 4: Continuous energy-angle distribution
         if debug: logger.debug("Parsing continuous energy-angle distribution (Law 4)")
         return parse_continuous_energy_angle_distribution(ace, base_distribution, idat_absolute)
     elif law == 5:
-        # Law 5: General evaporation spectrum
         if debug: logger.debug("Parsing general evaporation spectrum (Law 5)")
         return parse_general_evaporation_spectrum(ace, base_distribution, idat_absolute)
     elif law == 7:
-        # Law 7: Maxwell fission spectrum
         if debug: logger.debug("Parsing Maxwell fission spectrum (Law 7)")
         return parse_maxwell_fission_spectrum(ace, base_distribution, idat_absolute)
     elif law == 9:
-        # Law 9: Evaporation spectrum
         if debug:  logger.debug("Parsing evaporation spectrum (Law 9)")
         return parse_evaporation_spectrum(ace, base_distribution, idat_absolute)
     elif law == 11:
-        # Law 11: Energy-dependent Watt spectrum
         if debug: logger.debug("Parsing energy-dependent Watt spectrum (Law 11)")
         return parse_energy_dependent_watt_spectrum(ace, base_distribution, idat_absolute)
     elif law == 22:
-        # Law 22: Tabular Linear Functions of Incident Energy Out
         if debug: logger.debug("Parsing tabular linear functions (Law 22)")
         return parse_tabular_linear_functions(ace, base_distribution, idat_absolute)
     elif law == 24:
-        # Law 24: Tabular Energy Multipliers
         if debug: logger.debug("Parsing tabular energy multipliers (Law 24)")
         return parse_tabular_energy_multipliers(ace, base_distribution, idat_absolute)
     elif law == 44:
-        # Law 44: Kalbach-Mann Correlated Energy-Angle Distribution
         if debug: logger.debug("Parsing Kalbach-Mann distribution (Law 44)")
         return parse_kalbach_mann_distribution(ace, base_distribution, idat_absolute)
     elif law == 61:
-        # Law 61: Tabulated Angle-Energy Distribution
         if debug: logger.debug("Parsing tabulated angle-energy distribution (Law 61)")
         return parse_tabulated_angle_energy_distribution(ace, base_distribution, idat_absolute)
     elif law == 66:
-        # Law 66: N-body Phase Space Distribution
         if debug: logger.debug("Parsing N-body phase space distribution (Law 66)")
         return parse_nbody_phase_space_distribution(ace, base_distribution, idat_absolute)
     elif law == 67:
-        # Law 67: Laboratory Angle-Energy Distribution
         if debug: logger.debug("Parsing laboratory angle-energy distribution (Law 67)")
         return parse_laboratory_angle_energy_distribution(ace, base_distribution, idat_absolute)
     else:
-        # For unsupported laws, just return the base distribution
         if debug: logger.debug(f"No specific parser for law {law}, returning base distribution")
         return base_distribution

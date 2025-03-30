@@ -3,8 +3,8 @@ Module for comparing nu-bar data in ACE format.
 """
 
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.nubar.nubar import NuData, NuPolynomial, NuTabulated
-from mcnpy.ace.comparison.compare_utils import compare_arrays, compare_floats
+from mcnpy.ace.classes.nubar.nubar import NuData
+from mcnpy.ace.comparison.compare_utils import compare_arrays
 
 def compare_nubar(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool = True) -> bool:
     """Compare nu-bar data between two ACE objects."""
@@ -30,8 +30,8 @@ def compare_nubar(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool =
         return False
     
     # Compare presence of delayed nubar
-    has_delayed1 = ace1.nubar.has_delayed_nubar
-    has_delayed2 = ace2.nubar.has_delayed_nubar
+    has_delayed1 = ace1.nubar.has_delayed
+    has_delayed2 = ace2.nubar.has_delayed
     
     if has_delayed1 != has_delayed2:
         if verbose:
@@ -39,26 +39,26 @@ def compare_nubar(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool =
         return False
     
     # Compare prompt nubar if present
-    if ace1.nubar.prompt_nubar is not None and ace2.nubar.prompt_nubar is not None:
-        if not compare_nudata(ace1.nubar.prompt_nubar, ace2.nubar.prompt_nubar, tolerance, "Prompt nubar", verbose):
+    if ace1.nubar.prompt is not None and ace2.nubar.prompt is not None:
+        if not compare_nudata(ace1.nubar.prompt, ace2.nubar.prompt, tolerance, "Prompt nubar", verbose):
             return False
-    elif ace1.nubar.prompt_nubar is not None or ace2.nubar.prompt_nubar is not None:
+    elif ace1.nubar.prompt is not None or ace2.nubar.prompt is not None:
         if verbose:
             print("Nu-bar mismatch: Prompt nubar present in only one object")
         return False
     
     # Compare total nubar if present
-    if ace1.nubar.total_nubar is not None and ace2.nubar.total_nubar is not None:
-        if not compare_nudata(ace1.nubar.total_nubar, ace2.nubar.total_nubar, tolerance, "Total nubar", verbose):
+    if ace1.nubar.total is not None and ace2.nubar.total is not None:
+        if not compare_nudata(ace1.nubar.total, ace2.nubar.total, tolerance, "Total nubar", verbose):
             return False
-    elif ace1.nubar.total_nubar is not None or ace2.nubar.total_nubar is not None:
+    elif ace1.nubar.total is not None or ace2.nubar.total is not None:
         if verbose:
             print("Nu-bar mismatch: Total nubar present in only one object")
         return False
     
     # Compare delayed nubar if present
     if has_delayed1 and has_delayed2:
-        if not compare_nudata(ace1.nubar.delayed_nubar, ace2.nubar.delayed_nubar, tolerance, "Delayed nubar", verbose):
+        if not compare_nudata(ace1.nubar.delayed, ace2.nubar.delayed, tolerance, "Delayed nubar", verbose):
             return False
     
     return True

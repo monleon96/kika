@@ -1,7 +1,5 @@
-from typing import List, Optional
 import logging
-from mcnpy.ace.classes.particle_release import ParticleRelease
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.particle_release.particle_release import ParticleRelease
 
 # Setup logger
 logger = logging.getLogger(__name__)

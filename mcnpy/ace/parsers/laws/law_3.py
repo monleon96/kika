@@ -1,5 +1,5 @@
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution import EnergyDistribution, LevelScattering
+from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution, LevelScattering
 from mcnpy.ace.parsers.xss import XssEntry
 
 def parse_level_scattering(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> LevelScattering:

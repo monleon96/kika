@@ -8,11 +8,11 @@ from mcnpy.ace.comparison.compare_ace import compare_arrays
 def compare_particle_production_xs(ace1: Ace, ace2: Ace, tolerance: float = 1e-6, verbose: bool = True) -> bool:
     """Compare particle production cross section data between two ACE objects."""
     # Check if both objects have particle production cross section data
-    has_particle_xs1 = (ace1.particle_production_xs_data is not None and 
-                       ace1.particle_production_xs_data.has_data)
+    has_particle_xs1 = (ace1.secondary_particle_cross_sections is not None and 
+                       ace1.secondary_particle_cross_sections.has_data)
     
-    has_particle_xs2 = (ace2.particle_production_xs_data is not None and 
-                       ace2.particle_production_xs_data.has_data)
+    has_particle_xs2 = (ace2.secondary_particle_cross_sections is not None and 
+                       ace2.secondary_particle_cross_sections.has_data)
     
     if not has_particle_xs1 and not has_particle_xs2:
         return True
@@ -23,8 +23,8 @@ def compare_particle_production_xs(ace1: Ace, ace2: Ace, tolerance: float = 1e-6
         return False
     
     # Compare particle indices
-    particle_indices1 = set(ace1.particle_production_xs_data.particle_data.keys())
-    particle_indices2 = set(ace2.particle_production_xs_data.particle_data.keys())
+    particle_indices1 = set(ace1.secondary_particle_cross_sections.particle_data.keys())
+    particle_indices2 = set(ace2.secondary_particle_cross_sections.particle_data.keys())
     
     if particle_indices1 != particle_indices2:
         if verbose:
@@ -35,8 +35,8 @@ def compare_particle_production_xs(ace1: Ace, ace2: Ace, tolerance: float = 1e-6
     
     # Compare each particle's cross section data
     for particle_idx in sorted(particle_indices1):
-        xs_data1 = ace1.particle_production_xs_data.particle_data[particle_idx]
-        xs_data2 = ace2.particle_production_xs_data.particle_data[particle_idx]
+        xs_data1 = ace1.secondary_particle_cross_sections.particle_data[particle_idx]
+        xs_data2 = ace2.secondary_particle_cross_sections.particle_data[particle_idx]
         
         # Compare energy grid indices
         # Note: The energy grid index can differ between files as long as the referenced energy points are the same

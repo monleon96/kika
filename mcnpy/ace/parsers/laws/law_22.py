@@ -1,5 +1,5 @@
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution import EnergyDistribution, TabularLinearFunctions
+from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution, TabularLinearFunctions
 
 def parse_tabular_linear_functions(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> TabularLinearFunctions:
     """

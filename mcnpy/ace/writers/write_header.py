@@ -84,10 +84,12 @@ def write_header(header):
     # Format IZAW array (16 pairs over 4 lines)
     # Format for each line: 4(I7,F11.0) - right-justified integers and floats
     if header.izaw_array:
+        # Skip index 0 and process 16 elements starting from index 1
         for i in range(0, 16, 4):
             line = ""
             for j in range(4):
-                idx = i + j
+                # Get index from original 1-indexed array but account for 0th element
+                idx = i + j + 1  # Add 1 to start from index 1
                 if idx < len(header.izaw_array):
                     za, awr = header.izaw_array[idx]
                 else:
@@ -102,7 +104,8 @@ def write_header(header):
         for i in range(0, 16, 8):
             line_parts = []
             for j in range(8):
-                idx = i + j
+                # Get index from original 1-indexed array
+                idx = i + j + 1  # Add 1 to start from index 1
                 if idx < len(header.nxs_array):
                     value = header.nxs_array[idx]
                 else:
@@ -116,7 +119,8 @@ def write_header(header):
         for i in range(0, 32, 8):
             line_parts = []
             for j in range(8):
-                idx = i + j
+                # Get index from original 1-indexed array
+                idx = i + j + 1  # Add 1 to start from index 1
                 if idx < len(header.jxs_array):
                     value = header.jxs_array[idx]
                 else:
