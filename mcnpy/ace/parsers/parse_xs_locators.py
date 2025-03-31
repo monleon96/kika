@@ -1,6 +1,6 @@
 import logging
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.cross_section.xs_locators import CrossSectionLocators
+from mcnpy.ace.classes.cross_section.cross_section_locators import CrossSectionLocators
 
 # Setup logger
 logger = logging.getLogger(__name__)

@@ -1,17 +1,17 @@
 """
 Utility for plotting cross sections from ACE files.
 
-This module provides a simple function for plotting cross sections from ACE files.
+This module provides a simple function for plotting cross sections from ACE objects.
 """
 
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import List, Optional, Tuple
-from mcnpy.ace.parsers.parse_ace import read_ace
+from typing import List, Optional, Tuple, Union
+from mcnpy.ace.classes.ace import Ace
 
 def plot_cross_sections(
-    ace_files: List[str], 
+    ace_objects: List[Ace], 
     mt_number: int,
     labels: Optional[List[str]] = None,
     energy_range: Optional[Tuple[float, float]] = None,
@@ -22,16 +22,16 @@ def plot_cross_sections(
     **plot_kwargs
 ) -> plt.Figure:
     """
-    Plot cross sections from multiple ACE files for a specific MT number.
+    Plot cross sections from multiple ACE objects for a specific MT number.
     
     Parameters
     ----------
-    ace_files : List[str]
-        List of paths to ACE files
+    ace_objects : List[Ace]
+        List of Ace objects
     mt_number : int
         MT number to plot
     labels : List[str], optional
-        Labels to use in the legend (defaults to filenames)
+        Labels to use in the legend (defaults to ZAID if available)
     energy_range : Tuple[float, float], optional
         Energy range to plot (min, max) in MeV
     figsize : Tuple[float, float], optional
@@ -52,40 +52,34 @@ def plot_cross_sections(
         
     Examples
     --------
-    >>> # Compare total cross section between two ACE files
-    >>> plot_cross_sections(['u235.ace', 'u238.ace'], 1)
+    >>> # Compare total cross section between two ACE objects
+    >>> plot_cross_sections([u235_ace, u238_ace], 1)
     
     >>> # With custom labels and energy range
     >>> plot_cross_sections(
-    ...     ['fe56.ace', 'fe54.ace'], 
+    ...     [fe56_ace, fe54_ace], 
     ...     2,  # Elastic scattering
     ...     labels=['Fe-56', 'Fe-54'],
     ...     energy_range=(1e-5, 20.0)
     ... )
     """
-
-    
-    # Read ACE files
-    ace_data = []
-    for file_path in ace_files:
-        try:
-            # Get base filename without directory and extension
-            filename = os.path.basename(file_path)
-            ace = read_ace(file_path)
-            ace_data.append((filename, ace))
-        except Exception as e:
-            print(f"Warning: Could not read ACE file {file_path}: {str(e)}")
-    
-    if not ace_data:
-        print("No ACE files could be read successfully")
+    if not ace_objects:
+        print("No ACE objects provided")
         return None
-        
-    # Use filenames as default labels if none provided
+    
+    # Generate default labels if none provided
     if labels is None:
-        labels = [filename for filename, _ in ace_data]
-    elif len(labels) != len(ace_data):
-        print(f"Warning: {len(labels)} labels provided for {len(ace_data)} files, using filenames instead")
-        labels = [filename for filename, _ in ace_data]
+        labels = []
+        for i, ace in enumerate(ace_objects):
+            if ace.header and ace.header.zaid:
+                labels.append(ace.header.zaid)
+            elif ace.filename:
+                labels.append(os.path.basename(ace.filename))
+            else:
+                labels.append(f"ACE Object {i+1}")
+    elif len(labels) != len(ace_objects):
+        print(f"Warning: {len(labels)} labels provided for {len(ace_objects)} objects, using default labels instead")
+        labels = [f"ACE Object {i+1}" for i in range(len(ace_objects))]
     
     # Create a figure
     fig, ax = plt.subplots(figsize=figsize)
@@ -110,8 +104,8 @@ def plot_cross_sections(
     # Colors for plotting
     colors = plt.cm.tab10.colors  # Use a color cycle
     
-    # Plot cross section from each ACE file
-    for i, (filename, ace) in enumerate(ace_data):
+    # Plot cross section from each ACE object
+    for i, ace in enumerate(ace_objects):
         try:
             # Get cross section data
             xs_data = ace.get_cross_section(mt_number)
@@ -130,7 +124,8 @@ def plot_cross_sections(
             ax.plot(energy, xs, label=labels[i], color=color, **plot_kwargs)
             
         except Exception as e:
-            print(f"Warning: Could not plot {mt_desc} for {filename}: {str(e)}")
+            label = labels[i] if i < len(labels) else f"ACE Object {i+1}"
+            print(f"Warning: Could not plot {mt_desc} for {label}: {str(e)}")
     
     # Set up the plot
     if log_scale:

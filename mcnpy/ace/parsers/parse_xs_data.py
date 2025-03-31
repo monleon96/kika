@@ -1,5 +1,5 @@
 import logging
-from mcnpy.ace.classes.cross_section.xs_data import CrossSectionData, ReactionCrossSection
+from mcnpy.ace.classes.cross_section.cross_section_data import CrossSectionData, ReactionCrossSection
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -148,22 +148,30 @@ def read_xs_data_block(ace, debug=False):
                 logger.debug(f"  XS data range: XSS[{xs_start}:{xs_end}]")
             
             if xs_end <= len(ace.xss_data):
-                # Store XssEntry objects directly
-                xs_values = ace.xss_data[xs_start:xs_end]
+                # Store references to the original XssEntry objects instead of just their values
+                xs_entries = ace.xss_data[xs_start:xs_end]
                 
-                # Create and store ReactionCrossSection with 0-indexed energy index
+                # Get energy entries for this reaction
+                if ace.esz_block and ace.esz_block.energies:
+                    end_energy_idx = min(python_energy_idx + num_energies, len(ace.esz_block.energies))
+                    energy_entries = ace.esz_block.energies[python_energy_idx:end_energy_idx]
+                else:
+                    energy_entries = []
+                
+                # Create and store ReactionCrossSection with original XssEntry objects
                 reaction_xs = ReactionCrossSection(
-                    mt=mt_entry,
-                    energy_idx=python_energy_idx,  # Store 0-indexed value
+                    mt=mt_value,
+                    energy_idx=python_energy_idx,
                     num_energies=num_energies,
-                    xs_values=xs_values
+                    _xs_entries=xs_entries,
+                    _energy_entries=energy_entries
                 )
                 
                 # Store using the integer MT value as the key for lookup
                 ace.cross_section.reaction[mt_value] = reaction_xs
                 
                 if debug:
-                    logger.debug(f"  Successfully read {len(xs_values)} XS values for MT={mt_value}")
+                    logger.debug(f"  Successfully read {len(xs_entries)} XS values for MT={mt_value}")
             else:
                 if debug:
                     logger.debug(f"  ERROR: XS data would extend beyond XSS array: {xs_end} > {len(ace.xss_data)}")

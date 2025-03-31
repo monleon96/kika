@@ -57,7 +57,7 @@ def read_esz_block(ace, debug=False):
     if debug:
         logger.debug(f"Reading energy grid from XSS[{esz_idx}:{esz_idx+n_energy}]")
         logger.debug(f"Reading total XS from XSS[{esz_idx+n_energy}:{esz_idx+2*n_energy}]")
-        logger.debug(f"Reading disappearance XS from XSS[{esz_idx+2*n_energy}:{esz_idx+3*n_energy}]")
+        logger.debug(f"Reading absorption XS from XSS[{esz_idx+2*n_energy}:{esz_idx+3*n_energy}]")
         logger.debug(f"Reading elastic XS from XSS[{esz_idx+3*n_energy}:{esz_idx+4*n_energy}]")
         logger.debug(f"Reading heating numbers from XSS[{esz_idx+4*n_energy}:{esz_idx+5*n_energy}]")
     
@@ -70,6 +70,18 @@ def read_esz_block(ace, debug=False):
     
     if debug:
         logger.debug(f"Read {n_energy} energy points and cross sections")
+    
+    # Initialize cross_section if needed and add standard cross sections
+    if ace.cross_section is None:
+        from mcnpy.ace.classes.cross_section.cross_section_data import CrossSectionData
+        ace.cross_section = CrossSectionData()
+    
+    # Set energy grid and add standard cross sections
+    ace.cross_section.set_energy_grid(esz_block.energies)
+    ace.cross_section.add_standard_xs(esz_block)
+    
+    if debug and ace.cross_section:
+        logger.debug(f"Added standard cross sections (MT=1,2,101) to cross_section object")
     
     # Return the EszBlock for eager loading
     return esz_block

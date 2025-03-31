@@ -10,8 +10,8 @@ from mcnpy.ace.classes.delayed_neutron.delayed_neutron import DelayedNeutronData
 from mcnpy.ace.classes.mt_reaction.mtr import ReactionMTData
 from mcnpy.ace.classes.q_values import QValues
 from mcnpy.ace.classes.particle_release.particle_release import ParticleRelease
-from mcnpy.ace.classes.cross_section.xs_locators import CrossSectionLocators
-from mcnpy.ace.classes.cross_section.xs_data import CrossSectionData
+from mcnpy.ace.classes.cross_section.cross_section_locators import CrossSectionLocators
+from mcnpy.ace.classes.cross_section.cross_section_data import CrossSectionData
 from mcnpy.ace.classes.angular_distribution.angular_locators import AngularDistributionLocators
 from mcnpy.ace.classes.angular_distribution.angular_distribution import AngularDistributionContainer
 from mcnpy.ace.classes.energy_distribution.energy_distribution_locators import EnergyDistributionLocators
@@ -105,6 +105,18 @@ class Ace:
         if self.esz_block and self.esz_block.elastic_xs:
             return [xs.value for xs in self.esz_block.elastic_xs]
         return None
+    
+    def copy(self) -> 'Ace':
+        """
+        Create an exact copy of the Ace object.
+        
+        Returns:
+        --------
+        Ace
+            A new Ace object that is an exact copy of this one
+        """
+        import copy
+        return copy.deepcopy(self)
     
     @property
     def heating_numbers(self):
@@ -214,7 +226,8 @@ class Ace:
                     if not self.cross_section or not self.cross_section.has_data:
                         raise ValueError(f"Cross section data for MT={mt} is not available")
                         
-                    reaction_xs = self.cross_section.get_reaction_xs(mt)
+                    # FIX: Use the reaction dictionary directly instead of calling a non-existent method
+                    reaction_xs = self.cross_section.reaction.get(mt)
                     if not reaction_xs:
                         raise ValueError(f"Cross section data for MT={mt} is not available")
                     
@@ -228,7 +241,7 @@ class Ace:
                         raise ValueError(f"Invalid energy index or number of energies for MT={mt}")
                     
                     # Extract the cross section values from XssEntry objects
-                    rx_xs_values = [xs.value for xs in reaction_xs.xs_values]
+                    rx_xs_values = [xs.value for xs in reaction_xs._xs_entries]
                     
                     # Verify the length matches the declared number of energies
                     if len(rx_xs_values) != num_energies:

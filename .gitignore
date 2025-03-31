@@ -14,3 +14,5 @@ _README.md
 # Directories
 myworkspace/
 mcnpy/ace/files/
+mcnpy/cov/files/
+mcnpy/sampling/perturbed_ace_files/

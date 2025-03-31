@@ -47,7 +47,7 @@ def read_ace(filename, debug=False):
     ace : Ace
         An Ace object containing the parsed data
     """
-    debug1 = False
+    debug1 = True
 
     if debug:
         logger.debug(f"Reading ACE file: {filename}")

@@ -4,6 +4,7 @@ from .input.pert_generator import generate_PERTcards, perturb_material
 from .sensitivities.sensitivity_processing import create_sdf_data, compute_sensitivity, plot_sens_comparison
 from .sensitivities.sdf import SDFData
 from .ace.parsers.parse_ace import read_ace
+from .cov.parse_covmat import read_scale_covmat
 from . import energy_grids
 from ._config import LIBRARY_VERSION, AUTHOR
 
@@ -16,5 +17,6 @@ __all__ = [
     'compute_sensitivity', 'plot_sens_comparison',
     'SDFData', 'create_sdf_data',
     'read_ace',
+    'read_scale_covmat',
 ]
 
