@@ -14,7 +14,7 @@ from mcnpy.ace.parsers.parse_angular_locators import read_angular_locator_blocks
 from mcnpy.ace.parsers.parse_angular_distribution import read_angular_distribution_blocks
 from mcnpy.ace.parsers.parse_energy_distribution_locators import read_energy_locator_blocks
 from mcnpy.ace.parsers.parse_energy_distributions import read_energy_distribution_blocks
-from mcnpy.ace.classes.energy_distribution.energy_distribution_container import EnergyDistributionContainer
+from mcnpy.ace.classes.energy_distribution.container import EnergyDistributionContainer
 from mcnpy.ace.parsers.parse_gpd import read_gpd_block
 from mcnpy.ace.parsers.parse_photon_production_xs import read_production_xs_blocks
 from mcnpy.ace.parsers.parse_yield_multipliers import read_yield_multiplier_blocks

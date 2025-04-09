@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution
-from mcnpy.ace.classes.energy_distribution.energy_distribution_container import EnergyDistributionContainer
+from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy.ace.classes.energy_distribution.container import EnergyDistributionContainer
 from mcnpy.ace.parsers.laws import (
     parse_tabular_energy_distribution,
     parse_discrete_energy_distribution,

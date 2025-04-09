@@ -1,5 +1,7 @@
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution, NBodyPhaseSpaceDistribution
+from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy.ace.classes.energy_distribution.distributions.phase_space import NBodyPhaseSpaceDistribution
+
 
 def parse_nbody_phase_space_distribution(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> NBodyPhaseSpaceDistribution:
     """

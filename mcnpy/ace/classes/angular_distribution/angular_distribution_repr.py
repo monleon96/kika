@@ -57,8 +57,8 @@ def angular_distribution_repr(self) -> str:
             "Number of Energy Points", num_energies,
             width1=property_col_width, width2=value_col_width)
         
-        min_energy = self.energies[0].value
-        max_energy = self.energies[-1].value
+        min_energy = self.energies[0]  # Now directly a float
+        max_energy = self.energies[-1]  # Now directly a float
         energy_range = f"{min_energy:.6g} - {max_energy:.6g} MeV"
         info_table += "{:<{width1}} {:<{width2}}\n".format(
             "Energy Range", energy_range,
@@ -90,7 +90,20 @@ def angular_distribution_repr(self) -> str:
         "fig, ax = angular_distribution.plot(energy=2.0)\n"
     )
     
-    return header + description + info_table + methods_section + "\n" + example
+    # Add property descriptions
+    properties = {
+        ".mt": "MT number of the reaction (int)",
+        ".energies": "List of incident energy points as float values (List[float])"
+    }
+    
+    properties_section = create_repr_section(
+        "Property Access:", 
+        properties, 
+        total_width=header_width, 
+        method_col_width=property_col_width
+    )
+    
+    return header + description + info_table + properties_section + "\n" + methods_section + "\n" + example
 
 
 def isotropic_distribution_repr(self) -> str:
@@ -111,6 +124,11 @@ def isotropic_distribution_repr(self) -> str:
         "This object represents isotropic angular scattering, where the cosine of the\n"
         "scattering angle is uniformly distributed between -1 and 1. This means the\n"
         "probability density is constant at 0.5 across the entire range.\n\n"
+        "Data Structure Overview:\n"
+        "- The ACE file may indicate isotropic scattering in two ways:\n"
+        "  * By setting the LOCB value to 0 in the locator table\n"
+        "  * By storing a distribution table with NE=0 (number of energy points)\n"
+        "- No actual distribution data is stored for isotropic scattering\n\n"
     )
     
     # Create a summary table of data information
@@ -148,8 +166,8 @@ def isotropic_distribution_repr(self) -> str:
             "Number of Energy Points", num_energies,
             width1=property_col_width, width2=value_col_width)
         
-        min_energy = self.energies[0].value
-        max_energy = self.energies[-1].value
+        min_energy = self.energies[0]  # Now directly a float
+        max_energy = self.energies[-1]  # Now directly a float
         energy_range = f"{min_energy:.6g} - {max_energy:.6g} MeV"
         info_table += "{:<{width1}} {:<{width2}}\n".format(
             "Energy Range", energy_range,
@@ -161,6 +179,19 @@ def isotropic_distribution_repr(self) -> str:
     
     info_table += "-" * header_width + "\n\n"
     
+    # Raw data properties section
+    properties = {
+        ".mt": "MT number of the reaction (int)",
+        ".energies": "List of incident energy points as float values (List[float])"
+    }
+    
+    properties_section = create_repr_section(
+        "Raw Data Properties (Direct from ACE file):", 
+        properties, 
+        total_width=header_width, 
+        method_col_width=property_col_width
+    )
+    
     # Methods section
     methods = {
         ".sample_mu(energy, random_value)": "Sample a cosine μ = 2*random_value - 1",
@@ -169,13 +200,25 @@ def isotropic_distribution_repr(self) -> str:
     }
     
     methods_section = create_repr_section(
-        "Available Methods:", 
+        "Calculation Methods:", 
         methods, 
         total_width=header_width, 
         method_col_width=property_col_width
     )
     
-    return header + description + info_table + methods_section
+    # Add example for directly accessing property
+    example = (
+        "Example:\n"
+        "--------\n"
+        "# Access the MT number\n"
+        "mt_value = int(distribution.mt.value)\n\n"
+        "# Sample a cosine for any energy (will always be uniform)\n"
+        "mu = distribution.sample_mu(energy=1.0, random_value=0.5)  # Returns 0.0\n\n"
+        "# Create a plot showing the uniform distribution\n"
+        "fig, ax = distribution.plot(energy=1.0)\n"
+    )
+    
+    return header + description + info_table + properties_section + "\n" + methods_section + "\n" + example
 
 
 def equiprobable_distribution_repr(self) -> str:
@@ -196,6 +239,12 @@ def equiprobable_distribution_repr(self) -> str:
         "This object represents an angular distribution using 32 equiprobable bins.\n"
         "The cosine range [-1, 1] is divided into 32 bins such that each bin has\n"
         "the same probability (1/32). The bin boundaries vary with incident energy.\n\n"
+        "Data Structure Overview:\n"
+        "- For each incident energy point, the ACE file stores 33 cosine values\n"
+        "  that define the boundaries of 32 equiprobable bins\n"
+        "- The first value is always -1 and the last is +1\n"
+        "- Each bin has a probability of 1/32 = 0.03125\n"
+        "- The density within each bin is constant (flat histogram)\n\n"
     )
     
     # Create a summary table of data information
@@ -229,8 +278,8 @@ def equiprobable_distribution_repr(self) -> str:
             "Number of Energy Points", num_energies,
             width1=property_col_width, width2=value_col_width)
         
-        min_energy = self.energies[0].value
-        max_energy = self.energies[-1].value
+        min_energy = self.energies[0]  # Now directly a float
+        max_energy = self.energies[-1]  # Now directly a float
         energy_range = f"{min_energy:.6g} - {max_energy:.6g} MeV"
         info_table += "{:<{width1}} {:<{width2}}\n".format(
             "Energy Range", energy_range,
@@ -245,13 +294,27 @@ def equiprobable_distribution_repr(self) -> str:
         
         # Show bin boundaries for the first energy point if available
         if num_bin_sets > 0 and len(self.cosine_bins[0]) > 0:
-            first_set = [c.value for c in self.cosine_bins[0]]
+            first_set = self.cosine_bins[0]  # Now directly a list of floats
             first_bins = f"[{first_set[0]:.3f}, {first_set[-1]:.3f}] ({len(first_set)-1} bins)"
             info_table += "{:<{width1}} {:<{width2}}\n".format(
                 "First Energy Bin Range", first_bins,
                 width1=property_col_width, width2=value_col_width)
     
     info_table += "-" * header_width + "\n\n"
+    
+    # Raw data properties section
+    properties = {
+        ".mt": "MT number of the reaction (int)",
+        ".energies": "List of incident energy points as float values (List[float])",
+        ".cosine_bins": "List of cosine bin boundaries for each energy as float values (List[List[float]])"
+    }
+    
+    properties_section = create_repr_section(
+        "Raw Data Properties (Direct from ACE file):", 
+        properties, 
+        total_width=header_width, 
+        method_col_width=property_col_width
+    )
     
     # Methods section
     methods = {
@@ -261,7 +324,7 @@ def equiprobable_distribution_repr(self) -> str:
     }
     
     methods_section = create_repr_section(
-        "Available Methods:", 
+        "Calculation Methods:", 
         methods, 
         total_width=header_width, 
         method_col_width=property_col_width
@@ -271,14 +334,19 @@ def equiprobable_distribution_repr(self) -> str:
     example = (
         "Example:\n"
         "--------\n"
+        "# Directly access raw cosine bin boundaries for the first energy point\n"
+        "first_energy = distribution.energies[0]  # Returns a float, not XssEntry\n"
+        "bin_boundaries = distribution.cosine_bins[0]  # Returns a list of floats\n"
+        "# Note: 33 values define 32 equiprobable bins\n"
+        "\n"
         "# Sample a cosine at 1 MeV with a random value of 0.5\n"
         "# This will select the bin containing the 50% quantile\n"
-        "mu = angular_distribution.sample_mu(energy=1.0, random_value=0.5)\n\n"
+        "mu = distribution.sample_mu(energy=1.0, random_value=0.5)\n\n"
         "# Create a histogram-style plot of the distribution at 2 MeV\n"
-        "fig, ax = angular_distribution.plot(energy=2.0)\n"
+        "fig, ax = distribution.plot(energy=2.0)\n"
     )
     
-    return header + description + info_table + methods_section + "\n" + example
+    return header + description + info_table + properties_section + "\n" + methods_section + "\n" + example
 
 
 def tabulated_distribution_repr(self) -> str:
@@ -300,6 +368,12 @@ def tabulated_distribution_repr(self) -> str:
         "functions (PDFs) and cumulative distribution functions (CDFs). The distribution\n"
         "varies with incident energy, with each energy point having its own tabulated\n"
         "probability function.\n\n"
+        "Data Structure Overview:\n"
+        "- For each incident energy point, the ACE file stores a table with:\n"
+        "  * Interpolation flag (1=histogram, 2=linear-linear interpolation)\n"
+        "  * Set of cosine values (μ) ranging from -1 to 1\n"
+        "  * PDF values (probability density) for each cosine value\n"
+        "  * CDF values (cumulative distribution) for each cosine value\n\n"
     )
     
     # Create a summary table of data information
@@ -329,8 +403,8 @@ def tabulated_distribution_repr(self) -> str:
             "Number of Energy Points", num_energies,
             width1=property_col_width, width2=value_col_width)
         
-        min_energy = self.energies[0].value
-        max_energy = self.energies[-1].value
+        min_energy = self.energies[0]  # Now directly a float
+        max_energy = self.energies[-1]  # Now directly a float
         energy_range = f"{min_energy:.6g} - {max_energy:.6g} MeV"
         info_table += "{:<{width1}} {:<{width2}}\n".format(
             "Energy Range", energy_range,
@@ -346,8 +420,8 @@ def tabulated_distribution_repr(self) -> str:
         # Information about the first table if available
         if num_tables > 0 and len(self.cosine_grid[0]) > 0:
             num_points = len(self.cosine_grid[0])
-            first_cosine = self.cosine_grid[0][0].value
-            last_cosine = self.cosine_grid[0][-1].value
+            first_cosine = self.cosine_grid[0][0]  # Now directly a float
+            last_cosine = self.cosine_grid[0][-1]  # Now directly a float
             
             info_table += "{:<{width1}} {:<{width2}}\n".format(
                 "Points in First Table", num_points,
@@ -373,6 +447,23 @@ def tabulated_distribution_repr(self) -> str:
     
     info_table += "-" * header_width + "\n\n"
     
+    # Raw data properties section
+    properties = {
+        ".mt": "MT number of the reaction (int)",
+        ".energies": "List of incident energy points as float values (List[float])",
+        ".interpolation": "List of interpolation flags for each energy point (List[int])",
+        ".cosine_grid": "List of cosine grids for each energy as float values (List[List[float]])",
+        ".pdf": "List of PDF values for each energy as float values (List[List[float]])",
+        ".cdf": "List of CDF values for each energy as float values (List[List[float]])"
+    }
+    
+    properties_section = create_repr_section(
+        "Raw Data Properties (Direct from ACE file):", 
+        properties, 
+        total_width=header_width, 
+        method_col_width=property_col_width
+    )
+    
     # Methods section
     methods = {
         ".sample_mu(energy, random_value)": "Sample a cosine using the CDF at the given energy",
@@ -381,7 +472,7 @@ def tabulated_distribution_repr(self) -> str:
     }
     
     methods_section = create_repr_section(
-        "Available Methods:", 
+        "Calculation Methods:", 
         methods, 
         total_width=header_width, 
         method_col_width=property_col_width
@@ -391,13 +482,19 @@ def tabulated_distribution_repr(self) -> str:
     example = (
         "Example:\n"
         "--------\n"
+        "# Directly access raw data for the first energy point\n"
+        "first_energy = distribution.energies[0]  # Returns a float\n"
+        "interp_flag = distribution.interpolation[0]  # 1=histogram, 2=linear-linear\n"
+        "cosines = distribution.cosine_grid[0]  # List of floats for cosine values\n"
+        "pdf_values = [pdf.value for pdf in distribution.pdf[0]]     # PDF values\n"
+        "cdf_values = [cdf.value for cdf in distribution.cdf[0]]     # CDF values\n\n"
         "# Sample a cosine at 1 MeV using inverse CDF with a random value of 0.5\n"
-        "mu = angular_distribution.sample_mu(energy=1.0, random_value=0.5)\n\n"
+        "mu = distribution.sample_mu(energy=1.0, random_value=0.5)\n\n"
         "# Create a plot showing the PDF at 2 MeV\n"
-        "fig, ax = angular_distribution.plot(energy=2.0)\n"
+        "fig, ax = distribution.plot(energy=2.0)\n"
     )
     
-    return header + description + info_table + methods_section + "\n" + example
+    return header + description + info_table + properties_section + "\n" + methods_section + "\n" + example
 
 
 def kalbach_mann_distribution_repr(self) -> str:
@@ -418,6 +515,11 @@ def kalbach_mann_distribution_repr(self) -> str:
         "This object represents an angular distribution using the Kalbach-Mann formalism.\n"
         "The Kalbach-Mann model correlates energy and angle distributions, with parameters\n"
         "R (precompound fraction) and A (angular slope) that vary with outgoing energy.\n\n"
+        "Data Structure Overview:\n"
+        "- In the ACE file, a LOCB value of -1 indicates a Kalbach-Mann distribution\n"
+        "- The actual angular distribution parameters (R and A) are stored in the\n"
+        "  energy distribution section as a Law=44 distribution\n"
+        "- This object stores reference indices to locate the Law=44 data when needed\n\n"
         "IMPORTANT: This distribution REQUIRES Law=44 data from the energy distribution\n"
         "section (DLW/DLWH blocks). The ACE object must be provided to all methods that\n"
         "calculate or sample angular distributions. Without this data, methods will raise\n"
@@ -476,6 +578,21 @@ def kalbach_mann_distribution_repr(self) -> str:
     
     info_table += "-" * header_width + "\n\n"
     
+    # Raw data properties section
+    properties = {
+        ".mt": "MT number of the reaction (int)",
+        ".reaction_index": "Index of the reaction in the energy distribution table (int)",
+        ".is_particle_production": "Whether this is a particle production reaction (bool)",
+        ".particle_idx": "Particle type index if particle production (int)"
+    }
+    
+    properties_section = create_repr_section(
+        "Raw Data Properties (Reference data from ACE file):", 
+        properties, 
+        total_width=header_width, 
+        method_col_width=property_col_width
+    )
+    
     # Error handling section
     error_section = "Error Handling:\n"
     error_section += "-" * header_width + "\n"
@@ -497,7 +614,7 @@ def kalbach_mann_distribution_repr(self) -> str:
     }
     
     methods_section = create_repr_section(
-        "Available Methods:", 
+        "Calculation Methods (All require ACE object):", 
         methods, 
         total_width=header_width, 
         method_col_width=property_col_width
@@ -507,19 +624,23 @@ def kalbach_mann_distribution_repr(self) -> str:
     example = (
         "Example:\n"
         "--------\n"
+        "# Access reference properties\n"
+        "mt_value = int(distribution.mt.value)\n"
+        "reaction_idx = distribution.reaction_index\n"
+        "is_particle = distribution.is_particle_production\n\n"
         "# Sample a cosine at 14 MeV using the ACE object (required for Law=44 data)\n"
         "try:\n"
-        "    mu = angular_distribution.sample_mu(energy=14.0, random_value=0.5, ace=ace_object)\n"
+        "    mu = distribution.sample_mu(energy=14.0, random_value=0.5, ace=ace_object)\n"
         "except Law44DataError as e:\n"
         "    print(f\"Error: {e}\")\n\n"
         "# Create a plot showing the Kalbach-Mann distribution at 14 MeV\n"
         "try:\n"
-        "    fig, ax = angular_distribution.plot(energy=14.0, ace=ace_object)\n"
+        "    fig, ax = distribution.plot(energy=14.0, ace=ace_object)\n"
         "except Law44DataError as e:\n"
         "    print(f\"Error: {e}\")\n"
     )
     
-    return header + description + info_table + error_section + methods_section + "\n" + example
+    return header + description + info_table + properties_section + "\n" + error_section + methods_section + "\n" + example
 
 
 def angular_container_repr(self) -> str:

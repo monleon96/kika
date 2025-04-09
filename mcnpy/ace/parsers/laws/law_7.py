@@ -1,6 +1,6 @@
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution, MaxwellFissionSpectrum
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy.ace.classes.energy_distribution.distributions.maxwell import MaxwellFissionSpectrum
 
 def parse_maxwell_fission_spectrum(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> MaxwellFissionSpectrum:
     """

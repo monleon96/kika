@@ -7,12 +7,15 @@ from mcnpy.cov.covmat import CovMat
 from mcnpy.sampling.generators import generate_samples
 from mcnpy.ace.writers.write_ace import write_ace
 from mcnpy.ace.parsers.parse_ace import read_ace
+import datetime
 
 def process_sample(
     i: int,
     sample_factors: np.ndarray,
     ace_file_path: str,
     mt_numbers: List[int],
+    original_mt_numbers: List[int],
+    mt_to_original_map: Dict[int, int],
     energy_grid: np.ndarray,
     base_name: str,
     extension: str,
@@ -31,7 +34,11 @@ def process_sample(
     ace_file_path : str
         Path to the original ACE file to read
     mt_numbers : List[int]
-        List of MT numbers to perturb
+        List of MT numbers to perturb (may include expanded MTs like 51-91)
+    original_mt_numbers : List[int]
+        Original MT numbers requested (for indexing perturbation factors)
+    mt_to_original_map : Dict[int, int]
+        Mapping from expanded MT numbers to original MT numbers
     energy_grid : np.ndarray
         Energy grid for perturbation
     base_name : str
@@ -72,9 +79,13 @@ def process_sample(
         
         # Apply perturbation factors to each MT with timing
         perturb_start = time.time()
-        for j, mt in enumerate(mt_numbers):
+        for mt in mt_numbers:
+            # Get the original MT to use for perturbation factors
+            orig_mt = mt_to_original_map.get(mt, mt)
+            orig_mt_idx = original_mt_numbers.index(orig_mt)
+            
             # Calculate the start and end indices for this MT in the perturbation factors
-            start_idx = j * (len(energy_grid) - 1)  # Adjust for bins vs grid points
+            start_idx = orig_mt_idx * (len(energy_grid) - 1)  # Adjust for bins vs grid points
             end_idx = start_idx + (len(energy_grid) - 1)
             
             # Get perturbation factors for this MT
@@ -105,6 +116,146 @@ def process_sample(
         elapsed = time.time() - start_time
         return (i, elapsed, False, str(e), read_time, perturb_time, write_time)
 
+def write_perturbation_data(
+    output_dir: str,
+    base_name: str,
+    isotope_id: int,
+    mt_numbers: List[int],
+    expanded_mt_numbers: List[int],
+    mt_to_original_map: Dict[int, int],
+    energy_grid: np.ndarray,
+    seed: Optional[int],
+    decomposition_method: str,
+    sampling_method: str,
+    perturbation_factors: np.ndarray,
+    num_samples: int
+) -> str:
+    """
+    Write perturbation data to a text file for reproducibility.
+    
+    Parameters
+    ----------
+    output_dir : str
+        Directory to save the file
+    base_name : str
+        Base name for the file
+    isotope_id : int
+        Isotope ID
+    mt_numbers : List[int]
+        Original list of MT numbers requested for perturbation
+    expanded_mt_numbers : List[int]
+        Expanded list of MT numbers actually perturbed (may include MT=51-91 instead of MT=4)
+    mt_to_original_map : Dict[int, int]
+        Mapping from expanded MT numbers to original MT numbers
+    energy_grid : np.ndarray
+        Energy grid used for perturbation
+    seed : Optional[int]
+        Random seed used
+    decomposition_method : str
+        Method used to decompose the covariance matrix
+    sampling_method : str
+        Method used to generate samples
+    perturbation_factors : np.ndarray
+        Perturbation factors for each sample
+    num_samples : int
+        Number of samples
+        
+    Returns
+    -------
+    str
+        Path to the created file
+    """
+    # Create filename without timestamp
+    file_name = f"{base_name}_perturbation_data.txt"
+    file_path = os.path.join(output_dir, file_name)
+    
+    with open(file_path, 'w') as f:
+        # Write header and parameters
+        f.write("=" * 80 + "\n")
+        f.write("PERTURBATION DATA\n")
+        f.write("=" * 80 + "\n\n")
+        
+        # Include creation timestamp in the file content but not in the filename
+        f.write("PARAMETERS:\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Isotope ID: {isotope_id}\n")
+        f.write(f"Original MT numbers requested: {mt_numbers}\n")
+        
+        # Add information about MT expansion (especially MT=4 to MT=51-91)
+        if set(mt_numbers) != set(expanded_mt_numbers):
+            f.write("\nMT NUMBER EXPANSIONS:\n")
+            # Group expanded MTs by original MT
+            original_to_expanded = {}
+            for exp_mt, orig_mt in mt_to_original_map.items():
+                if orig_mt not in original_to_expanded:
+                    original_to_expanded[orig_mt] = []
+                original_to_expanded[orig_mt].append(exp_mt)
+            
+            # Write expansion information
+            for orig_mt, exp_mts in original_to_expanded.items():
+                if len(exp_mts) > 1:  # Only show if one MT was expanded to multiple MTs
+                    exp_mts.sort()
+                    f.write(f"MT={orig_mt} expanded to: {exp_mts}\n")
+            
+            # Write special note for MT=4 expansion
+            if 4 in mt_numbers and 4 not in expanded_mt_numbers:
+                inelastic_mts = sorted([mt for mt in expanded_mt_numbers if mt_to_original_map.get(mt) == 4])
+                if inelastic_mts:
+                    f.write(f"\nNOTE: MT=4 (inelastic) not found in ACE file.\n")
+                    f.write(f"      MT=4 perturbation was applied to {len(inelastic_mts)} discrete inelastic levels:\n")
+                    f.write(f"      MT={min(inelastic_mts)}-{max(inelastic_mts)}: {inelastic_mts}\n")
+        
+        f.write(f"\nActual MT numbers perturbed: {expanded_mt_numbers}\n")
+        f.write(f"Number of samples: {num_samples}\n")
+        f.write(f"Sampling method: {sampling_method}\n")
+        f.write(f"Decomposition method: {decomposition_method}\n")
+        f.write(f"Random seed: {seed if seed is not None else 'None (random)'}\n")
+        f.write(f"Energy grid points: {len(energy_grid)}\n")
+        f.write(f"Energy range: {energy_grid[0]:.2e} to {energy_grid[-1]:.2e} MeV\n\n")
+        
+        # Write energy grid for reference
+        f.write("ENERGY GRID (MeV):\n")
+        f.write("-" * 80 + "\n")
+        for i, energy in enumerate(energy_grid):
+            f.write(f"{energy:.6e}")
+            if (i+1) % 8 == 0 or i == len(energy_grid) - 1:
+                f.write("\n")
+            else:
+                f.write("  ")
+        f.write("\n")
+        
+        # Write perturbation factors for each MT and energy bin
+        f.write("\nPERTURBATION FACTORS:\n")
+        f.write("-" * 80 + "\n")
+        
+        # Calculate header width based on number of samples
+        header = "MT  | Lower E (MeV) | Upper E (MeV) |"
+        for s in range(num_samples):
+            header += f" Sample_{s+1:04d} |"
+        f.write(header + "\n")
+        f.write("-" * len(header) + "\n")
+        
+        # Write data for each MT and energy bin with increased precision
+        for mt_idx, mt in enumerate(mt_numbers):
+            num_bins = len(energy_grid) - 1
+            start_idx = mt_idx * num_bins
+            
+            for bin_idx in range(num_bins):
+                # Get perturbation factors for this MT and bin across all samples
+                bin_factors = [perturbation_factors[s][start_idx + bin_idx] for s in range(num_samples)]
+                
+                # Format row with 12 decimal places instead of 6
+                row = f"{mt:4d} | {energy_grid[bin_idx]:.6e} | {energy_grid[bin_idx+1]:.6e} |"
+                for factor in bin_factors:
+                    row += f" {factor:.12f} |"
+                f.write(row + "\n")
+            
+            # Add a separator between MTs
+            f.write("-" * len(header) + "\n")
+    
+    return file_path
+
 def create_perturbed_ace_files(
     ace_file_path: str,
     mt_numbers: List[int],
@@ -114,7 +265,8 @@ def create_perturbed_ace_files(
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
     output_dir: Optional[str] = None,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    verbose: bool = False
 ) -> None:
     """
     Create perturbed ACE files based on covariance data.
@@ -140,36 +292,85 @@ def create_perturbed_ace_files(
         Directory to save the perturbed ACE files. If None, uses the current directory.
     seed : int, optional
         Random seed for reproducibility
+    verbose : bool, default=True
+        Whether to print detailed information during the execution
     """
     # Start timing the entire process
     overall_start_time = time.time()
     
-    print(f"Starting perturbation of {num_samples} ACE files...")
-    print(f"Perturbing MT numbers: {mt_numbers}")
-    print(f"Using {sampling_method} sampling with {decomposition_method} decomposition")
+    if verbose:
+        print(f"Starting perturbation of {num_samples} ACE files...")
+        print(f"Perturbing MT numbers: {mt_numbers}")
+        print(f"Using {sampling_method} sampling with {decomposition_method} decomposition")
     
     # Input validation
     if not mt_numbers:
         raise ValueError("At least one MT number must be provided")
     
     # Read the ACE file once to extract necessary information
-    print(f"Reading ACE file: {ace_file_path}")
+    if verbose:
+        print(f"Reading ACE file: {ace_file_path}")
+    
     ace_object = read_ace(ace_file_path)
-    print("ACE file read successfully for initial information extraction")
+    
+    if verbose:
+        print("ACE file read successfully for initial information extraction")
     
     # Extract isotope from ACE object
     isotope_id = ace_object.header.zaid
-    print(f"Extracted isotope ID: {isotope_id}")
     
-    # Get combined covariance matrix for the isotope and specified MT numbers
-    print("Extracting covariance matrix...")
+    if verbose:
+        print(f"Extracted isotope ID: {isotope_id}")
+    
+    # Check if MT=4 is requested but not available, and expand to MT=51-91 if needed
+    original_mt_numbers = mt_numbers.copy()  # Keep original MTs for covariance matrix
+    expanded_mt_numbers = []
+    mt_to_original_map = {}  # Maps expanded MTs back to original MTs
+    
+    # Get available MTs in the ACE file
+    available_mts = ace_object.mt_numbers if hasattr(ace_object, 'mt_numbers') else []
+    if hasattr(ace_object, 'cross_section') and ace_object.cross_section:
+        available_mts.extend(list(ace_object.cross_section.reaction.keys()))
+    available_mts = list(set(available_mts))  # Remove duplicates
+    
+    for mt in mt_numbers:
+        if mt == 4 and mt not in available_mts:
+            # MT=4 requested but not available, check for MTs 51-91
+            inelastic_mts = [mt_num for mt_num in range(51, 92) if mt_num in available_mts]
+            
+            if inelastic_mts:
+                if verbose:
+                    print(f"WARNING: MT=4 not found in ACE file but was requested for perturbation.")
+                    print(f"         Applying MT=4 perturbation to discrete inelastic levels (MT={min(inelastic_mts)}-{max(inelastic_mts)})")
+                    print(f"         Found {len(inelastic_mts)} discrete inelastic levels: {inelastic_mts}")
+                
+                expanded_mt_numbers.extend(inelastic_mts)
+                # Map each inelastic MT back to MT=4 for perturbation factors
+                for inelastic_mt in inelastic_mts:
+                    mt_to_original_map[inelastic_mt] = 4
+            else:
+                if verbose:
+                    print(f"WARNING: MT=4 not found in ACE file and no discrete inelastic levels (MT=51-91) found.")
+                    print(f"         Skipping perturbation of MT=4.")
+        else:
+            expanded_mt_numbers.append(mt)
+            mt_to_original_map[mt] = mt  # Map to itself
+    
+    # Use original MTs for covariance matrix and perturbation generation
+    if verbose:
+        print("Extracting covariance matrix...")
+    
     cov_start_time = time.time()
-    combined_cov_matrix = extract_covariance_matrix(covmat, isotope_id, mt_numbers, energy_grid)
+    combined_cov_matrix = extract_covariance_matrix(covmat, isotope_id, original_mt_numbers, energy_grid)
     cov_time = time.time() - cov_start_time
-    print(f"Covariance matrix extracted in {cov_time:.2f} seconds")
+    
+    if verbose:
+        print(f"Covariance matrix extracted in {cov_time:.2f} seconds")
     
     # Generate perturbation factors using the specified sampling method
-    print(f"Generating {num_samples} perturbation factors...")
+    if verbose:
+        print(f"Generating {num_samples} perturbation factors...")
+    
     generation_start_time = time.time()
     perturbation_factors = generate_samples(
         combined_cov_matrix, 
@@ -179,15 +380,20 @@ def create_perturbed_ace_files(
         seed
     )
     generation_time = time.time() - generation_start_time
-    print(f"Perturbation factors generated in {generation_time:.2f} seconds")
+    
+    if verbose:
+        print(f"Perturbation factors generated in {generation_time:.2f} seconds")
     
     # Prepare output directory if needed
     if output_dir is not None:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-            print(f"Created output directory: {output_dir}")
-        else:
+            if verbose:
+                print(f"Created output directory: {output_dir}")
+        elif verbose:
             print(f"Using existing output directory: {output_dir}")
+    else:
+        output_dir = "."  # Use current directory if none specified
     
     # Set up base file name
     base_name = "perturbed_ace"
@@ -199,12 +405,33 @@ def create_perturbed_ace_files(
     else:
         extension = ".ace"
     
+    # Write perturbation data to file for reproducibility (always write this regardless of verbose)
+    if verbose:
+        print("Writing perturbation data to file...")
+    
+    data_file_path = write_perturbation_data(
+        output_dir,
+        base_name,
+        isotope_id,
+        original_mt_numbers,  # Original MT numbers requested
+        expanded_mt_numbers,  # Expanded MT numbers (may include MT=51-91 instead of MT=4)
+        mt_to_original_map,   # Mapping from expanded MTs to original MTs
+        energy_grid,
+        seed,
+        decomposition_method,
+        sampling_method,
+        perturbation_factors,
+        num_samples
+    )
+    
+    if verbose:
+        print(f"Perturbation data written to: {data_file_path}")
+    
     # OPTIMIZATION: Precompute mappings from ace energies to perturbation grid bins
-    # This avoids recomputing for each perturbed file
     precomp_start_time = time.time()
     precomputed_mappings = {}
     
-    for mt in mt_numbers:
+    for mt in expanded_mt_numbers:
         try:
             if ace_object.cross_section and mt in ace_object.cross_section.reaction:
                 reaction_xs = ace_object.cross_section.reaction[mt]
@@ -218,18 +445,22 @@ def create_perturbed_ace_files(
                     
                     precomputed_mappings[mt] = bin_indices
         except Exception as e:
-            print(f"Warning: Could not precompute mappings for MT={mt}: {str(e)}")
+            if verbose:
+                print(f"Warning: Could not precompute mappings for MT={mt}: {str(e)}")
     
     precomp_time = time.time() - precomp_start_time
-    print(f"Precomputed mappings in {precomp_time:.2f} seconds")
+    
+    if verbose:
+        print(f"Precomputed mappings in {precomp_time:.2f} seconds")
+        print("Cleaning up initial ACE object to free memory")
     
     # Clean up the initial ACE object to free memory
-    print("Cleaning up initial ACE object to free memory")
     del ace_object
     
     # Process samples sequentially
-    print("\nStarting ACE file perturbations:")
-    print("-" * 60)
+    if verbose:
+        print("\nStarting ACE file perturbations:")
+        print("-" * 60)
     
     results = []
     read_times = []
@@ -237,13 +468,17 @@ def create_perturbed_ace_files(
     write_times = []
     
     for i in range(num_samples):
-        print(f"Processing sample {i+1}/{num_samples}... ", end="", flush=True)
+        if verbose:
+            print(f"Processing sample {i+1}/{num_samples}... ", end="", flush=True)
+        
         # Process the sample
         result = process_sample(
             i, 
             perturbation_factors[i], 
             ace_file_path,
-            mt_numbers, 
+            expanded_mt_numbers,  # Use expanded list that may include MT=51-91 instead of MT=4
+            original_mt_numbers,  # Original list for indexing perturbation factors
+            mt_to_original_map,   # Mapping to track which original MT to use for each expanded MT
             energy_grid,
             base_name, 
             extension, 
@@ -253,16 +488,18 @@ def create_perturbed_ace_files(
         i, elapsed, success, error, read_time, perturb_time, write_time = result
         
         if success:
-            print(f"done in {elapsed:.2f} seconds")
+            if verbose:
+                print(f"done in {elapsed:.2f} seconds")
             results.append((i, elapsed))
             read_times.append(read_time)
             perturb_times.append(perturb_time)
             write_times.append(write_time)
         else:
-            print(f"ERROR: {error}")
-    
+            # Always print errors regardless of verbose setting
+            print(f"ERROR processing sample {i+1}: {error}")
+
     # Calculate and print summary statistics if we have results
-    if results:
+    if results and verbose:
         elapsed_times = [t for _, t in results]
         overall_time = time.time() - overall_start_time
         avg_time = sum(elapsed_times) / len(elapsed_times)

@@ -1,5 +1,7 @@
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution, LaboratoryAngleEnergyDistribution
+from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy.ace.classes.energy_distribution.distributions.angle_energy import LaboratoryAngleEnergyDistribution
+
 
 def parse_laboratory_angle_energy_distribution(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> LaboratoryAngleEnergyDistribution:
     """

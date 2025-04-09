@@ -6,9 +6,9 @@ including cross section plotting and comparison tools.
 """
 
 from .cross_section_plotting import (
-    plot_cross_sections,
+    plot_cross_sections, get_cross_section_dataframe
 )
 
 __all__ = [
-    'plot_cross_sections',
+    'plot_cross_sections', 'get_cross_section_dataframe'
 ]

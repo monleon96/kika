@@ -1,10 +1,11 @@
 from typing import List, Optional
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.angular_distribution.angular_distribution import (
-    AngularDistributionContainer, AngularDistribution, 
-    IsotropicAngularDistribution, EquiprobableAngularDistribution,
-    TabulatedAngularDistribution, KalbachMannAngularDistribution,
-)
+from mcnpy.ace.classes.angular_distribution.base import AngularDistribution
+from mcnpy.ace.classes.angular_distribution.container import AngularDistributionContainer
+from mcnpy.ace.classes.angular_distribution.distributions.isotropic import IsotropicAngularDistribution
+from mcnpy.ace.classes.angular_distribution.distributions.equiprobable import EquiprobableAngularDistribution
+from mcnpy.ace.classes.angular_distribution.distributions.tabulated import TabulatedAngularDistribution
+from mcnpy.ace.classes.angular_distribution.distributions.kalbach_mann import KalbachMannAngularDistribution
 from mcnpy.ace.parsers.xss import XssEntry
 import logging
 
@@ -201,11 +202,13 @@ def read_and_block(ace: Ace, and_idx: int, debug: bool = False) -> None:
                     if debug:
                         logger.debug(f"First few values from angular distribution for MT={mt_value}:")
                     if isinstance(dist, EquiprobableAngularDistribution) and len(dist.cosine_bins) > 0:
-                        sample = [dist.cosine_bins[0][j].value for j in range(min(3, len(dist.cosine_bins[0])))]
+                        # Access the cosine bins directly since they're already float values
+                        sample = [dist.cosine_bins[0][j] for j in range(min(3, len(dist.cosine_bins[0])))]
                         if debug:
                             logger.debug(f"  First 3 cosine values: {sample}")
                     elif isinstance(dist, TabulatedAngularDistribution) and len(dist.cosine_grid) > 0:
-                        sample = [dist.cosine_grid[0][j].value for j in range(min(3, len(dist.cosine_grid[0])))]
+                        # Access the cosine grid directly since they're already float values
+                        sample = [dist.cosine_grid[0][j] for j in range(min(3, len(dist.cosine_grid[0])))]
                         if debug:
                             logger.debug(f"  First 3 cosine grid values: {sample}")
                     
@@ -330,7 +333,8 @@ def read_andp_block(ace: Ace, andp_idx: int, debug: bool = False) -> None:
                         logger.debug(f"Read photon production distribution for MT={mt_value}")
                         
                         if isinstance(dist, EquiprobableAngularDistribution) and len(dist.cosine_bins) > 0:
-                            sample = [dist.cosine_bins[0][j].value for j in range(min(3, len(dist.cosine_bins[0])))]
+                            # Access the cosine bins directly since they're already float values
+                            sample = [dist.cosine_bins[0][j] for j in range(min(3, len(dist.cosine_bins[0])))]
                             logger.debug(f"  First 3 cosine values: {sample}")
             except ValueError as e:
                 error_msg = f"ERROR reading photon production distribution for MT={mt_value}: {e}"
@@ -407,7 +411,7 @@ def read_angular_distribution_photon(ace: Ace, data_idx: int, andp_idx: int, mt_
     locc_entries = ace.xss_data[lc_start:lc_start + num_energies]
     
     # Create an equiprobable angular distribution
-    distribution = EquiprobableAngularDistribution(mt=mt_entry, energies=energies)
+    distribution = EquiprobableAngularDistribution(mt=mt_entry, _energies=energies)
     
     # For each energy point with a non-zero locator
     for i, locc_entry in enumerate(locc_entries):
@@ -418,7 +422,7 @@ def read_angular_distribution_photon(ace: Ace, data_idx: int, andp_idx: int, mt_
             # Add 33 values from -1 to 1 (uniformly spaced)
             # Create XssEntry objects for the uniformly spaced cosines
             cosines = [XssEntry(0, -1.0 + j * (2.0 / 32)) for j in range(33)]
-            distribution.cosine_bins.append(cosines)
+            distribution._cosine_bins.append(cosines)
             if debug:
                 logger.debug(f"Using isotropic distribution for energy point {i} ({energies[i].value})")
             continue
@@ -435,9 +439,10 @@ def read_angular_distribution_photon(ace: Ace, data_idx: int, andp_idx: int, mt_
         
         # Read the 33 cosine values for 32 equiprobable bins
         cosines = ace.xss_data[data_loc:data_loc + 33]
-        distribution.cosine_bins.append(cosines)
+        distribution._cosine_bins.append(cosines)
         
         if debug and i == 0:  # Print details for first energy only to avoid verbose output
+            # For displaying values we're accessing XssEntry objects directly, so we still need .value
             logger.debug(f"Cosine bins for first energy: {[c.value for c in cosines[:5]]}... (showing first 5)")
     
     return distribution
@@ -688,7 +693,7 @@ def read_angular_distribution(ace: Ace, data_idx: int, mt_entry: XssEntry, base_
         if debug:
             logger.debug("All LOCC values are 0 → isotropic distribution for all energies")
         # All locators are 0, meaning isotropic for all energies
-        return IsotropicAngularDistribution(mt=mt_entry, energies=energies)
+        return IsotropicAngularDistribution(mt=mt_entry, _energies=energies)
     
     # Check if we have equiprobable bin or tabulated distributions
     if all(lc_val > 0 for lc_val in locc_values if lc_val != 0):
@@ -749,7 +754,7 @@ def read_equiprobable_distribution(ace: Ace, base_idx: int, mt_entry: XssEntry,
         logger.debug(f"Reading equiprobable distribution for MT={mt_entry.value} with {num_energies} energies")
     
     # Create an equiprobable angular distribution
-    distribution = EquiprobableAngularDistribution(mt=mt_entry, energies=energies)
+    distribution = EquiprobableAngularDistribution(mt=mt_entry, _energies=energies)
     
     # For each energy point with a non-zero locator
     for i, locc_entry in enumerate(locators):
@@ -760,7 +765,7 @@ def read_equiprobable_distribution(ace: Ace, base_idx: int, mt_entry: XssEntry,
             # Add 33 values from -1 to 1 (uniformly spaced)
             # Create XssEntry objects for the uniformly spaced cosines
             cosines = [XssEntry(0, -1.0 + j * (2.0 / 32)) for j in range(33)]
-            distribution.cosine_bins.append(cosines)
+            distribution._cosine_bins.append(cosines)
             
             if debug and i < 3:  # Show first 3 energy points only
                 logger.debug(f"Energy point {i} ({energies[i].value} MeV): LOCC=0 → Using isotropic distribution")
@@ -781,9 +786,10 @@ def read_equiprobable_distribution(ace: Ace, base_idx: int, mt_entry: XssEntry,
         
         # Read the 33 cosine values
         cosines = ace.xss_data[data_loc:data_loc + 33]
-        distribution.cosine_bins.append(cosines)
+        distribution._cosine_bins.append(cosines)
         
         if debug and i < 3:  # Show first 3 energy points only
+            # When displaying values, we're accessing XssEntry objects directly, so we still need .value
             cosine_values = [c.value for c in cosines[:5]]  # Show first 5 cosine values
             logger.debug(f"  First 5 cosine values: {cosine_values}...")
     
@@ -833,7 +839,7 @@ def read_tabulated_distribution(ace: Ace, base_idx: int, mt_entry: XssEntry,
         logger.debug(f"Reading tabulated distribution for MT={mt_entry.value} with {num_energies} energies")
     
     # Create a tabulated angular distribution
-    distribution = TabulatedAngularDistribution(mt=mt_entry, energies=energies)
+    distribution = TabulatedAngularDistribution(mt=mt_entry, _energies=energies)
     
     # For each energy point
     for i, locc_entry in enumerate(locators):
@@ -849,9 +855,9 @@ def read_tabulated_distribution(ace: Ace, base_idx: int, mt_entry: XssEntry,
             pdfs = [XssEntry(0, 0.5), XssEntry(0, 0.5)]
             cdfs = [XssEntry(0, 0.0), XssEntry(0, 1.0)]
             
-            distribution.cosine_grid.append(cosines)
-            distribution.pdf.append(pdfs)
-            distribution.cdf.append(cdfs)
+            distribution._cosine_grid.append(cosines)
+            distribution._pdf.append(pdfs)
+            distribution._cdf.append(cdfs)
             
             if debug and i < 3:  # Show first 3 energy points only
                 logger.debug(f"Energy point {i} ({energies[i].value} MeV): LOCC=0 → Using isotropic distribution")
@@ -903,20 +909,21 @@ def read_tabulated_distribution(ace: Ace, base_idx: int, mt_entry: XssEntry,
         # Read cosine grid (Np values)
         cosine_start = data_loc + 2
         cosines = ace.xss_data[cosine_start:cosine_start + num_points]
-        distribution.cosine_grid.append(cosines)
+        distribution._cosine_grid.append(cosines)
         
         # Read PDF values (Np values)
         pdf_start = cosine_start + num_points
         pdfs = ace.xss_data[pdf_start:pdf_start + num_points]
-        distribution.pdf.append(pdfs)
+        distribution._pdf.append(pdfs)
         
         # Read CDF values (Np values)
         cdf_start = pdf_start + num_points
         cdfs = ace.xss_data[cdf_start:cdf_start + num_points]
-        distribution.cdf.append(cdfs)
+        distribution._cdf.append(cdfs)
         
         if debug and i < 3:  # Show first 3 energy points only
             display_count = min(5, num_points)
+            # When displaying values, we're accessing XssEntry objects directly, so we still need .value
             cosine_values = [c.value for c in cosines[:display_count]]
             pdf_values = [p.value for p in pdfs[:display_count]]
             cdf_values = [c.value for c in cdfs[:display_count]]

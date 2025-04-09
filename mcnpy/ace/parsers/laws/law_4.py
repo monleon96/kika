@@ -1,7 +1,6 @@
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution, ContinuousTabularDistribution
-from mcnpy.ace.parsers.xss import XssEntry
-from typing import List
+from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy.ace.classes.energy_distribution.distributions.tabular import ContinuousTabularDistribution
 
 def parse_continuous_energy_angle_distribution(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> ContinuousTabularDistribution:
     """

@@ -1,5 +1,5 @@
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDependentYield
+from mcnpy.ace.classes.energy_distribution.yields.energy_dependent import EnergyDependentYield
 
 def parse_energy_dependent_yield(ace: Ace, ky_idx: int) -> EnergyDependentYield:
     """

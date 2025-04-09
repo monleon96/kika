@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.classes.energy_distribution.energy_distribution_locators import EnergyDistributionLocators
+from mcnpy.ace.classes.energy_distribution.locators import EnergyDistributionLocators
 from mcnpy.ace.parsers.xss import XssEntry
 import logging
 

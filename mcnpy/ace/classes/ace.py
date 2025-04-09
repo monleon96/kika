@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, Union, Dict, Any
+from typing import List, Optional, Union, Dict, Any
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -13,9 +13,9 @@ from mcnpy.ace.classes.particle_release.particle_release import ParticleRelease
 from mcnpy.ace.classes.cross_section.cross_section_locators import CrossSectionLocators
 from mcnpy.ace.classes.cross_section.cross_section_data import CrossSectionData
 from mcnpy.ace.classes.angular_distribution.angular_locators import AngularDistributionLocators
-from mcnpy.ace.classes.angular_distribution.angular_distribution import AngularDistributionContainer
-from mcnpy.ace.classes.energy_distribution.energy_distribution_locators import EnergyDistributionLocators
-from mcnpy.ace.classes.energy_distribution.energy_distribution_container import EnergyDistributionContainer
+from mcnpy.ace.classes.angular_distribution.container import AngularDistributionContainer
+from mcnpy.ace.classes.energy_distribution.locators import EnergyDistributionLocators
+from mcnpy.ace.classes.energy_distribution.container import EnergyDistributionContainer
 from mcnpy.ace.classes.gpd import PhotonProductionData
 from mcnpy.ace.classes.photon_production_xs import PhotonProductionCrossSections, ParticleProductionCrossSections
 from mcnpy.ace.classes.yield_multipliers import PhotonYieldMultipliers, SecondaryParticleYieldMultipliers

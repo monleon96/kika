@@ -7,6 +7,7 @@ This module provides a simple function for plotting cross sections from ACE obje
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 from typing import List, Optional, Tuple, Union
 from mcnpy.ace.classes.ace import Ace
 
@@ -151,3 +152,114 @@ def plot_cross_sections(
             print(f"Warning: Could not save figure to {save_path}: {str(e)}")
     
     return fig
+
+def get_cross_section_dataframe(
+    ace_objects: List[Ace], 
+    mt_number: int,
+    labels: Optional[List[str]] = None,
+    energy_range: Optional[Tuple[float, float]] = None
+) -> pd.DataFrame:
+    """
+    Get cross section data from multiple ACE objects for a specific MT number as a DataFrame.
+    
+    Parameters
+    ----------
+    ace_objects : List[Ace]
+        List of Ace objects
+    mt_number : int
+        MT number for the cross section data
+    labels : List[str], optional
+        Labels to use for column names (defaults to ZAID if available)
+    energy_range : Tuple[float, float], optional
+        Energy range to include (min, max) in MeV
+        
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with energy as the first column and cross sections as additional columns
+        
+    Raises
+    ------
+    ValueError
+        If ACE objects have incompatible energy grids
+        
+    Examples
+    --------
+    >>> # Get total cross section data for two ACE objects
+    >>> df = get_cross_section_dataframe([u235_ace, u238_ace], 1)
+    >>> 
+    >>> # With custom labels and energy range
+    >>> df = get_cross_section_dataframe(
+    ...     [fe56_ace, fe54_ace], 
+    ...     2,  # Elastic scattering
+    ...     labels=['Fe-56', 'Fe-54'],
+    ...     energy_range=(1e-5, 20.0)
+    ... )
+    """
+    if not ace_objects:
+        raise ValueError("No ACE objects provided")
+    
+    # Generate default labels if none provided
+    if labels is None:
+        labels = []
+        for i, ace in enumerate(ace_objects):
+            if ace.header and ace.header.zaid:
+                labels.append(ace.header.zaid)
+            elif ace.filename:
+                labels.append(os.path.basename(ace.filename))
+            else:
+                labels.append(f"ACE Object {i+1}")
+    elif len(labels) != len(ace_objects):
+        raise ValueError(f"{len(labels)} labels provided for {len(ace_objects)} objects")
+    
+    # Ensure unique labels
+    unique_labels = []
+    label_counts = {}
+    
+    for label in labels:
+        if label in label_counts:
+            label_counts[label] += 1
+            unique_labels.append(f"{label}_{label_counts[label]}")
+        else:
+            label_counts[label] = 0
+            unique_labels.append(label)
+    
+    # Use the unique labels instead of the original ones
+    labels = unique_labels
+    
+    # Get cross section data from each ACE object
+    all_xs_data = []
+    for i, ace in enumerate(ace_objects):
+        try:
+            xs_data = ace.get_cross_section(mt_number)
+            
+            # Apply energy range filter if specified
+            if energy_range is not None:
+                mask = (xs_data["Energy"] >= energy_range[0]) & (xs_data["Energy"] <= energy_range[1])
+                energy = xs_data["Energy"][mask]
+                xs = xs_data[f"MT={mt_number}"][mask]
+                all_xs_data.append((energy, xs))
+            else:
+                energy = xs_data["Energy"]
+                xs = xs_data[f"MT={mt_number}"]
+                all_xs_data.append((energy, xs))
+        except Exception as e:
+            label = labels[i] if i < len(labels) else f"ACE Object {i+1}"
+            raise ValueError(f"Could not get cross section data for {label}: {str(e)}")
+    
+    # Check if all energy grids are compatible
+    reference_energy = all_xs_data[0][0]
+    for i, (energy, _) in enumerate(all_xs_data[1:], 1):
+        if len(energy) != len(reference_energy):
+            raise ValueError(f"Incompatible energy grids: {labels[0]} has {len(reference_energy)} points, " 
+                             f"{labels[i]} has {len(energy)} points")
+        
+        if not np.allclose(energy, reference_energy):
+            raise ValueError(f"Incompatible energy grids: {labels[0]} and {labels[i]} have different energy values")
+    
+    # Create DataFrame
+    df = pd.DataFrame({"Energy": all_xs_data[0][0]})
+    for i, (_, xs) in enumerate(all_xs_data):
+        df[labels[i]] = xs
+    
+    return df
