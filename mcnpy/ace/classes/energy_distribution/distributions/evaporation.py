@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 import numpy as np
 from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy._utils import create_repr_section
 
 @dataclass
 class GeneralEvaporationSpectrum(EnergyDistribution):
@@ -70,41 +71,89 @@ class GeneralEvaporationSpectrum(EnergyDistribution):
         t = t_low + (t_high - t_low) * (incident_energy - e_low) / (e_high - e_low)
         return t
     
-    def sample_outgoing_energy(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> float:
+    def __repr__(self) -> str:
         """
-        Sample an outgoing energy from the evaporation spectrum.
+        Returns a formatted string representation of the GeneralEvaporationSpectrum.
         
-        E_out = X(ξ) * θ(E)
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
         Returns
         -------
-        float
-            Sampled outgoing energy
+        str
+            Formatted string representation
         """
-        if rng is None:
-            rng = np.random.default_rng()
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'General Evaporation Spectrum (Law 5)':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
         
-        # Get the effective temperature
-        temperature = self.get_temperature(incident_energy)
+        # Description of the energy distribution
+        description = (
+            "This distribution represents a general evaporation spectrum where the outgoing\n"
+            "energy E_out = X(ξ) * θ(E), where X(ξ) is a randomly sampled value from equiprobable\n"
+            "bins and θ(E) is the effective temperature tabulated on incident energy.\n\n"
+            "The general evaporation spectrum is used for neutron emission in fission and certain\n"
+            "compound nuclear reactions.\n\n"
+        )
         
-        # Sample X value from equiprobable bins
-        if not self.equiprob_values or len(self.equiprob_values) <= 1:
-            return 0.0
-            
-        # Generate random bin index
-        bin_idx = rng.integers(0, len(self.equiprob_values) - 1)
-        x_value = self.equiprob_values[bin_idx]
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
         
-        # Calculate outgoing energy
-        e_out = x_value * temperature
-        return e_out
+        info_table = "Distribution Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
+        
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Law Number", self.law, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Incident Energies", self.n_incident_energies, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Equiprobable Bins", self.n_equiprob_bins, 
+            width1=property_col_width, width2=value_col_width)
+        
+        # If we have incident energies, show the range
+        if self.incident_energies:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Incident Energy Range", 
+                f"{min(self.incident_energies):.6g} - {max(self.incident_energies):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+        
+        # If we have temperatures, show the range
+        if self.temperatures:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Temperature Range", 
+                f"{min(self.temperatures):.6g} - {max(self.temperatures):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Create a section for available methods
+        methods = {
+            ".get_temperature(incident_energy)": "Get the effective temperature for a given incident energy"
+        }
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add example section
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Get the effective temperature at 1 MeV incident energy\n"
+            "temperature = distribution.get_temperature(incident_energy=1.0)\n"
+            "\n"
+            "# Access the equiprobable bin values directly\n"
+            "x_values = distribution.equiprob_values\n"
+        )
+        
+        return header + description + info_table + methods_section + "\n" + example
 
 
 @dataclass
@@ -199,47 +248,87 @@ class EvaporationSpectrum(EnergyDistribution):
         
         return max(normalization, 1.0e-30)  # Prevent division by zero
     
-    def sample_outgoing_energy(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> float:
+    def __repr__(self) -> str:
         """
-        Sample an outgoing energy from the evaporation spectrum.
+        Returns a formatted string representation of the EvaporationSpectrum.
         
-        This uses the evaporation spectrum equation:
-        f(E → E_out) = (sqrt(E_out) / I) * exp(-E_out / θ(E))
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
         Returns
         -------
-        float
-            Sampled outgoing energy
+        str
+            Formatted string representation
         """
-        if rng is None:
-            rng = np.random.default_rng()
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Evaporation Spectrum (Law 9)':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
         
-        # Get the temperature parameter for this incident energy
-        temperature = self.get_temperature(incident_energy)
+        # Description of the energy distribution
+        description = (
+            "This distribution represents an evaporation spectrum of form:\n"
+            "f(E→E') = (sqrt(E_out) / I) * exp(-E_out / θ(E))\n\n"
+            "where I is the normalization constant:\n"
+            "I = θ^2 * [1 - exp(-(E - U) / θ) * (1 + (E - U) / θ)]\n\n"
+            "This spectrum is commonly used for neutron emission in compound nuclear reactions.\n\n"
+        )
         
-        # Check if we have valid temperature
-        if temperature <= 0.0:
-            return 0.0
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
         
-        # Calculate the restriction on outgoing energy: 0 ≤ E_out ≤ (E − U)
-        max_e_out = max(0.0, incident_energy - self.restriction_energy)
+        info_table = "Distribution Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
         
-        # Use rejection sampling to sample from the evaporation distribution
-        while True:
-            # Sample from exponential distribution with mean = temperature
-            e_out = -temperature * np.log(rng.random())
-            
-            # Check if within the allowed range
-            if e_out > max_e_out:
-                continue
-                
-            # Acceptance probability proportional to sqrt(E_out)
-            if rng.random() <= np.sqrt(e_out / temperature):
-                return e_out
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Law Number", self.law, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Incident Energies", self.n_incident_energies, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Restriction Energy (U)", f"{self.restriction_energy:.6g} MeV",
+            width1=property_col_width, width2=value_col_width)
+        
+        # If we have incident energies, show the range
+        if self.incident_energies:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Incident Energy Range", 
+                f"{min(self.incident_energies):.6g} - {max(self.incident_energies):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+        
+        # If we have temperatures, show the range
+        if self.temperatures:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Temperature Range", 
+                f"{min(self.temperatures):.6g} - {max(self.temperatures):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Create a section for available methods
+        methods = {
+            ".get_temperature(incident_energy)": "Get the effective temperature for a given incident energy",
+            ".calculate_normalization_constant(incident_energy, temperature)": "Calculate the normalization constant I"
+        }
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add example section
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Get the effective temperature at 2 MeV incident energy\n"
+            "temperature = distribution.get_temperature(incident_energy=2.0)\n"
+            "\n"
+            "# Calculate the normalization constant\n"
+            "norm_const = distribution.calculate_normalization_constant(incident_energy=2.0, temperature=temperature)\n"
+        )
+        
+        return header + description + info_table + methods_section + "\n" + example

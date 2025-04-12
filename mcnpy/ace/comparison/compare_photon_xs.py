@@ -2,7 +2,7 @@
 Module for comparing photon production cross section data in ACE format.
 """
 
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.photon_production_xs import YieldBasedCrossSection, DirectCrossSection
 from mcnpy.ace.comparison.compare_ace import compare_arrays

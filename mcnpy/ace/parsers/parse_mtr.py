@@ -1,7 +1,7 @@
 from typing import List, Optional
 import logging
 from mcnpy.ace.classes.mt_reaction.mtr import ReactionMTData
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)

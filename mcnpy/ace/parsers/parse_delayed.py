@@ -1,6 +1,6 @@
 import logging
 from mcnpy.ace.classes.delayed_neutron.delayed_neutron import DelayedNeutronPrecursor, DelayedNeutronData
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from typing import List, Tuple
 
 # Setup logger

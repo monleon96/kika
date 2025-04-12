@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.particle_release.particle_release_repr import particle_release_repr
 
 @dataclass

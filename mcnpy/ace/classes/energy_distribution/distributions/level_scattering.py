@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import numpy as np
 from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy._utils import create_repr_section
 
 @dataclass
 class LevelScattering(EnergyDistribution):
@@ -75,3 +76,90 @@ class LevelScattering(EnergyDistribution):
         e_lab = e_cm + second_term
         
         return max(0.0, e_lab)
+        
+    def __repr__(self) -> str:
+        """
+        Returns a formatted string representation of the LevelScattering distribution.
+        
+        Returns
+        -------
+        str
+            Formatted string representation
+        """
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Level Scattering Distribution (Law 3)':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        # Description of the energy distribution
+        description = (
+            "This distribution represents discrete two-body scattering reactions where the\n"
+            "target nucleus is excited to a discrete energy level. The distribution uses\n"
+            "parameters derived from the atomic weight ratio (A) and the energy level (Q).\n\n"
+            "The outgoing energy in the center-of-mass frame is calculated as:\n"
+            "    E_out^CM = (A/(A+1))^2 * (E - (A+1)/A*|Q|)\n\n"
+            "Then in the laboratory frame:\n"
+            "    E_out^LAB = E_out^CM + {E + 2μ_CM*(A+1)*(E*E_out^CM)^0.5} / (A+1)^2\n\n"
+        )
+        
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
+        
+        info_table = "Distribution Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
+        
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Law Number", self.law, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "(A+1)/A|Q| Parameter", f"{self.aplusoaabsq:.6g}", 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "(A/(A+1))^2 Parameter", f"{self.asquare:.6g}", 
+            width1=property_col_width, width2=value_col_width)
+        
+        # Calculate A from the parameters
+        if self.asquare > 0:
+            a_value = np.sqrt(self.asquare) / (1 - np.sqrt(self.asquare))
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Atomic Weight Ratio (A)", f"{a_value:.6g}", 
+                width1=property_col_width, width2=value_col_width)
+        
+        # Calculate Q from the parameters
+        if self.aplusoaabsq > 0 and self.asquare > 0:
+            a_value = np.sqrt(self.asquare) / (1 - np.sqrt(self.asquare))
+            q_value = -self.aplusoaabsq * a_value / (a_value + 1)
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Energy Level (Q)", f"{q_value:.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Create a section for available methods
+        methods = {
+            ".get_cm_energy(incident_energy)": "Calculate the outgoing center-of-mass energy",
+            ".get_lab_energy(incident_energy, cm_cosine)": "Calculate the laboratory energy given CM cosine"
+        }
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add example section
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Calculate the CM energy for an incident neutron at 2 MeV\n"
+            "e_cm = distribution.get_cm_energy(incident_energy=2.0)\n\n"
+            "# Calculate the lab energy for a cosine of 0.5 in the CM frame\n"
+            "e_lab = distribution.get_lab_energy(incident_energy=2.0, cm_cosine=0.5)\n"
+        )
+        
+        return header + description + info_table + methods_section + "\n" + example

@@ -3,7 +3,7 @@ Module for comparing energy distribution data in ACE format.
 """
 
 from typing import List
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.energy_distribution.energy_distribution import EnergyDistribution
 from mcnpy.ace.comparison.compare_ace import compare_arrays

@@ -1,8 +1,12 @@
+import logging
 from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
 from mcnpy.ace.classes.energy_distribution.distributions.level_scattering import LevelScattering
 
-def parse_level_scattering(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> LevelScattering:
+# Setup logger
+logger = logging.getLogger(__name__)
+
+def parse_level_scattering(ace: Ace, base_dist: EnergyDistribution, idat_idx: int, debug: bool = False) -> LevelScattering:
     """
     Parse a level scattering distribution (Law 3).
     
@@ -18,12 +22,17 @@ def parse_level_scattering(ace: Ace, base_dist: EnergyDistribution, idat_idx: in
         Base distribution with common properties
     idat_idx : int
         Starting index for the law data in the XSS array
+    debug : bool, optional
+        If True, enables debug logging
         
     Returns
     -------
     LevelScattering
         Level scattering distribution object
     """
+    if debug:
+        logger.debug(f"Parsing level scattering distribution (Law 3) starting at index {idat_idx}")
+    
     # Create a new distribution object using the base properties
     distribution = LevelScattering(
         law=base_dist.law,
@@ -41,9 +50,18 @@ def parse_level_scattering(ace: Ace, base_dist: EnergyDistribution, idat_idx: in
         # LDAT(1): (A + 1)/A|Q|
         aplusoaabsq_entry = ace.xss_data[idat_idx]
         distribution.aplusoaabsq = aplusoaabsq_entry.value
+        if debug:
+            logger.debug(f"(A + 1)/A|Q| value: {distribution.aplusoaabsq}")
         
         # LDAT(2): (A / (A + 1))^2
         asquare_entry = ace.xss_data[idat_idx + 1]
         distribution.asquare = asquare_entry.value
+        if debug:
+            logger.debug(f"(A / (A + 1))^2 value: {distribution.asquare}")
+    else:
+        if debug:
+            logger.debug(f"Not enough data to read parameters. Need indices {idat_idx} and {idat_idx + 1}, have {len(ace.xss_data)} entries")
     
+    if debug:
+        logger.debug("Completed parsing level scattering distribution")
     return distribution

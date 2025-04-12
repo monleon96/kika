@@ -6,7 +6,7 @@ from mcnpy.ace.classes.angular_distribution.distributions.isotropic import Isotr
 from mcnpy.ace.classes.angular_distribution.distributions.equiprobable import EquiprobableAngularDistribution
 from mcnpy.ace.classes.angular_distribution.distributions.tabulated import TabulatedAngularDistribution
 from mcnpy.ace.classes.angular_distribution.distributions.kalbach_mann import KalbachMannAngularDistribution
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 import logging
 
 # Setup logger

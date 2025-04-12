@@ -3,7 +3,7 @@ from typing import List, Optional, Union, Dict, Any
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.header import Header
 from mcnpy.ace.classes.nubar.nubar import NuContainer
 from mcnpy.ace.classes.delayed_neutron.delayed_neutron import DelayedNeutronData

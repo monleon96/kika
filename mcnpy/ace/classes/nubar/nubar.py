@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Union
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy._utils import create_repr_section
 from mcnpy.ace.classes.nubar.nubar_repr import nudata_repr, nucontainer_repr
 import pandas as pd

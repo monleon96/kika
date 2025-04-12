@@ -1,5 +1,5 @@
 from typing import Optional, Tuple
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 
 
 class ErrorMessageDict(dict):

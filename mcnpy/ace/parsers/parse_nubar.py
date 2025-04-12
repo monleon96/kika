@@ -1,7 +1,7 @@
 import logging
 from typing import List
 from mcnpy.ace.classes.nubar.nubar import NuData, NuPolynomial, NuTabulated, NuContainer
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)

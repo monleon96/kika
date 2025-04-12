@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.cross_section.cross_section_repr import reaction_xs_repr, xs_data_repr
 import numpy as np
 import matplotlib.pyplot as plt

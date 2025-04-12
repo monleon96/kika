@@ -2,10 +2,10 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.angular_distribution.base import AngularDistribution
 from mcnpy.ace.classes.angular_distribution.types import AngularDistributionType
-from mcnpy.ace.classes.angular_distribution.angular_distribution_repr import equiprobable_distribution_repr
+from mcnpy._utils import create_repr_section
 
 
 @dataclass
@@ -21,56 +21,6 @@ class EquiprobableAngularDistribution(AngularDistribution):
     def cosine_bins(self) -> List[List[float]]:
         """Get cosine bin values as lists of floats."""
         return [[c.value for c in cosine_list] for cosine_list in self._cosine_bins]
-    
-    def sample_mu(self, energy: float, random_value: float) -> float:
-        """
-        Sample a scattering cosine μ at the given energy using the provided random value.
-        
-        Parameters
-        ----------
-        energy : float
-            Incident energy
-        random_value : float
-            Random number between 0 and 1
-            
-        Returns
-        -------
-        float
-            Sampled cosine value μ
-        """
-        # If energy is outside our range, use isotropic scattering
-        if not self._energies or energy < self._energies[0].value or energy > self._energies[-1].value:
-            return 2.0 * random_value - 1.0
-        
-        # Find bounding energy indices
-        energy_values = self.energies
-        idx = np.searchsorted(energy_values, energy)
-        if idx == 0:
-            # Below first energy, use first set of bins
-            cosine_values = self.cosine_bins[0]
-        elif idx >= len(energy_values):
-            # Above last energy, use last set of bins
-            cosine_values = self.cosine_bins[-1]
-        else:
-            # Interpolate between energy points
-            e_low = energy_values[idx-1]
-            e_high = energy_values[idx]
-            frac = (energy - e_low) / (e_high - e_low)
-            
-            cosines_low = self.cosine_bins[idx-1]
-            cosines_high = self.cosine_bins[idx]
-            
-            # Interpolate cosine values
-            cosine_values = [(1-frac)*cl + frac*ch for cl, ch in zip(cosines_low, cosines_high)]
-        
-        # Select the appropriate bin
-        bin_idx = min(int(32 * random_value), 31)
-        mu_low = cosine_values[bin_idx]
-        mu_high = cosine_values[bin_idx+1]
-        
-        # Linearly interpolate within the bin
-        frac_in_bin = 32 * random_value - bin_idx
-        return (1-frac_in_bin) * mu_low + frac_in_bin * mu_high
 
     def to_dataframe(self, energy: float, num_points: int = 100, interpolate: bool = False) -> Optional[pd.DataFrame]:
         """
@@ -223,4 +173,117 @@ class EquiprobableAngularDistribution(AngularDistribution):
             'pdf': pdf_values
         })
 
-    __repr__ = equiprobable_distribution_repr
+    def __repr__(self) -> str:
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Equiprobable Angular Distribution Details':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        description = (
+            "This object represents an angular distribution using 32 equiprobable bins.\n"
+            "The cosine range [-1, 1] is divided into 32 bins such that each bin has\n"
+            "the same probability (1/32). The bin boundaries vary with incident energy.\n\n"
+            "Data Structure Overview:\n"
+            "- For each incident energy point, the ACE file stores 33 cosine values\n"
+            "  that define the boundaries of 32 equiprobable bins\n"
+            "- The first value is always -1 and the last is +1\n"
+            "- Each bin has a probability of 1/32 = 0.03125\n"
+            "- The density within each bin is constant (flat histogram)\n\n"
+        )
+        
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3
+        
+        info_table = "Data Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
+        
+        # MT number
+        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "MT Number", f"{mt_value}", width1=property_col_width, width2=value_col_width)
+        
+        # Distribution properties
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Distribution Type", "Equiprobable Bin",
+            width1=property_col_width, width2=value_col_width)
+        
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Bins", "32",
+            width1=property_col_width, width2=value_col_width)
+        
+        # Energy grid information
+        if self.energies:
+            num_energies = len(self.energies)
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Number of Energy Points", num_energies,
+                width1=property_col_width, width2=value_col_width)
+            
+            min_energy = self.energies[0]  # Now directly a float
+            max_energy = self.energies[-1]  # Now directly a float
+            energy_range = f"{min_energy:.6g} - {max_energy:.6g} MeV"
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Energy Range", energy_range,
+                width1=property_col_width, width2=value_col_width)
+        
+        # Bin information
+        if self.cosine_bins:
+            num_bin_sets = len(self.cosine_bins)
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Number of Bin Sets", num_bin_sets,
+                width1=property_col_width, width2=value_col_width)
+            
+            # Show bin boundaries for the first energy point if available
+            if num_bin_sets > 0 and len(self.cosine_bins[0]) > 0:
+                first_set = self.cosine_bins[0]  # Now directly a list of floats
+                first_bins = f"[{first_set[0]:.3f}, {first_set[-1]:.3f}] ({len(first_set)-1} bins)"
+                info_table += "{:<{width1}} {:<{width2}}\n".format(
+                    "First Energy Bin Range", first_bins,
+                    width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Raw data properties section
+        properties = {
+            ".mt": "MT number of the reaction (int)",
+            ".energies": "List of incident energy points as float values (List[float])",
+            ".cosine_bins": "List of cosine bin boundaries for each energy as float values (List[List[float]])"
+        }
+        
+        properties_section = create_repr_section(
+            "Raw Data Properties (Direct from ACE file):", 
+            properties, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Methods section
+        methods = {
+            ".to_dataframe(energy, num_points)": "Convert to a pandas DataFrame at a specific energy",
+            ".plot(energy)": "Create a plot of the distribution at a specific energy"
+        }
+        
+        methods_section = create_repr_section(
+            "Calculation Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add example for using this specific distribution type
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Directly access raw cosine bin boundaries for the first energy point\n"
+            "first_energy = distribution.energies[0]  # Returns a float, not XssEntry\n"
+            "bin_boundaries = distribution.cosine_bins[0]  # Returns a list of floats\n"
+            "# Note: 33 values define 32 equiprobable bins\n"
+            "\n"
+            "# Create a histogram-style plot of the distribution at 2 MeV\n"
+            "fig, ax = distribution.plot(energy=2.0)\n"
+        )
+        
+        return header + description + info_table + properties_section + "\n" + methods_section + "\n" + example

@@ -19,11 +19,15 @@ from mcnpy.ace.parsers.laws import (
     parse_laboratory_angle_energy_distribution,
     parse_energy_dependent_yield
 )
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 import logging
 
 # Setup logger
 logger = logging.getLogger(__name__)
+
+class EnergyDistributionParseError(Exception):
+    """Exception raised for errors in parsing energy distribution data."""
+    pass
 
 def read_energy_distribution_blocks(ace: Ace, debug: bool = False) -> EnergyDistributionContainer:
     """
@@ -52,6 +56,7 @@ def read_energy_distribution_blocks(ace: Ace, debug: bool = False) -> EnergyDist
     ValueError
         If required data is missing or indices are invalid
     """
+
     if debug: 
         logger.debug("\n===== ENERGY DISTRIBUTION BLOCKS PARSING =====")
         logger.debug(f"Header info: ZAID={ace.header.zaid}")
@@ -230,7 +235,7 @@ def read_dlw_block(ace: Ace, result: EnergyDistributionContainer, jxs_dlw: int, 
         
         try:
             if debug: logger.debug(f"Calling read_energy_distribution for MT={mt_value}")
-            distributions = read_energy_distribution(ace, offset, debug=debug)
+            distributions = read_energy_distribution(ace, offset, jxs_dlw, debug=debug)
             if distributions:
                 if debug: logger.debug(f"Successfully read {len(distributions)} distributions for MT={mt_value}")
                 result.incident_neutron[mt_value] = distributions
@@ -242,7 +247,7 @@ def read_dlw_block(ace: Ace, result: EnergyDistributionContainer, jxs_dlw: int, 
             if debug:
                 logger.debug(f"Index error parsing energy distribution for MT={mt_value}: {e}")
                 logger.debug(f"Problematic offset: {offset}, locator: {locator_value}, jxs_dlw: {jxs_dlw}")
-                
+    
     # Process energy-dependent yields for neutron reactions
     if ace.particle_release and ace.particle_release.has_neutron_data:
         if debug: logger.debug("Processing energy-dependent yields for neutron reactions")
@@ -349,7 +354,7 @@ def read_dlwp_block(ace: Ace, result: EnergyDistributionContainer, jxs_dlwp: int
         
         try:
             if debug: logger.debug(f"Calling read_energy_distribution for MT={mt_value}")
-            distributions = read_energy_distribution(ace, offset, debug=debug)
+            distributions = read_energy_distribution(ace, offset, jxs_dlwp, debug=debug)
             if distributions:
                 if debug: logger.debug(f"Successfully read {len(distributions)} distributions for MT={mt_value}")
                 result.photon_production[mt_value] = distributions
@@ -496,7 +501,7 @@ def read_dlwh_block(ace: Ace, result: EnergyDistributionContainer, debug: bool =
             
             try:
                 if debug: logger.debug(f"Calling read_energy_distribution for MT={mt_value}")
-                distributions = read_energy_distribution(ace, offset, debug=debug)
+                distributions = read_energy_distribution(ace, offset, jed, debug=debug)
                 if distributions:
                     if debug: logger.debug(f"Successfully read {len(distributions)} distributions for MT={mt_value}")
                     result.particle_production[i][mt_value] = distributions
@@ -558,7 +563,7 @@ def read_dned_block(ace: Ace, result: EnergyDistributionContainer, jxs_dned: int
         
         try:
             if debug: logger.debug(f"Calling read_energy_distribution for group {i+1}")
-            distributions = read_energy_distribution(ace, offset, debug=debug)
+            distributions = read_energy_distribution(ace, offset, jxs_dned, debug=debug)
             if distributions and len(distributions) > 0:
                 result.delayed_neutron.append(distributions[0])
                 if debug: logger.debug(f"Successfully read distribution for group {i+1}")
@@ -573,7 +578,7 @@ def read_dned_block(ace: Ace, result: EnergyDistributionContainer, jxs_dned: int
     if debug: logger.debug("Finished read_dned_block")
 
 
-def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List[EnergyDistribution]:
+def read_energy_distribution(ace: Ace, offset: int, base_jed: int, debug: bool = False) -> List[EnergyDistribution]:
     """
     Read energy distribution data starting at the given offset in the XSS array.
     
@@ -598,6 +603,8 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
         The Ace object containing the XSS array
     offset : int
         Starting index in the XSS array (JED + LOCC - 1)
+    base_jed : int
+        Base JED index to be used for absolute position calculations
     debug : bool, optional
         Whether to print debug information, defaults to False
         
@@ -605,55 +612,134 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
     -------
     List[EnergyDistribution]
         List of energy distribution objects
+        
+    Raises
+    ------
+    EnergyDistributionParseError
+        If there are issues with data format or indexing
     """
     distributions = []
-    jed = offset  # Used as the reference for all offsets in this function
+    
+    if debug:
+        logger.debug(f"\n=== READING ENERGY DISTRIBUTION ===")
+        logger.debug(f"Starting at offset={offset}, base_jed={base_jed}")
+    
+    if offset >= len(ace.xss_data):
+        raise EnergyDistributionParseError(f"Initial offset {offset} out of bounds for XSS data with length {len(ace.xss_data)}")
     
     current_offset = offset
+    law_count = 0
+    
     while current_offset < len(ace.xss_data):
-        lnw_entry = ace.xss_data[current_offset]
-        law_entry = ace.xss_data[current_offset + 1]
-        idat_entry = ace.xss_data[current_offset + 2]
+        law_count += 1
+        if debug:
+            logger.debug(f"\nParsing law #{law_count} at offset {current_offset}")
         
-        lnw = int(lnw_entry.value)
-        law = int(law_entry.value)
-        idat = int(idat_entry.value)
+        try:
+            # Read LNW, LAW, IDAT values
+            lnw_entry = ace.xss_data[current_offset]
+            law_entry = ace.xss_data[current_offset + 1]
+            idat_entry = ace.xss_data[current_offset + 2]
+            
+            lnw = int(lnw_entry.value)
+            law = int(law_entry.value)
+            idat = int(idat_entry.value)
+            
+            if debug:
+                logger.debug(f"Table 31 values: LNW={lnw}, LAW={law}, IDAT={idat}")
+                logger.debug(f"Read from indices: {current_offset}, {current_offset+1}, {current_offset+2}")
+        except (IndexError, AttributeError, ValueError) as e:
+            raise EnergyDistributionParseError(f"Failed to read LNW/LAW/IDAT at offset {current_offset}: {str(e)}")
         
-        n_r_entry = ace.xss_data[current_offset + 3]
-        n_r = int(n_r_entry.value)
+        # Validate LAW value (should be one of the known laws)
+        valid_laws = [1, 2, 3, 4, 5, 7, 9, 11, 22, 24, 44, 61, 66, 67]
+        if law not in valid_laws:
+            logger.debug(f"WARNING: Unexpected LAW value: {law}. Valid laws are: {valid_laws}")
         
-        idx = current_offset + 4
+        try:
+            # Read NR (number of interpolation regions)
+            n_r_entry = ace.xss_data[current_offset + 3]
+            n_r = int(n_r_entry.value)
+            if debug:
+                logger.debug(f"NR={n_r} (number of interpolation regions)")
+                
+            idx = current_offset + 4
+        except (IndexError, AttributeError, ValueError) as e:
+            raise EnergyDistributionParseError(f"Failed to read NR at offset {current_offset + 3}: {str(e)}")
         
+        # Read NBT, INT arrays if present
         nbt = []
         interp = []
+        
         if n_r > 0:
-            nbt = [int(ace.xss_data[idx + i].value) for i in range(n_r)]
-            idx += n_r
-            interp = [int(ace.xss_data[idx + i].value) for i in range(n_r)]
-            idx += n_r
+            if idx + 2*n_r - 1 >= len(ace.xss_data):
+                raise EnergyDistributionParseError(
+                    f"Not enough data for NBT/INT arrays. Need indices up to {idx + 2*n_r - 1}, have {len(ace.xss_data)}."
+                )
+            
+            try:
+                nbt = [int(ace.xss_data[idx + i].value) for i in range(n_r)]
+                idx += n_r
+                interp = [int(ace.xss_data[idx + i].value) for i in range(n_r)]
+                idx += n_r
+                
+                if debug:
+                    logger.debug(f"NBT={nbt}, INT={interp}")
+            except (IndexError, AttributeError, ValueError) as e:
+                raise EnergyDistributionParseError(f"Failed to read NBT/INT arrays: {str(e)}")
         
-        n_e_entry = ace.xss_data[idx]
-        n_e = int(n_e_entry.value)
-        idx += 1
+        # Read NE (number of energies for applicability)
+        try:
+            if idx >= len(ace.xss_data):
+                raise EnergyDistributionParseError(f"Index {idx} out of bounds for XSS data when reading NE")
+                
+            n_e_entry = ace.xss_data[idx]
+            n_e = int(n_e_entry.value)
+            idx += 1
+            
+            if debug:
+                logger.debug(f"NE={n_e} (number of energies for applicability)")
+        except (IndexError, AttributeError, ValueError) as e:
+            raise EnergyDistributionParseError(f"Failed to read NE at index {idx-1}: {str(e)}")
         
+        # Read E, P arrays
         energies = []
         probabilities = []
-        if n_e > 0:
-            energies = ace.xss_data[idx:idx + n_e]
-            idx += n_e
-            probabilities = ace.xss_data[idx:idx + n_e]
-            idx += n_e
         
-        idat_absolute = jed + idat 
+        if n_e > 0:
+            if idx + 2*n_e - 1 >= len(ace.xss_data):
+                raise EnergyDistributionParseError(
+                    f"Not enough data for E/P arrays. Need indices up to {idx + 2*n_e - 1}, have {len(ace.xss_data)}."
+                )
+            
+            try:
+                energies = ace.xss_data[idx:idx + n_e]
+                idx += n_e
+                probabilities = ace.xss_data[idx:idx + n_e]
+                idx += n_e
+                
+                if debug and n_e > 0:
+                    energy_values = [e.value for e in energies]
+                    prob_values = [p.value for p in probabilities]
+                    logger.debug(f"E range: [{energy_values[0]:.5e} - {energy_values[-1]:.5e}]")
+                    logger.debug(f"P range: [{prob_values[0]:.5e} - {prob_values[-1]:.5e}]")
+            except (IndexError, AttributeError) as e:
+                raise EnergyDistributionParseError(f"Failed to read E/P arrays: {str(e)}")
+        
+        # Calculate absolute position using the base JED
+        idat_absolute = base_jed + idat - 1
         
         if debug: 
-            logger.debug(f"Law {law}, LNW={lnw}, IDAT={idat}, IDAT_abs={idat_absolute}, N_R={n_r}, N_E={n_e}")
-            if n_r > 0:
-                logger.debug(f"NBT={nbt}, INT={interp}")
-            if n_e > 0:
-                logger.debug(f"Energy points: {[entry.value for entry in energies]}")
-                logger.debug(f"Probabilities: {[entry.value for entry in probabilities]}")
+            logger.debug(f"IDAT_absolute = base_jed + idat - 1 = {base_jed} + {idat} - 1 = {idat_absolute}")
+            if idat_absolute < len(ace.xss_data):
+                logger.debug(f"Value at IDAT_absolute: {ace.xss_data[idat_absolute].value}")
         
+        if idat_absolute >= len(ace.xss_data):
+            raise EnergyDistributionParseError(
+                f"IDAT_absolute={idat_absolute} out of bounds for XSS data with length {len(ace.xss_data)}"
+            )
+        
+        # Create the energy distribution object
         distribution = create_energy_distribution(
             ace, law, idat, idat_absolute, 
             energies, probabilities, nbt, interp,
@@ -661,20 +747,42 @@ def read_energy_distribution(ace: Ace, offset: int, debug: bool = False) -> List
         )
         
         if distribution:
+            # Add relevant JXS values to help Law 61 parser
+            if hasattr(distribution, 'jxs_dlw'):
+                distribution.jxs_dlw = base_jed
+            
             distributions.append(distribution)
             if debug: logger.debug(f"Successfully created distribution for law {law}")
-        elif debug: logger.debug(f"Failed to create distribution for law {law}")
+        else:
+            if debug: logger.debug(f"No distribution created for law {law}")
         
+        # Check if this is the last law
         if lnw == 0:
             if debug: logger.debug("Reached last law (LNW=0)")
             break
             
-        current_offset = jed + lnw
-        if debug:  logger.debug(f"Moving to next law at offset {current_offset}")
+        # Calculate position of next law using base_jed
+        next_offset = base_jed + lnw - 1
+        
+        if debug:  
+            logger.debug(f"Next law at: base_jed + lnw - 1 = {base_jed} + {lnw} - 1 = {next_offset}")
+        
+        if next_offset <= current_offset:
+            raise EnergyDistributionParseError(
+                f"Invalid next law offset {next_offset} <= current offset {current_offset}. Possible infinite loop."
+            )
+            
+        if next_offset >= len(ace.xss_data):
+            raise EnergyDistributionParseError(
+                f"Next law offset {next_offset} out of bounds for XSS data with length {len(ace.xss_data)}"
+            )
+        
+        current_offset = next_offset
     
-    if debug: logger.debug(f"Finished reading distributions, found {len(distributions)} laws")
+    if debug: 
+        logger.debug(f"\nFinished reading distributions. Found {len(distributions)} laws")
+    
     return distributions
-
 
 def create_energy_distribution(
     ace: Ace, law: int, idat: int, idat_absolute: int, 
@@ -711,7 +819,17 @@ def create_energy_distribution(
     -------
     Optional[EnergyDistribution]
         Energy distribution object, or None if the law is not supported
+        
+    Raises
+    ------
+    EnergyDistributionParseError
+        If there are issues with the parsing process
     """
+    if debug: 
+        logger.debug(f"\n--- Creating energy distribution for law {law} ---")
+        logger.debug(f"IDAT={idat}, IDAT_absolute={idat_absolute}")
+    
+    # Create base distribution object
     base_distribution = EnergyDistribution(
         law=law, 
         idat=idat
@@ -721,50 +839,64 @@ def create_energy_distribution(
     base_distribution.nbt = nbt
     base_distribution.interp = interp
     
-    if debug: logger.debug(f"Creating energy distribution for law {law}")
+
+    # Store the actual JED value - this should always be used
+    base_distribution.jed = idat_absolute - idat + 1  # This is the actual JED value
+
+    ## Store the JXS values for Law 61
+    #try:
+    #    base_distribution.jxs_dlw = ace.header.jxs_array[11]  # JXS(11) for neutron reactions
+    #    base_distribution.jxs_dlwp = ace.header.jxs_array[19]  # JXS(19) for photon-producing reactions
+    #except (IndexError, AttributeError) as e:
+    #    if debug:
+    #        logger.debug(f"Warning: Could not read JXS values for distribution: {str(e)}")
     
-    if law == 1:
-        if debug: logger.debug("Parsing tabular energy distribution (Law 1)")
-        return parse_tabular_energy_distribution(ace, base_distribution, idat_absolute)
-    elif law == 2:
-        if debug: logger.debug("Parsing discrete energy distribution (Law 2)")
-        return parse_discrete_energy_distribution(ace, base_distribution, idat_absolute)
-    elif law == 3:
-        if debug: logger.debug("Parsing level scattering (Law 3)")
-        return parse_level_scattering(ace, base_distribution, idat_absolute)
-    elif law == 4:
-        if debug: logger.debug("Parsing continuous energy-angle distribution (Law 4)")
-        return parse_continuous_energy_angle_distribution(ace, base_distribution, idat_absolute)
-    elif law == 5:
-        if debug: logger.debug("Parsing general evaporation spectrum (Law 5)")
-        return parse_general_evaporation_spectrum(ace, base_distribution, idat_absolute)
-    elif law == 7:
-        if debug: logger.debug("Parsing Maxwell fission spectrum (Law 7)")
-        return parse_maxwell_fission_spectrum(ace, base_distribution, idat_absolute)
-    elif law == 9:
-        if debug:  logger.debug("Parsing evaporation spectrum (Law 9)")
-        return parse_evaporation_spectrum(ace, base_distribution, idat_absolute)
-    elif law == 11:
-        if debug: logger.debug("Parsing energy-dependent Watt spectrum (Law 11)")
-        return parse_energy_dependent_watt_spectrum(ace, base_distribution, idat_absolute)
-    elif law == 22:
-        if debug: logger.debug("Parsing tabular linear functions (Law 22)")
-        return parse_tabular_linear_functions(ace, base_distribution, idat_absolute)
-    elif law == 24:
-        if debug: logger.debug("Parsing tabular energy multipliers (Law 24)")
-        return parse_tabular_energy_multipliers(ace, base_distribution, idat_absolute)
-    elif law == 44:
-        if debug: logger.debug("Parsing Kalbach-Mann distribution (Law 44)")
-        return parse_kalbach_mann_distribution(ace, base_distribution, idat_absolute)
-    elif law == 61:
-        if debug: logger.debug("Parsing tabulated angle-energy distribution (Law 61)")
-        return parse_tabulated_angle_energy_distribution(ace, base_distribution, idat_absolute)
-    elif law == 66:
-        if debug: logger.debug("Parsing N-body phase space distribution (Law 66)")
-        return parse_nbody_phase_space_distribution(ace, base_distribution, idat_absolute)
-    elif law == 67:
-        if debug: logger.debug("Parsing laboratory angle-energy distribution (Law 67)")
-        return parse_laboratory_angle_energy_distribution(ace, base_distribution, idat_absolute)
-    else:
-        if debug: logger.debug(f"No specific parser for law {law}, returning base distribution")
-        return base_distribution
+    # Call the appropriate parser based on the law number
+    try:
+        if law == 1:
+            if debug: logger.debug("Parsing tabular energy distribution (Law 1)")
+            return parse_tabular_energy_distribution(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 2:
+            if debug: logger.debug("Parsing discrete energy distribution (Law 2)")
+            return parse_discrete_energy_distribution(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 3:
+            if debug: logger.debug("Parsing level scattering (Law 3)")
+            return parse_level_scattering(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 4:
+            if debug: logger.debug("Parsing continuous energy-angle distribution (Law 4)")
+            return parse_continuous_energy_angle_distribution(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 5:
+            if debug: logger.debug("Parsing general evaporation spectrum (Law 5)")
+            return parse_general_evaporation_spectrum(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 7:
+            if debug: logger.debug("Parsing Maxwell fission spectrum (Law 7)")
+            return parse_maxwell_fission_spectrum(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 9:
+            if debug:  logger.debug("Parsing evaporation spectrum (Law 9)")
+            return parse_evaporation_spectrum(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 11:
+            if debug: logger.debug("Parsing energy-dependent Watt spectrum (Law 11)")
+            return parse_energy_dependent_watt_spectrum(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 22:
+            if debug: logger.debug("Parsing tabular linear functions (Law 22)")
+            return parse_tabular_linear_functions(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 24:
+            if debug: logger.debug("Parsing tabular energy multipliers (Law 24)")
+            return parse_tabular_energy_multipliers(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 44:
+            if debug: logger.debug("Parsing Kalbach-Mann distribution (Law 44)")
+            return parse_kalbach_mann_distribution(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 61:
+            if debug: logger.debug("Parsing tabulated angle-energy distribution (Law 61)")
+            return parse_tabulated_angle_energy_distribution(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 66:
+            if debug: logger.debug("Parsing N-body phase space distribution (Law 66)")
+            return parse_nbody_phase_space_distribution(ace, base_distribution, idat_absolute, debug=debug)
+        elif law == 67:
+            if debug: logger.debug("Parsing laboratory angle-energy distribution (Law 67)")
+            return parse_laboratory_angle_energy_distribution(ace, base_distribution, idat_absolute, debug=debug)
+        else:
+            if debug: logger.debug(f"No specific parser for law {law}, returning base distribution")
+            return base_distribution
+    except Exception as e:
+        raise EnergyDistributionParseError(f"Error parsing law {law} at absolute index {idat_absolute}: {str(e)}")

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 import numpy as np
 from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy._utils import create_repr_section
 
 
 @dataclass
@@ -94,60 +95,97 @@ class TabularLinearFunctions(EnergyDistribution):
         # Return the function data for the lower incident energy
         return self.get_function_data(idx)
     
-    def sample_outgoing_energy(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> float:
+    def __repr__(self) -> str:
         """
-        Sample an outgoing energy from the distribution for a given incident energy.
+        Returns a formatted string representation of the TabularLinearFunctions distribution.
         
-        For Law 22, we use equations:
-        1. Find function index k such that: ∑(P_ij, j=1...k-1) < ξ ≤ ∑(P_ij, j=1...k)
-        2. Calculate outgoing energy: E_out = C_ik * (E − T_ik)
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
         Returns
         -------
-        float
-            Sampled outgoing energy
+        str
+            Formatted string representation
         """
-        # Get function data for this incident energy
-        function_data = self.get_interpolated_function_data(incident_energy)
-        if not function_data:
-            return 0.0
-            
-        # Use numpy's random if none provided
-        if rng is None:
-            rng = np.random.default_rng()
-            
-        # Generate random number
-        xi = rng.random()
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Tabular Linear Functions (Law 22)':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
         
-        # Get the probability, origin, and slope arrays
-        nf = function_data['nf']
-        p_values = function_data['p']
-        t_values = function_data['t']
-        c_values = function_data['c']
+        # Description of the energy distribution
+        description = (
+            "This distribution represents outgoing energy as a linear function of the incident\n"
+            "energy, using the formula: E_out = C_ik * (E - T_ik)\n\n"
+            "For each incident energy, there are multiple functions with associated probabilities.\n"
+            "This law is also known as UK Law 2 in some nuclear data formats.\n\n"
+        )
         
-        # Find the function index k using cumulative probability
-        cum_prob = 0.0
-        k = 0
-        for i in range(nf):
-            cum_prob += p_values[i]
-            if xi <= cum_prob:
-                k = i
-                break
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
         
-        # Calculate outgoing energy using selected function
-        # E_out = C_ik * (E − T_ik)
-        e_out = c_values[k] * (incident_energy - t_values[k])
+        info_table = "Distribution Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
         
-        # Ensure non-negative energy
-        return max(0.0, e_out)
-    
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Law Number", self.law, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Incident Energies", self.n_energies, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Interpolation Regions", self.n_interp_regions, 
+            width1=property_col_width, width2=value_col_width)
+        
+        # If we have incident energies, show the range
+        if self.incident_energies:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Incident Energy Range", 
+                f"{min(self.incident_energies):.6g} - {max(self.incident_energies):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+        
+        # Count function data sets
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Function Data Sets", len(self.function_data),
+            width1=property_col_width, width2=value_col_width)
+        
+        # Add information about the first energy point if available
+        if self.function_data:
+            first_data = self.function_data[0]
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Functions at First Energy Point", first_data.get('nf', 0),
+                width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Create a section for available methods
+        methods = {
+            ".get_function_data(energy_idx)": "Get function data for a specific energy index",
+            ".get_interpolated_function_data(incident_energy)": "Get function data for any incident energy"
+        }
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add example section
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Get the function data for a specific incident energy\n"
+            "function_data = distribution.get_interpolated_function_data(incident_energy=2.0)\n\n"
+            "# Extract parameters from the function data\n"
+            "if function_data:\n"
+            "    num_functions = function_data['nf']\n"
+            "    probabilities = function_data['p']\n"
+            "    origin_params = function_data['t']\n"
+            "    slope_params = function_data['c']\n"
+        )
+        
+        return header + description + info_table + methods_section + "\n" + example
 
 
 @dataclass
@@ -242,42 +280,98 @@ class TabularEnergyMultipliers(EnergyDistribution):
         
         return interp_table
     
-    def sample_outgoing_energy(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> float:
+    def __repr__(self) -> str:
         """
-        Sample an outgoing energy from the distribution for a given incident energy.
+        Returns a formatted string representation of the TabularEnergyMultipliers distribution.
         
-        For Law 24, the outgoing energy is: E_out = T * E
-        where T is a multiplier sampled from the tables.
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
         Returns
         -------
-        float
-            Sampled outgoing energy
+        str
+            Formatted string representation
         """
-        # Get interpolated multiplier table for this incident energy
-        multiplier_table = self.get_interpolated_multiplier_table(incident_energy)
-        if not multiplier_table or len(multiplier_table) <= 1:
-            return 0.0
-            
-        # Use numpy's random if none provided
-        if rng is None:
-            rng = np.random.default_rng()
-            
-        # Generate random number for equiprobable bins
-        bin_idx = rng.integers(0, len(multiplier_table) - 1)
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Tabular Energy Multipliers (Law 24)':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
         
-        # Sample multiplier value from the bin
-        multiplier = multiplier_table[bin_idx]
+        # Description of the energy distribution
+        description = (
+            "This distribution represents outgoing energy as a multiplier of the incident energy,\n"
+            "using the formula: E_out = T * E, where T is a multiplier sampled from a table.\n\n"
+            "For each incident energy, there is a table of energy multipliers. This law is also\n"
+            "known as UK Law 6 in some nuclear data formats.\n\n"
+        )
         
-        # Calculate outgoing energy: E_out = T * E
-        e_out = multiplier * incident_energy
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
         
-        # Ensure non-negative energy
-        return max(0.0, e_out)
+        info_table = "Distribution Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
+        
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Law Number", self.law, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Incident Energies", self.n_energies, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Interpolation Regions", self.n_interp_regions, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Multiplier Points per Table", self.n_mult_values, 
+            width1=property_col_width, width2=value_col_width)
+        
+        # If we have incident energies, show the range
+        if self.incident_energies:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Incident Energy Range", 
+                f"{min(self.incident_energies):.6g} - {max(self.incident_energies):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+        
+        # Information about multiplier tables
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Multiplier Tables", len(self.multiplier_tables),
+            width1=property_col_width, width2=value_col_width)
+        
+        # Add information about the first table if available
+        if self.multiplier_tables and self.multiplier_tables[0]:
+            first_table = self.multiplier_tables[0]
+            mult_range = f"{min(first_table):.6g} - {max(first_table):.6g}"
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "First Table Multiplier Range", mult_range,
+                width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Create a section for available methods
+        methods = {
+            ".get_multiplier_table(energy_idx)": "Get multiplier table for a specific energy index",
+            ".get_interpolated_multiplier_table(...)": "Get interpolated table for any incident energy"
+        }
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add example section
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Get the multiplier table for a specific incident energy\n"
+            "multipliers = distribution.get_interpolated_multiplier_table(incident_energy=2.0)\n\n"
+            "# Analyze the multiplier distribution\n"
+            "if multipliers:\n"
+            "    min_mult = min(multipliers)\n"
+            "    max_mult = max(multipliers)\n"
+            "    avg_mult = sum(multipliers) / len(multipliers)\n"
+            "    print(f\"Multiplier range: {min_mult:.6g} - {max_mult:.6g}, Average: {avg_mult:.6g}\")\n"
+        )
+        
+        return header + description + info_table + methods_section + "\n" + example

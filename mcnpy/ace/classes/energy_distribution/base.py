@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List
 import numpy as np
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.energy_distribution.types import EnergyDistributionType
 from mcnpy._utils import create_repr_section
 
@@ -138,7 +138,6 @@ class EnergyDistribution:
                     width1=property_col_width, width2=value_col_width)
         
         # Add law-specific information based on type
-        # This is a generic implementation; specific subclasses might override this
         class_name = self.__class__.__name__
         if class_name != "EnergyDistribution":
             info_table += "{:<{width1}} {:<{width2}}\n".format(
@@ -177,16 +176,12 @@ class EnergyDistribution:
             
         info_table += "-" * header_width + "\n\n"
         
-        # Create a section for available methods
+        # Create a section for available methods - UPDATED to remove sampling methods
         methods = {
-            ".get_applicability_probability(energy)": "Get probability this law applies at given incident energy",
-            ".sample_outgoing_energy(...)": "Sample outgoing energy using this distribution law"
+            ".get_applicability_probability(energy)": "Get probability this law applies at given incident energy"
         }
         
-        # Add law-specific methods
-        if class_name == "KalbachMannDistribution" or class_name == "TabulatedAngleEnergyDistribution":
-            methods[".sample_outgoing_energy_angle(...)"] = "Sample both outgoing energy and angle"
-            
+        # Add law-specific methods that aren't sampling-related
         if class_name == "LevelScattering":
             methods[".get_cm_energy(energy)"] = "Calculate center-of-mass energy for level scattering"
             methods[".get_lab_energy(energy, cosine)"] = "Calculate laboratory energy given CM cosine"

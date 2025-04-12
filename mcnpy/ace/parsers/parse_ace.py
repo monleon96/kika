@@ -1,6 +1,6 @@
 import logging
 from mcnpy.ace.classes.ace import Ace
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.header import Header
 from mcnpy.ace.parsers.parse_esz import read_esz_block
 from mcnpy.ace.parsers import read_header, read_nubar_data

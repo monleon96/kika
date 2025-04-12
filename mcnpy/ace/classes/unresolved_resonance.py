@@ -1,7 +1,8 @@
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
+from typing import List, Optional
 import numpy as np
+from mcnpy._utils import create_repr_section
 
 @dataclass
 class ProbabilityTable:
@@ -20,6 +21,49 @@ class ProbabilityTable:
     def num_entries(self) -> int:
         """Return the number of entries in the probability table."""
         return len(self.cumulative_probabilities)
+    
+    def __repr__(self) -> str:
+        """Returns a formatted string representation of the ProbabilityTable object."""
+        header_width = 80
+        header = "=" * header_width + "\n"
+        header += f"{'Probability Table Details':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        output = header
+        output += f"Probability table at energy: {self.energy:.6e} MeV\n"
+        output += f"Number of entries: {self.num_entries}\n\n"
+        
+        # Create a summary of cross section data
+        property_col_width = 15
+        
+        output += "Cross Section Summary:\n"
+        output += "-" * header_width + "\n"
+        output += f"{'Type':<{property_col_width}} {'Present':<10} {'Min Value':<20} {'Max Value':<20}\n"
+        output += "-" * header_width + "\n"
+        
+        # Function to add cross section summary
+        def add_xs_summary(name, xs_list):
+            if not xs_list:
+                return f"{name:<{property_col_width}} {'No':<10} {'-':<20} {'-':<20}\n"
+            
+            values = [xs.value for xs in xs_list]
+            return f"{name:<{property_col_width}} {'Yes':<10} {min(values):<20.6e} {max(values):<20.6e}\n"
+        
+        # Add summaries for each cross section type
+        output += add_xs_summary("Total", self.total_xs)
+        output += add_xs_summary("Elastic", self.elastic_xs)
+        output += add_xs_summary("Fission", self.fission_xs)
+        output += add_xs_summary("Capture", self.capture_xs)
+        output += add_xs_summary("Heating", self.heating_numbers)
+        output += "-" * header_width + "\n"
+        
+        # Add probability distribution info
+        if self.cumulative_probabilities:
+            prob_values = [p.value for p in self.cumulative_probabilities]
+            output += "\nCumulative Probability Range: "
+            output += f"{min(prob_values):.6f} to {max(prob_values):.6f}\n"
+        
+        return output
 
 @dataclass
 class UnresolvedResonanceTables:
@@ -39,62 +83,180 @@ class UnresolvedResonanceTables:
     tables: List[ProbabilityTable] = field(default_factory=list)  # Probability tables for each energy
     
     def __repr__(self) -> str:
-        if not self.has_data:
-            return "No unresolved resonance probability tables available"
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Unresolved Resonance Probability Tables':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
         
-        output = f"Unresolved Resonance Probability Tables\n"
-        output += "=" * 50 + "\n"
-        output += f"Number of energy points: {self.num_energies}\n"
-        output += f"Table length: {self.table_length}\n"
+        if not self.has_data:
+            return header + "No unresolved resonance probability tables available"
+        
+        output = header
+        
+        # Description section
+        description = (
+            "Unresolved resonance probability tables contain cross section data for the unresolved\n"
+            "resonance energy range. These tables allow for stochastic treatment of self-shielding\n"
+            "effects in the unresolved resonance range during transport calculations.\n\n"
+        )
+        output += description
+        
+        # Basic information section
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
+        
+        output += "Summary Information:\n"
+        output += "-" * header_width + "\n"
+        output += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        output += "-" * header_width + "\n"
+        
+        output += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of energy points", self.num_energies, 
+            width1=property_col_width, width2=value_col_width)
+        
+        output += "{:<{width1}} {:<{width2}}\n".format(
+            "Table length", self.table_length,
+            width1=property_col_width, width2=value_col_width)
         
         # Interpolation method
         interp_methods = {2: "linear-linear", 5: "log-log"}
         interp_method = interp_methods.get(self.interpolation, f"unknown ({self.interpolation})")
-        output += f"Interpolation: {interp_method}\n"
+        output += "{:<{width1}} {:<{width2}}\n".format(
+            "Interpolation method", interp_method,
+            width1=property_col_width, width2=value_col_width)
         
         # Inelastic competition flag
+        inelastic_status = ""
         if self.inelastic_flag < 0:
-            output += "Inelastic cross section: zero in the unresolved range\n"
+            inelastic_status = "Zero in the unresolved range"
         elif self.inelastic_flag > 0:
-            output += f"Inelastic cross section: special MT={self.inelastic_flag}\n"
+            inelastic_status = f"Special MT={self.inelastic_flag}"
         else:
-            output += "Inelastic cross section: calculated from balance relationship\n"
+            inelastic_status = "Calculated from balance relationship"
+        
+        output += "{:<{width1}} {:<{width2}}\n".format(
+            "Inelastic cross section", inelastic_status,
+            width1=property_col_width, width2=value_col_width)
         
         # Other absorption flag
+        other_abs_status = ""
         if self.other_absorption_flag < 0:
-            output += "Other absorption cross section: zero in the unresolved range\n"
+            other_abs_status = "Zero in the unresolved range"
         elif self.other_absorption_flag > 0:
-            output += f"Other absorption cross section: special MT={self.other_absorption_flag}\n"
+            other_abs_status = f"Special MT={self.other_absorption_flag}"
         else:
-            output += "Other absorption cross section: calculated from balance relationship\n"
+            other_abs_status = "Calculated from balance relationship"
+        
+        output += "{:<{width1}} {:<{width2}}\n".format(
+            "Other absorption cross section", other_abs_status,
+            width1=property_col_width, width2=value_col_width)
         
         # Factors flag
-        if self.factors_flag == 0:
-            output += "Table values represent cross sections\n"
-        else:
-            output += "Table values represent factors to multiply smooth cross sections\n"
+        factors_status = "Cross sections" if self.factors_flag == 0 else "Factors to multiply smooth XS"
+        output += "{:<{width1}} {:<{width2}}\n".format(
+            "Table values represent", factors_status,
+            width1=property_col_width, width2=value_col_width)
         
         # Energy range
         if self.energies:
             energy_values = [e.value for e in self.energies]
-            output += f"Energy range: {min(energy_values):.6e} to {max(energy_values):.6e} MeV\n"
+            energy_range = f"{min(energy_values):.6e} to {max(energy_values):.6e} MeV"
+            output += "{:<{width1}} {:<{width2}}\n".format(
+                "Energy range", energy_range,
+                width1=property_col_width, width2=value_col_width)
         
-        # Table summary
+        output += "-" * header_width + "\n\n"
+        
+        # Cross section range summary
         if self.tables:
+            output += "Cross Section Range Summary:\n"
+            output += "-" * header_width + "\n"
+            output += "{:<{width1}} {:<{width2}}\n".format(
+                "Cross Section Type", "Range (min - max)",
+                width1=property_col_width, width2=value_col_width)
+            output += "-" * header_width + "\n"
+            
             total_min, total_max = float('inf'), float('-inf')
+            elastic_min, elastic_max = float('inf'), float('-inf')
+            fission_min, fission_max = float('inf'), float('-inf')
+            capture_min, capture_max = float('inf'), float('-inf')
+            
             for table in self.tables:
+                # Process total XS
                 if table.total_xs:
                     table_values = [xs.value for xs in table.total_xs]
                     table_min = min(table_values)
                     table_max = max(table_values)
                     total_min = min(total_min, table_min)
                     total_max = max(total_max, table_max)
+                
+                # Process elastic XS
+                if table.elastic_xs:
+                    table_values = [xs.value for xs in table.elastic_xs]
+                    table_min = min(table_values)
+                    table_max = max(table_values)
+                    elastic_min = min(elastic_min, table_min)
+                    elastic_max = max(elastic_max, table_max)
+                
+                # Process fission XS
+                if table.fission_xs:
+                    table_values = [xs.value for xs in table.fission_xs]
+                    table_min = min(table_values)
+                    table_max = max(table_values)
+                    fission_min = min(fission_min, table_min)
+                    fission_max = max(fission_max, table_max)
+                
+                # Process capture XS
+                if table.capture_xs:
+                    table_values = [xs.value for xs in table.capture_xs]
+                    table_min = min(table_values)
+                    table_max = max(table_values)
+                    capture_min = min(capture_min, table_min)
+                    capture_max = max(capture_max, table_max)
+            
+            # Format for printing XS ranges with unit notation
+            suffix = " (factors)" if self.factors_flag == 1 else ""
             
             if total_min != float('inf') and total_max != float('-inf'):
-                output += f"Total cross section range: {total_min:.6e} to {total_max:.6e}"
-                if self.factors_flag == 1:
-                    output += " (factors)"
-                output += "\n"
+                range_str = f"{total_min:.6e} - {total_max:.6e}{suffix}"
+                output += "{:<{width1}} {:<{width2}}\n".format(
+                    "Total", range_str,
+                    width1=property_col_width, width2=value_col_width)
+                
+            if elastic_min != float('inf') and elastic_max != float('-inf'):
+                range_str = f"{elastic_min:.6e} - {elastic_max:.6e}{suffix}"
+                output += "{:<{width1}} {:<{width2}}\n".format(
+                    "Elastic", range_str,
+                    width1=property_col_width, width2=value_col_width)
+                
+            if fission_min != float('inf') and fission_max != float('-inf'):
+                range_str = f"{fission_min:.6e} - {fission_max:.6e}{suffix}"
+                output += "{:<{width1}} {:<{width2}}\n".format(
+                    "Fission", range_str,
+                    width1=property_col_width, width2=value_col_width)
+                
+            if capture_min != float('inf') and capture_max != float('-inf'):
+                range_str = f"{capture_min:.6e} - {capture_max:.6e}{suffix}"
+                output += "{:<{width1}} {:<{width2}}\n".format(
+                    "Capture", range_str,
+                    width1=property_col_width, width2=value_col_width)
+            
+            output += "-" * header_width + "\n\n"
+        
+        # Add section for available methods using the utility function
+        methods = {
+            "get_probability_table(energy)": "Get probability table for specified energy, with interpolation if needed"
+        }
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        output += methods_section
         
         return output
     
@@ -197,49 +359,3 @@ class UnresolvedResonanceTables:
             return self.tables[lower_idx] if (energy - lower_energy) < (upper_energy - energy) else self.tables[upper_idx]
         
         return interp_table
-    
-    def sample_cross_sections(self, energy: float, rng: Optional[np.random.RandomState] = None) -> Dict[str, float]:
-        """
-        Sample cross sections from the probability tables.
-        
-        Parameters
-        ----------
-        energy : float
-            The incident energy
-        rng : np.random.RandomState, optional
-            Random number generator to use, default is numpy's global RNG
-            
-        Returns
-        -------
-        Dict[str, float]
-            Dictionary containing sampled cross sections for total, elastic, fission, and capture
-        """
-        if rng is None:
-            rng = np.random
-        
-        # Get the probability table for this energy
-        table = self.get_probability_table(energy)
-        if not table or not table.cumulative_probabilities:
-            return {}
-        
-        # Sample a random number
-        r = rng.random()
-        
-        # Extract probability values for searchsorted
-        prob_values = [p.value for p in table.cumulative_probabilities]
-        
-        # Find the index in the cumulative probability distribution
-        idx = np.searchsorted(prob_values, r)
-        if idx == len(prob_values):
-            idx = len(prob_values) - 1
-        
-        # Extract the cross sections
-        result = {
-            'total': table.total_xs[idx].value if table.total_xs else 0.0,
-            'elastic': table.elastic_xs[idx].value if table.elastic_xs else 0.0,
-            'fission': table.fission_xs[idx].value if table.fission_xs else 0.0,
-            'capture': table.capture_xs[idx].value if table.capture_xs else 0.0,
-            'heating': table.heating_numbers[idx].value if table.heating_numbers else 0.0,
-        }
-        
-        return result

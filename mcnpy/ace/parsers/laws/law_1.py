@@ -1,8 +1,12 @@
+import logging
 from mcnpy.ace.classes.ace import Ace
 from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
 from mcnpy.ace.classes.energy_distribution.distributions.tabular import TabularEnergyDistribution
 
-def parse_tabular_energy_distribution(ace: Ace, base_dist: EnergyDistribution, idat_idx: int) -> TabularEnergyDistribution:
+# Setup logger
+logger = logging.getLogger(__name__)
+
+def parse_tabular_energy_distribution(ace: Ace, base_dist: EnergyDistribution, idat_idx: int, debug: bool = False) -> TabularEnergyDistribution:
     """
     Parse a tabular energy distribution (Law 1).
     
@@ -23,12 +27,17 @@ def parse_tabular_energy_distribution(ace: Ace, base_dist: EnergyDistribution, i
         Base distribution with common properties
     idat_idx : int
         Starting index for the law data in the XSS array
+    debug : bool, optional
+        Enable debug logging
         
     Returns
     -------
     TabularEnergyDistribution
         Tabular energy distribution object
     """
+    if debug:
+        logger.debug(f"Parsing tabular energy distribution (Law 1) starting at index {idat_idx}")
+    
     # Create a new distribution object using the base properties
     distribution = TabularEnergyDistribution(
         law=base_dist.law,
@@ -43,11 +52,15 @@ def parse_tabular_energy_distribution(ace: Ace, base_dist: EnergyDistribution, i
     
     # Check if we have data to parse
     if idat_idx >= len(ace.xss_data):
+        if debug:
+            logger.debug(f"Index {idat_idx} out of bounds for XSS data with length {len(ace.xss_data)}")
         return distribution
     
     # Read the number of interpolation regions (N_R)
     n_r_entry = ace.xss_data[idat_idx]
     n_r = int(n_r_entry.value)
+    if debug:
+        logger.debug(f"Number of interpolation regions (N_R): {n_r}")
     idx = idat_idx + 1
     
     # Read the interpolation parameters if present
@@ -55,37 +68,64 @@ def parse_tabular_energy_distribution(ace: Ace, base_dist: EnergyDistribution, i
     e_out_int = []
     if n_r > 0:
         # Read NBT values - store references to the original XssEntry objects
-        e_out_nbt = [ace.xss_data[idx + i] for i in range(n_r)]
-        idx += n_r
+        if idx + n_r - 1 < len(ace.xss_data):
+            e_out_nbt = [ace.xss_data[idx + i] for i in range(n_r)]
+            if debug:
+                nbt_values = [entry.value for entry in e_out_nbt]
+                logger.debug(f"NBT values: {nbt_values}")
+            idx += n_r
         
-        # Read INT values - store references to the original XssEntry objects
-        e_out_int = [ace.xss_data[idx + i] for i in range(n_r)]
-        idx += n_r
+            # Read INT values - store references to the original XssEntry objects
+            if idx + n_r - 1 < len(ace.xss_data):
+                e_out_int = [ace.xss_data[idx + i] for i in range(n_r)]
+                if debug:
+                    int_values = [entry.value for entry in e_out_int]
+                    logger.debug(f"INT values: {int_values}")
+                idx += n_r
+            else:
+                if debug:
+                    logger.debug(f"Not enough data to read INT values. Need index up to {idx + n_r - 1}, have {len(ace.xss_data)}")
+        else:
+            if debug:
+                logger.debug(f"Not enough data to read NBT values. Need index up to {idx + n_r - 1}, have {len(ace.xss_data)}")
     
     # Read the number of incident energies (N_E)
     if idx >= len(ace.xss_data):
+        if debug:
+            logger.debug(f"Index {idx} out of bounds for XSS data with length {len(ace.xss_data)}")
         return distribution
     
     n_e_entry = ace.xss_data[idx]
     n_e = int(n_e_entry.value)
-    idx += 1
     distribution.n_incident_energies = n_e
+    if debug:
+        logger.debug(f"Number of incident energies (N_E): {n_e}")
+    idx += 1
     
     # Check if we have enough data
-    if idx + n_e >= len(ace.xss_data):
+    if idx + n_e - 1 >= len(ace.xss_data):
+        if debug:
+            logger.debug(f"Not enough data to read incident energies. Need index up to {idx + n_e - 1}, have {len(ace.xss_data)}")
         return distribution
     
     # Read the list of incident energies - store references to the original XssEntry objects
     incident_energies = [ace.xss_data[idx + i] for i in range(n_e)]
-    idx += n_e
     distribution.incident_energies = incident_energies
+    if debug and n_e > 0:
+        energy_values = [entry.value for entry in incident_energies]
+        logger.debug(f"Incident energies range: [{energy_values[0]}, {energy_values[-1]}]")
+    idx += n_e
     
     # Read the number of outgoing energies (NET) in each table
     if idx >= len(ace.xss_data):
+        if debug:
+            logger.debug(f"Index {idx} out of bounds for XSS data with length {len(ace.xss_data)}")
         return distribution
     
     net_entry = ace.xss_data[idx]
     net = int(net_entry.value)
+    if debug:
+        logger.debug(f"Number of outgoing energies (NET): {net}")
     idx += 1
     
     # Read the E_out tables for each incident energy
@@ -93,11 +133,18 @@ def parse_tabular_energy_distribution(ace: Ace, base_dist: EnergyDistribution, i
     distribution.distribution_data = []
     
     for i in range(n_e):
-        if idx + net > len(ace.xss_data):
+        if debug:
+            logger.debug(f"Processing E_out table {i+1}/{n_e}")
+        if idx + net - 1 >= len(ace.xss_data):
+            if debug:
+                logger.debug(f"Not enough data to read E_out table {i+1}. Need index up to {idx + net - 1}, have {len(ace.xss_data)}")
             break
         
         # Get the outgoing energy boundaries for this incident energy
         e_out = [ace.xss_data[idx + j] for j in range(net)]
+        if debug and net > 0:
+            e_out_values = [entry.value for entry in e_out]
+            logger.debug(f"E_out table {i+1} range: [{e_out_values[0]}, {e_out_values[-1]}]")
         idx += net
         
         # Calculate the probability (uniform across bins)
@@ -105,5 +152,9 @@ def parse_tabular_energy_distribution(ace: Ace, base_dist: EnergyDistribution, i
         
         # Store with interpolation scheme (always linear-linear for equiprobable bins)
         distribution.distribution_data.append((net, 2, e_out, p_out))
+        if debug:
+            logger.debug(f"Successfully stored E_out table {i+1}")
     
+    if debug:
+        logger.debug(f"Completed parsing tabular energy distribution with {len(distribution.distribution_data)} E_out tables")
     return distribution

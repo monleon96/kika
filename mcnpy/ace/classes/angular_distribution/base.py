@@ -2,9 +2,9 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.angular_distribution.types import AngularDistributionType
-from mcnpy.ace.classes.angular_distribution.angular_distribution_repr import angular_distribution_repr
+from mcnpy._utils import create_repr_section
 
 
 @dataclass
@@ -24,25 +24,6 @@ class AngularDistribution:
     def energies(self) -> List[float]:
         """Get energy values as floats."""
         return [entry.value for entry in self._energies]
-    
-    def sample_mu(self, energy: float, random_value: float) -> float:
-        """
-        Sample a scattering cosine μ at the given energy using the provided random value.
-        
-        Parameters
-        ----------
-        energy : float
-            Incident energy
-        random_value : float
-            Random number between 0 and 1
-            
-        Returns
-        -------
-        float
-            Sampled cosine value μ
-        """
-        # Base implementation just returns isotropic distribution
-        return 2.0 * random_value - 1.0
     
     @property
     def is_isotropic(self) -> bool:
@@ -149,4 +130,103 @@ class AngularDistribution:
         except ImportError:
             return None
     
-    __repr__ = angular_distribution_repr
+    def __repr__(self) -> str:
+        """
+        Returns a user-friendly, formatted string representation of the angular distribution.
+        
+        Returns
+        -------
+        str
+            Formatted string representation
+        """
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Angular Distribution Details':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        # Description
+        description = "This object contains angular distribution data "
+        
+        # Add type-specific description based on the distribution_type
+        if self.distribution_type.name == "ISOTROPIC":
+            description += "for isotropic scattering (uniform in all directions).\n\n"
+        elif self.distribution_type.name == "EQUIPROBABLE":
+            description += "in equiprobable bin format (32 cosine bins with equal probability).\n\n"
+        elif self.distribution_type.name == "TABULATED":
+            description += "in tabulated format (explicit PDF and CDF functions).\n\n"
+        elif self.distribution_type.name == "KALBACH_MANN":
+            description += "using the Kalbach-Mann formalism (correlated with energy distribution).\n\n"
+        else:
+            description += "in an unknown format.\n\n"
+        
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
+        
+        info_table = "Data Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
+        
+        # MT number
+        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "MT Number", f"{mt_value}", width1=property_col_width, width2=value_col_width)
+        
+        # Distribution type
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Distribution Type", self.distribution_type.name,
+            width1=property_col_width, width2=value_col_width)
+        
+        # Energy grid information
+        if self.energies:
+            num_energies = len(self.energies)
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Number of Energy Points", num_energies,
+                width1=property_col_width, width2=value_col_width)
+            
+            min_energy = self.energies[0]  # Now directly a float
+            max_energy = self.energies[-1]  # Now directly a float
+            energy_range = f"{min_energy:.6g} - {max_energy:.6g} MeV"
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Energy Range", energy_range,
+                width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Create a section for available methods
+        methods = {
+            ".to_dataframe(...)": "Convert to a pandas DataFrame at a specific energy",
+            ".plot(...)": "Create a plot of the angular distribution at a specific energy"
+        }
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add an example section
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Create a plot of the distribution at 2 MeV\n"
+            "fig, ax = angular_distribution.plot(energy=2.0)\n"
+        )
+        
+        # Add property descriptions
+        properties = {
+            ".mt": "MT number of the reaction (int)",
+            ".energies": "List of incident energy points as float values (List[float])"
+        }
+        
+        properties_section = create_repr_section(
+            "Property Access:", 
+            properties, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        return header + description + info_table + properties_section + "\n" + methods_section + "\n" + example

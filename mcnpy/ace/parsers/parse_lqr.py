@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from mcnpy.ace.classes.q_values import QValues
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 
 # Setup logger
 logger = logging.getLogger(__name__)

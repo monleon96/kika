@@ -173,102 +173,11 @@ class TabulatedAngleEnergyDistribution(EnergyDistribution):
         }
         
         return interp_dist
-    
-    def sample_angular_distribution(self, table_idx: int, rng: Optional[np.random.Generator] = None) -> float:
-        """
-        Sample a cosine from a tabular angular distribution.
-        
-        Parameters
-        ----------
-        table_idx : int
-            Index of the angular distribution table
-        rng : np.random.Generator, optional
-            Random number generator
-            
-        Returns
-        -------
-        float
-            Sampled cosine of scattering angle
-        """
-        # Get the angular table
-        table = self.get_angular_table(table_idx)
-        if not table:
-            # If table not found, return isotropic scattering
-            if rng is None:
-                rng = np.random.default_rng()
-            return 2.0 * rng.random() - 1.0
-        
-        # Use numpy's random if none provided
-        if rng is None:
-            rng = np.random.default_rng()
-        
-        # Sample using CDF
-        xi = rng.random()
-        cosine = np.interp(xi, table['cdf'], table['cosines'])
-        
-        return cosine
-    
-    def sample_outgoing_energy_angle(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> Tuple[float, float]:
-        """
-        Sample an outgoing energy and angle from the distribution for a given incident energy.
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
-        Returns
-        -------
-        Tuple[float, float]
-            Tuple of (outgoing_energy, cosine)
-        """
-        # Use numpy's random if none provided
-        if rng is None:
-            rng = np.random.default_rng()
-            
-        # Get interpolated distribution
-        dist = self.get_interpolated_distribution(incident_energy)
-        if not dist:
-            return 0.0, 0.0
-            
-        # 1. Sample outgoing energy using the CDF
-        xi = rng.random()
-        e_out = np.interp(xi, dist['cdf'], dist['e_out'])
-        
-        # 2. Find the index in the e_out array that corresponds to this energy
-        idx = np.searchsorted(dist['e_out'], e_out, side='right') - 1
-        idx = max(0, min(idx, len(dist['e_out']) - 1))
-        
-        # 3. Get the corresponding LC value (index to angular distribution table)
-        lc_idx = abs(dist['lc'][idx]) - 1  # Convert to 0-indexed and handle negative values
-        
-        # 4. Sample cosine from the angular distribution
-        cosine = self.sample_angular_distribution(lc_idx, rng)
-        
-        return e_out, cosine
-    
-    def sample_outgoing_energy(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> float:
-        """
-        Sample just an outgoing energy from the distribution for a given incident energy.
-        
-        This is a convenience method that only returns the energy part of the energy-angle pair.
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
-        Returns
-        -------
-        float
-            Sampled outgoing energy
-        """
-        e_out, _ = self.sample_outgoing_energy_angle(incident_energy, rng)
-        return e_out
+
+    # Removed sampling methods:
+    # - sample_angular_distribution
+    # - sample_outgoing_energy_angle
+    # - sample_outgoing_energy
     
     def __repr__(self) -> str:
         """Returns a formatted string representation of the TabulatedAngleEnergyDistribution object.
@@ -312,7 +221,7 @@ class TabulatedAngleEnergyDistribution(EnergyDistribution):
         # Show energy ranges if available
         if self.incident_energies and len(self.incident_energies) >= 2:
             properties += "{:<{width1}} {:<{width2}}\n".format(
-                "Incident Energy Range", f"{self.incident_energies[0]:.4e} - {self.incident_energies[-1]:.4e} MeV",
+                "Incident Energy Range", f"{self.incident_energies[0].value:.4e} - {self.incident_energies[-1].value:.4e} MeV",
                 width1=property_col_width, width2=value_col_width)
         
         # Count distributions and angular tables
@@ -329,20 +238,14 @@ class TabulatedAngleEnergyDistribution(EnergyDistribution):
         
         properties += "-" * header_width + "\n\n"
         
-        # Create a section for available methods
+        # Create a section for available methods - UPDATED to remove sampling methods
         methods = {
             ".get_distribution(energy_idx)": 
                 "Get energy distribution for a specific incident energy index",
             ".get_angular_table(table_idx)": 
                 "Get angular distribution table for a specific index",
             ".get_interpolated_distribution(incident_energy)": 
-                "Get interpolated distribution for a specific incident energy",
-            ".sample_angular_distribution(table_idx, rng=None)": 
-                "Sample a cosine from a tabular angular distribution",
-            ".sample_outgoing_energy_angle(incident_energy, rng=None)": 
-                "Sample energy and angle for a given incident energy",
-            ".sample_outgoing_energy(incident_energy, rng=None)": 
-                "Sample just the outgoing energy for a given incident energy"
+                "Get interpolated distribution for a specific incident energy"
         }
         
         methods_section = create_repr_section(
@@ -461,91 +364,10 @@ class LaboratoryAngleEnergyDistribution(EnergyDistribution):
         # Return the distribution for the lower incident energy
         # In a full implementation, we would interpolate between distributions
         return self.get_distribution(idx)
-    
-    def sample_outgoing_angle_energy(self, incident_energy: float, 
-                                    rng: Optional[np.random.Generator] = None) -> Tuple[float, float]:
-        """
-        Sample an outgoing cosine and energy from the distribution.
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
-        Returns
-        -------
-        Tuple[float, float]
-            Tuple of (cosine, outgoing_energy)
-        """
-        # Use numpy's random if none provided
-        if rng is None:
-            rng = np.random.default_rng()
-        
-        # Get the distribution for this incident energy
-        dist = self.get_interpolated_distribution(incident_energy)
-        if not dist:
-            return 0.0, 0.0
-        
-        # Sample cosine
-        intmu = dist['intmu']
-        cosines = dist['cosines']
-        
-        if not cosines or len(cosines) < 2:
-            # If no valid cosines, return isotropic scattering
-            return 2.0 * rng.random() - 1.0, 0.0
-        
-        # Choose a random cosine from the tabulated values
-        # In a full implementation, we would use proper sampling according to intmu
-        xi = rng.random()
-        cosine_idx = int(xi * (len(cosines) - 1))
-        cosine = cosines[cosine_idx]
-        
-        # Get the energy distribution for this cosine
-        energy_dists = dist['energy_distributions']
-        if not energy_dists or cosine_idx >= len(energy_dists) or not energy_dists[cosine_idx]:
-            return cosine, 0.0
-        
-        energy_dist = energy_dists[cosine_idx]
-        
-        # Sample outgoing energy
-        intep = energy_dist['intep']
-        e_out = energy_dist['e_out']
-        pdf = energy_dist['pdf']
-        cdf = energy_dist['cdf']
-        
-        if not e_out or len(e_out) < 2:
-            return cosine, 0.0
-        
-        # Sample from CDF
-        xi = rng.random()
-        outgoing_energy = np.interp(xi, cdf, e_out)
-        
-        return cosine, outgoing_energy
-    
-    def sample_outgoing_energy(self, incident_energy: float, 
-                              rng: Optional[np.random.Generator] = None) -> float:
-        """
-        Sample just an outgoing energy from the distribution.
-        
-        This is a convenience method that first samples an angle, then 
-        samples an energy for that angle.
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
-        Returns
-        -------
-        float
-            Sampled outgoing energy
-        """
-        _, energy = self.sample_outgoing_angle_energy(incident_energy, rng)
-        return energy
+
+    # Removed sampling methods:
+    # - sample_outgoing_angle_energy
+    # - sample_outgoing_energy
     
     def __repr__(self) -> str:
         """Returns a formatted string representation of the LaboratoryAngleEnergyDistribution object.
@@ -612,16 +434,12 @@ class LaboratoryAngleEnergyDistribution(EnergyDistribution):
         
         properties += "-" * header_width + "\n\n"
         
-        # Create a section for available methods
+        # Create a section for available methods - UPDATED to remove sampling methods
         methods = {
             ".get_distribution(energy_idx)": 
                 "Get distribution for a specific incident energy index",
             ".get_interpolated_distribution(incident_energy)": 
-                "Get interpolated distribution for a specific incident energy",
-            ".sample_outgoing_angle_energy(incident_energy, rng=None)": 
-                "Sample angle and energy for a given incident energy",
-            ".sample_outgoing_energy(incident_energy, rng=None)": 
-                "Sample just the outgoing energy for a given incident energy"
+                "Get interpolated distribution for a specific incident energy"
         }
         
         methods_section = create_repr_section(

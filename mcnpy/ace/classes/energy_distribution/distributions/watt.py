@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 import numpy as np
 from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy._utils import create_repr_section
 
 @dataclass
 class EnergyDependentWattSpectrum(EnergyDistribution):
@@ -171,51 +172,107 @@ class EnergyDependentWattSpectrum(EnergyDistribution):
         
         return max(normalization, 1.0e-30)  # Prevent division by zero
     
-    def sample_outgoing_energy(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> float:
+    def __repr__(self) -> str:
         """
-        Sample an outgoing energy from the Watt spectrum.
+        Returns a formatted string representation of the EnergyDependentWattSpectrum.
         
-        This uses the Watt spectrum equation:
-        f(E → E_out) = (1/I) * exp(-E_out / a) * sinh(sqrt(b * E_out))
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
         Returns
         -------
-        float
-            Sampled outgoing energy
+        str
+            Formatted string representation
         """
-        if rng is None:
-            rng = np.random.default_rng()
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Energy-Dependent Watt Spectrum (Law 11)':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
         
-        # Get parameters a and b for this incident energy
-        a = self.get_a_parameter(incident_energy)
-        b = self.get_b_parameter(incident_energy)
+        # Description of the energy distribution
+        description = (
+            "This distribution represents a Watt fission spectrum with energy-dependent parameters a and b.\n"
+            "The probability density function has the form:\n"
+            "f(E→E') = (1/I) * exp(-E_out / a) * sinh(sqrt(b * E_out))\n\n"
+            "where I is the normalization constant and the parameters a(E) and b(E) vary with incident\n"
+            "energy. This spectrum is commonly used for prompt fission neutron emission.\n\n"
+        )
         
-        # Check if we have valid parameters
-        if a <= 0.0 or b <= 0.0:
-            return 0.0
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
         
-        # Calculate the restriction on outgoing energy: 0 ≤ E_out ≤ (E − U)
-        max_e_out = max(0.0, incident_energy - self.restriction_energy)
+        info_table = "Distribution Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
         
-        # Use simplified sampling algorithm for the Watt spectrum
-        # Note: A more sophisticated approach would use the exact distribution
-        while True:
-            # Sample from exponential distribution with mean = a
-            e1 = -a * np.log(rng.random())
-            
-            # Sample from exponential distribution with mean = 1/b
-            e2 = -np.log(rng.random()) / np.sqrt(b)
-            
-            # Combine samples to approximate Watt spectrum
-            e_out = e1 + e2**2
-            
-            # Check if within the allowed range
-            if e_out <= max_e_out:
-                return e_out
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Law Number", self.law, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Restriction Energy (U)", f"{self.restriction_energy:.6g} MeV", 
+            width1=property_col_width, width2=value_col_width)
+        
+        # Parameter a information
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Parameter a - Data Points", self.n_a_energies, 
+            width1=property_col_width, width2=value_col_width)
+        
+        if self.a_incident_energies and self.a_values:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Parameter a - Energy Range", 
+                f"{min(self.a_incident_energies):.6g} - {max(self.a_incident_energies):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Parameter a - Value Range", 
+                f"{min(self.a_values):.6g} - {max(self.a_values):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+        
+        # Parameter b information
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Parameter b - Data Points", self.n_b_energies, 
+            width1=property_col_width, width2=value_col_width)
+        
+        if self.b_incident_energies and self.b_values:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Parameter b - Energy Range", 
+                f"{min(self.b_incident_energies):.6g} - {max(self.b_incident_energies):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Parameter b - Value Range", 
+                f"{min(self.b_values):.6g} - {max(self.b_values):.6g} MeV^-1", 
+                width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Create a section for available methods
+        methods = {
+            ".get_a_parameter(incident_energy)": "Get parameter a value for a given incident energy",
+            ".get_b_parameter(incident_energy)": "Get parameter b value for a given incident energy",
+            ".calculate_normalization_constant(...)": "Calculate the normalization constant I"
+        }
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add example section
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Get parameters for a Watt spectrum at 2 MeV incident energy\n"
+            "a = distribution.get_a_parameter(incident_energy=2.0)\n"
+            "b = distribution.get_b_parameter(incident_energy=2.0)\n"
+            "\n"
+            "# Calculate the normalization constant\n"
+            "norm_const = distribution.calculate_normalization_constant(\n"
+            "    incident_energy=2.0, a=a, b=b)\n"
+            "\n"
+            "# Watt spectrum typical values:\n"
+            "# a ≈ 0.8-1.0 MeV (average energy per fragment)\n"
+            "# b ≈ 2.0-4.0 MeV^-1 (related to temperature)"
+        )
+        
+        return header + description + info_table + methods_section + "\n" + example

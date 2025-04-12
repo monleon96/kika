@@ -2,19 +2,18 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Union, Tuple, Any
 import pandas as pd
 import numpy as np
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.angular_distribution.base import AngularDistribution
 from mcnpy.ace.classes.angular_distribution.utils import (
     ErrorMessageDict,
     ErrorMessageList,
 )
-from mcnpy.ace.classes.angular_distribution.angular_distribution_repr import angular_container_repr
+from mcnpy._utils import create_repr_section
 from mcnpy.ace.classes.angular_distribution.distributions.isotropic import IsotropicAngularDistribution
 from mcnpy.ace.classes.angular_distribution.distributions.kalbach_mann import KalbachMannAngularDistribution
 from mcnpy.ace.classes.angular_distribution.distributions.equiprobable import EquiprobableAngularDistribution
 from mcnpy.ace.classes.angular_distribution.distributions.tabulated import TabulatedAngularDistribution
 from mcnpy.ace.classes.angular_distribution.utils import Law44DataError
-
 
 
 @dataclass
@@ -214,67 +213,6 @@ class AngularDistributionContainer:
             }
             
         return result
-    
-    def sample_mu(self, mt: int, energy: float, random_value: float, 
-                 particle_type: str = 'neutron', particle_idx: int = 0, ace=None) -> float:
-        """
-        Sample a scattering cosine μ for a specific reaction and energy.
-        
-        Parameters
-        ----------
-        mt : int
-            MT number for the reaction
-        energy : float
-            Incident energy
-        random_value : float
-            Random number between 0 and 1
-        particle_type : str, optional
-            Type of particle: 'neutron', 'photon', or 'particle'
-        particle_idx : int, optional
-            Index of the particle type (used only for particle_type='particle')
-        ace : Ace, optional
-            ACE object containing Law=44 data (required for Kalbach-Mann distributions)
-            
-        Returns
-        -------
-        float
-            Sampled cosine value μ (between -1 and 1)
-            
-        Raises
-        ------
-        Law44DataError
-            If trying to sample from a Kalbach-Mann distribution without providing ACE data
-        KeyError
-            If the MT number is not found in the distribution container
-        ValueError
-            If the particle type is unknown or for other sampling errors
-        """
-        # Special case for elastic scattering (MT=2)
-        if particle_type == 'neutron' and mt == 2 and self.elastic:
-            return self.elastic.sample_mu(energy, random_value)
-        
-        # Get the appropriate distribution container
-        if particle_type == 'neutron':
-            dist_container = self.incident_neutron
-        elif particle_type == 'photon':
-            dist_container = self.photon_production
-        elif particle_type == 'particle':
-            if particle_idx < 0 or particle_idx >= len(self.particle_production):
-                raise ValueError(f"Particle index {particle_idx} out of bounds")
-            dist_container = self.particle_production[particle_idx]
-        else:
-            raise ValueError(f"Unknown particle type: {particle_type}")
-        
-        # Get the angular distribution for this MT number
-        if mt not in dist_container:
-            raise KeyError(f"MT={mt} not found in {particle_type} angular distributions")
-        
-        # Sample from the distribution, passing ace for Kalbach-Mann distributions
-        distribution = dist_container[mt]
-        if isinstance(distribution, KalbachMannAngularDistribution):
-            return distribution.sample_mu(energy, random_value, ace)
-        else:
-            return distribution.sample_mu(energy, random_value)
 
     def to_dataframe(self, mt: int, energy: float, particle_type: str = 'neutron', 
                     particle_idx: int = 0, ace=None, num_points: int = 100, 
@@ -555,4 +493,143 @@ class AngularDistributionContainer:
             # Re-raise Law44DataError to be handled by the caller
             raise
     
-    __repr__ = angular_container_repr
+    def __repr__(self) -> str:
+        """
+        Returns a user-friendly, formatted string representation of the container.
+        
+        Returns
+        -------
+        str
+            Formatted string representation
+        """
+        header_width = 90
+        header = "=" * header_width + "\n"
+        header += f"{'Angular Distribution Container':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        description = (
+            "This container holds angular distributions for different reaction types and particles.\n"
+            "Angular distributions describe the probability of a particle scattering at a specific angle,\n"
+            "represented by the cosine of the scattering angle (μ) ranging from -1 to +1.\n\n"
+            "Note: Some distributions (Kalbach-Mann/Law=44) require additional data from the energy\n"
+            "distribution section. For these distributions, the ACE object must be provided when\n"
+            "calling methods to avoid Law44DataError exceptions.\n\n"
+        )
+        
+        # Create a summary table of available data
+        property_col_width = 40
+        value_col_width = header_width - property_col_width - 3
+        
+        info_table = "Available Angular Distribution Data:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Distribution Type", "Status", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
+        
+        # Elastic scattering
+        elastic_status = "Available"
+        if not self.has_elastic_data:
+            elastic_status = "Not available or isotropic"
+        
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Elastic Scattering (MT=2)", elastic_status,
+            width1=property_col_width, width2=value_col_width)
+        
+        # Neutron reaction distributions
+        neutron_status = f"Available ({len(self.incident_neutron)} reactions)"
+        if not self.has_neutron_data:
+            neutron_status = "Not available"
+        
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Neutron Reactions", neutron_status,
+            width1=property_col_width, width2=value_col_width)
+        
+        # Photon production distributions
+        photon_status = f"Available ({len(self.photon_production)} reactions)"
+        if not self.has_photon_production_data:
+            photon_status = "Not available"
+        
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Photon Production", photon_status,
+            width1=property_col_width, width2=value_col_width)
+        
+        # Particle production distributions
+        if self.has_particle_production_data:
+            num_particle_types = len(self.particle_production)
+            particle_counts = [len(p) for p in self.particle_production]
+            particle_status = f"Available ({num_particle_types} types, {sum(particle_counts)} total reactions)"
+        else:
+            particle_status = "Not available"
+        
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Particle Production", particle_status,
+            width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Create a section for data access - only include available data
+        data_access = {}
+        
+        # Only add elastic if available
+        if self.has_elastic_data:
+            data_access[".elastic"] = "Access elastic scattering angular distribution"
+        
+        # Only add neutron reactions if available
+        if self.has_neutron_data:
+            data_access[".incident_neutron[MT]"] = "Dictionary of angular distributions for neutron reactions"
+        
+        # Only add photon production if available
+        if self.has_photon_production_data:
+            data_access[".photon_production[MT]"] = "Dictionary of angular distributions for photon production"
+        
+        # Only add particle production if available
+        if self.has_particle_production_data:
+            data_access[".particle_production[particle_idx][MT]"] = "List of dictionaries for particle production"
+        
+        data_access_section = create_repr_section(
+            "Data Access Properties:", 
+            data_access, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add methods section - only include get methods for available data
+        methods = {}
+        
+        # Only add get methods for data types that are available
+        if self.has_neutron_data:
+            methods[".get_neutron_reaction_mt_numbers()"] = "Get list of MT numbers for neutron reactions"
+        
+        if self.has_photon_production_data:
+            methods[".get_photon_production_mt_numbers()"] = "Get list of MT numbers for photon production"
+        
+        if self.has_particle_production_data:
+            methods[".get_particle_production_mt_numbers()"] = "Get list of MT numbers for each particle type"
+        
+        # Always include these general methods
+        methods.update({
+            ".to_dataframe(...)": "Convert distribution to DataFrame",
+            ".plot(...)": "Plot an angular distribution",
+            ".plot_energy_comparison(...)": "Compare distributions at different energies"
+        })
+        
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add note about Kalbach-Mann to example section
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Get MT numbers for neutron reactions with angular distributions\n"
+            "mt_numbers = container.get_neutron_reaction_mt_numbers()\n\n"
+            "# Plot the angular distribution for MT=16 at 14 MeV\n"
+            "fig, ax = container.plot(mt=16, energy=14.0, ace=ace_object)  # ACE needed for Kalbach-Mann\n\n"
+            "# Compare angular distributions at different energies\n"
+            "fig, ax = container.plot_energy_comparison(mt=16, energies=[1.0, 5.0, 14.0], ace=ace_object)\n"
+        )
+        
+        return header + description + info_table + data_access_section + "\n" + methods_section + "\n" + example

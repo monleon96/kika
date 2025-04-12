@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
 import numpy as np
 from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
+from mcnpy._utils import create_repr_section
 
 @dataclass
 class KalbachMannDistribution(EnergyDistribution):
@@ -150,116 +151,91 @@ class KalbachMannDistribution(EnergyDistribution):
         }
         
         return interp_dist
-    
-    def sample_outgoing_energy_angle(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> Tuple[float, float]:
+
+    def __repr__(self) -> str:
         """
-        Sample an outgoing energy and angle from the distribution for a given incident energy.
+        Returns a formatted string representation of the KalbachMannDistribution.
         
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
         Returns
         -------
-        Tuple[float, float]
-            Tuple of (outgoing_energy, cosine)
+        str
+            Formatted string representation
         """
-        # Use numpy's random if none provided
-        if rng is None:
-            rng = np.random.default_rng()
-            
-        # Get interpolated distribution
-        dist = self.get_interpolated_distribution(incident_energy)
-        if not dist:
-            return 0.0, 0.0
-            
-        # 1. Sample outgoing energy using the CDF
-        xi = rng.random()
-        e_out = np.interp(xi, dist['cdf'], dist['e_out'])
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Kalbach-Mann Energy-Angle Distribution (Law 44)':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
         
-        # 2. Find the index in the e_out array that corresponds to this energy
-        idx = np.searchsorted(dist['e_out'], e_out, side='right') - 1
-        idx = max(0, min(idx, len(dist['e_out']) - 1))
+        # Description of the energy distribution
+        description = (
+            "This distribution represents a correlated energy-angle distribution using the\n"
+            "Kalbach-Mann formalism. The angular part of the distribution is given by:\n"
+            "p(μ, E_in, E_out) = (1/2)*(a/sinh(a))*[cosh(aμ) + r*sinh(aμ)]\n\n"
+            "where 'a' is the angular distribution slope parameter and 'r' is the precompound\n"
+            "fraction. Both parameters depend on the outgoing energy.\n\n"
+            "This distribution is commonly used for reactions involving pre-equilibrium effects,\n"
+            "like (n,p), (n,α), and other particle emission reactions.\n\n"
+        )
         
-        # 3. Get the corresponding a and r values
-        a_value = dist['a'][idx]
-        r_value = dist['r'][idx]
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
         
-        # 4. Sample the cosine using the Kalbach-Mann formula
-        # p(μ) = (1/2)*(a/sinh(a))*[cosh(aμ) + r*sinh(aμ)]
+        info_table = "Distribution Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
         
-        # Special case for small a (nearly isotropic)
-        if abs(a_value) < 1.0e-3:
-            return e_out, 2.0 * rng.random() - 1.0
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Law Number", self.law, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Incident Energies", self.n_energies, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Interpolation Regions", self.n_interp_regions, 
+            width1=property_col_width, width2=value_col_width)
         
-        # Sample from the Kalbach-Mann distribution
-        cosine = self.sample_kalbach_mann(a_value, r_value, rng)
+        # If we have incident energies, show the range
+        incident_energy_values = [e.value if hasattr(e, 'value') else float(e) for e in self.incident_energies]
+        if incident_energy_values:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Incident Energy Range", 
+                f"{min(incident_energy_values):.6g} - {max(incident_energy_values):.6g} MeV", 
+                width1=property_col_width, width2=value_col_width)
         
-        return e_out, cosine
-    
-    def sample_kalbach_mann(self, a: float, r: float, rng: np.random.Generator) -> float:
-        """
-        Sample a cosine from the Kalbach-Mann angular distribution.
+        # Information about distributions
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Number of Distributions", len(self.distributions), 
+            width1=property_col_width, width2=value_col_width)
         
-        p(μ) = (1/2)*(a/sinh(a))*[cosh(aμ) + r*sinh(aμ)]
+        info_table += "-" * header_width + "\n\n"
         
-        Parameters
-        ----------
-        a : float
-            Angular distribution slope parameter
-        r : float
-            Precompound fraction parameter
-        rng : np.random.Generator
-            Random number generator
-            
-        Returns
-        -------
-        float
-            Sampled cosine value in [-1, 1]
-        """
-        # Use rejection sampling for simplicity
-        # A more efficient algorithm could be used for production code
+        # Create a section for available methods
+        methods = {
+            ".get_distribution(energy_idx)": "Get the distribution for a specific incident energy index",
+            ".get_interpolated_distribution(incident_energy)": "Get an interpolated distribution for a specific incident energy"
+        }
         
-        # Maximum value of the distribution occurs at μ = 1 for r > 0
-        # and at μ = -1 for r < 0
-        if r >= 0:
-            p_max = (a / (2 * np.sinh(a))) * (np.cosh(a) + r * np.sinh(a))
-            mu_max = 1.0
-        else:
-            p_max = (a / (2 * np.sinh(a))) * (np.cosh(-a) - r * np.sinh(-a))
-            mu_max = -1.0
+        methods_section = create_repr_section(
+            "Available Methods:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
         
-        while True:
-            # Sample μ uniformly in [-1, 1]
-            mu = 2.0 * rng.random() - 1.0
-            
-            # Calculate probability
-            p_mu = (a / (2 * np.sinh(a))) * (np.cosh(a * mu) + r * np.sinh(a * mu))
-            
-            # Accept with probability p_mu / p_max
-            if rng.random() <= p_mu / p_max:
-                return mu
-    
-    def sample_outgoing_energy(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> float:
-        """
-        Sample just an outgoing energy from the distribution for a given incident energy.
+        # Add example section
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Get the interpolated distribution at 5 MeV incident energy\n"
+            "dist = distribution.get_interpolated_distribution(incident_energy=5.0)\n"
+            "\n"
+            "# Access parameters for this distribution\n"
+            "outgoing_energies = dist['e_out']\n"
+            "r_values = dist['r']  # precompound fraction\n"
+            "a_values = dist['a']  # angular distribution slope\n"
+        )
         
-        This is a convenience method that only returns the energy part of the energy-angle pair.
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
-        Returns
-        -------
-        float
-            Sampled outgoing energy
-        """
-        e_out, _ = self.sample_outgoing_energy_angle(incident_energy, rng)
-        return e_out
+        return header + description + info_table + methods_section + "\n" + example

@@ -3,10 +3,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.angular_distribution.base import AngularDistribution
 from mcnpy.ace.classes.angular_distribution.types import AngularDistributionType
-from mcnpy.ace.classes.angular_distribution.angular_distribution_repr import kalbach_mann_distribution_repr
+from mcnpy._utils import create_repr_section
 from mcnpy.ace.classes.angular_distribution.utils import Law44DataError
 
 
@@ -99,86 +99,6 @@ class KalbachMannAngularDistribution(AngularDistribution):
             f"Law=44 distribution not found for MT={mt_value}"
             f"{f', particle={self.particle_idx}' if self.is_particle_production else ''}"
         )
-    
-    def sample_mu(self, energy: float, random_value: float, ace=None) -> float:
-        """
-        Sample a scattering cosine μ using the Kalbach-Mann formalism.
-        
-        For Kalbach-Mann distributions, the angular sampling requires access 
-        to the R and A parameters from the Law=44 distribution in the DLW/DLWH block.
-        This method requires the ACE object to be passed to access that data.
-        
-        Parameters
-        ----------
-        energy : float
-            Incident energy
-        random_value : float
-            Random number between 0 and 1
-        ace : Ace, optional
-            ACE object containing the distribution data
-            
-        Returns
-        -------
-        float
-            Sampled cosine value μ
-            
-        Raises
-        ------
-        Law44DataError
-            If the ACE object is not provided or the Law=44 data is missing/invalid
-        """
-        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
-        
-        # If no ACE data is provided, raise an error
-        if ace is None:
-            raise Law44DataError(
-                f"ACE object must be provided to sample from Kalbach-Mann distribution (MT={mt_value})"
-            )
-            
-        # If reaction index is invalid, raise an error
-        if self.reaction_index < 0:
-            raise Law44DataError(
-                f"Invalid reaction index {self.reaction_index} for MT={mt_value}"
-            )
-            
-        # Find the Law=44 distribution (this will raise Law44DataError if not found)
-        km_dist = self._find_law44_distribution(ace)
-            
-        # Get the interpolated distribution for this energy
-        dist = km_dist.get_interpolated_distribution(energy)
-        if not dist:
-            raise Law44DataError(
-                f"No distribution data found for energy {energy} MeV in MT={mt_value}"
-            )
-            
-        # Verify that the distribution contains required data
-        if ('e_out' not in dist or 'r' not in dist or 'a' not in dist or 
-            not dist['e_out'] or not dist['r'] or not dist['a']):
-            raise Law44DataError(
-                f"Incomplete Law=44 data for MT={mt_value} at energy {energy} MeV"
-            )
-            
-        # Select a random energy point to get R and A parameters
-        # In practice, this energy would come from the energy sampling step
-        # which is correlated with the angular sampling
-        try:
-            idx = min(int(random_value * (len(dist['e_out']) - 1)), len(dist['e_out']) - 1)
-                
-            # Get the R and A parameters for this energy point
-            r_value = dist['r'][idx]
-            a_value = dist['a'][idx]
-                
-            # Sample from the Kalbach-Mann distribution
-            # If a is very small, return isotropic
-            if abs(a_value) < 1.0e-3:
-                return 2.0 * random_value - 1.0
-                
-            # Use the sampling algorithm from the KalbachMannDistribution class
-            return self._sample_kalbach_mann(a_value, r_value, random_value)
-        except (IndexError, KeyError, TypeError) as e:
-            raise Law44DataError(
-                f"Error accessing Law=44 data for MT={mt_value}: {str(e)}"
-            ) from e
     
     def to_dataframe(self, energy: Optional[float] = None, ace=None, num_points: int = 100, interpolate: bool = True) -> Optional[pd.DataFrame]:
         """
@@ -439,4 +359,135 @@ class KalbachMannAngularDistribution(AngularDistribution):
                 f"REQUIRES: Law=44 data from energy distribution section\n"
                 f"NOTE: Must provide ACE object when sampling or plotting this distribution")
     
-    __repr__ = kalbach_mann_distribution_repr
+    def __repr__(self) -> str:
+        header_width = 85
+        header = "=" * header_width + "\n"
+        header += f"{'Kalbach-Mann Angular Distribution Details':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        description = (
+            "This object represents an angular distribution using the Kalbach-Mann formalism.\n"
+            "The Kalbach-Mann model correlates energy and angle distributions, with parameters\n"
+            "R (precompound fraction) and A (angular slope) that vary with outgoing energy.\n\n"
+            "Data Structure Overview:\n"
+            "- In the ACE file, a LOCB value of -1 indicates a Kalbach-Mann distribution\n"
+            "- The actual angular distribution parameters (R and A) are stored in the\n"
+            "  energy distribution section as a Law=44 distribution\n"
+            "- This object stores reference indices to locate the Law=44 data when needed\n\n"
+            "IMPORTANT: This distribution REQUIRES Law=44 data from the energy distribution\n"
+            "section (DLW/DLWH blocks). The ACE object must be provided to all methods that\n"
+            "calculate or sample angular distributions. Without this data, methods will raise\n"
+            "a Law44DataError exception.\n\n"
+        )
+        
+        # Create a summary table of data information
+        property_col_width = 35
+        value_col_width = header_width - property_col_width - 3
+        
+        info_table = "Data Information:\n"
+        info_table += "-" * header_width + "\n"
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Property", "Value", width1=property_col_width, width2=value_col_width)
+        info_table += "-" * header_width + "\n"
+        
+        # MT number
+        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "MT Number", f"{mt_value}", width1=property_col_width, width2=value_col_width)
+        
+        # Distribution properties
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Distribution Type", "Kalbach-Mann (Law=44)",
+            width1=property_col_width, width2=value_col_width)
+        
+        # Law 44 requirement
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Requires Law=44 Data", "Yes",
+            width1=property_col_width, width2=value_col_width)
+        
+        # ACE requirement
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Requires ACE Object", "Yes",
+            width1=property_col_width, width2=value_col_width)
+        
+        # Reaction index information
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Reaction Index", self.reaction_index,
+            width1=property_col_width, width2=value_col_width)
+        
+        # Particle production information
+        if self.is_particle_production:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Particle Production", f"Yes (particle index: {self.particle_idx})",
+                width1=property_col_width, width2=value_col_width)
+        else:
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Particle Production", "No (incident neutron reaction)",
+                width1=property_col_width, width2=value_col_width)
+        
+        # Kalbach-Mann formula
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Kalbach-Mann Formula", "p(μ) = (a/2)/sinh(a) * [cosh(aμ) + r*sinh(aμ)]",
+            width1=property_col_width, width2=value_col_width)
+        
+        info_table += "-" * header_width + "\n\n"
+        
+        # Raw data properties section
+        properties = {
+            ".mt": "MT number of the reaction (int)",
+            ".reaction_index": "Index of the reaction in the energy distribution table (int)",
+            ".is_particle_production": "Whether this is a particle production reaction (bool)",
+            ".particle_idx": "Particle type index if particle production (int)"
+        }
+        
+        properties_section = create_repr_section(
+            "Raw Data Properties (Reference data from ACE file):", 
+            properties, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Error handling section
+        error_section = "Error Handling:\n"
+        error_section += "-" * header_width + "\n"
+        error_section += (
+            "If Law=44 data is required but not available, methods will raise Law44DataError.\n"
+            "This can happen when:\n"
+            "  - ACE object is not provided to methods\n"
+            "  - ACE object doesn't contain energy distribution data\n"
+            "  - No Law=44 distribution is found for this reaction\n"
+            "  - Distribution data is incomplete or invalid\n"
+        )
+        error_section += "-" * header_width + "\n\n"
+        
+        # Methods section
+        methods = {
+            ".to_dataframe(energy, ace, num_points)": "Convert to a pandas DataFrame at a specific energy",
+            ".plot(energy, ace)": "Create a plot of the distribution at a specific energy"
+        }
+        
+        methods_section = create_repr_section(
+            "Calculation Methods (All require ACE object):", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        # Add example for using this specific distribution type
+        example = (
+            "Example:\n"
+            "--------\n"
+            "# Access reference properties\n"
+            "mt_value = int(distribution.mt.value)\n"
+            "reaction_idx = distribution.reaction_index\n"
+            "is_particle = distribution.is_particle_production\n\n"
+            "# Create a plot showing the Kalbach-Mann distribution at 14 MeV\n"
+            "try:\n"
+            "    fig, ax = distribution.plot(energy=14.0, ace=ace_object)\n"
+            "except Law44DataError as e:\n"
+            "    print(f\"Error: {e}\")\n"
+        )
+        
+        return header + description + info_table + properties_section + "\n" + error_section + methods_section + "\n" + example
+
+

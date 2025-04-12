@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
 import numpy as np
-from mcnpy.ace.parsers.xss import XssEntry
+from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.energy_distribution.base import EnergyDistribution
 from mcnpy._utils import create_repr_section
 
@@ -294,39 +294,6 @@ class ContinuousTabularDistribution(EnergyDistribution):
         
         return interp_dist
     
-    def sample_outgoing_energy(self, incident_energy: float, rng: Optional[np.random.Generator] = None) -> float:
-        """
-        Sample an outgoing energy from the distribution for a given incident energy.
-        
-        Parameters
-        ----------
-        incident_energy : float
-            The incident neutron energy
-        rng : np.random.Generator, optional
-            Random number generator
-            
-        Returns
-        -------
-        float
-            Sampled outgoing energy
-        """
-        # Get interpolated distribution
-        dist = self.get_interpolated_distribution(incident_energy)
-        if not dist:
-            return 0.0
-            
-        # Use numpy's random if none provided
-        if rng is None:
-            rng = np.random.default_rng()
-            
-        # Generate random number
-        xi = rng.random()
-        
-        # Sample from the distribution using the CDF
-        e_out = np.interp(xi, dist['cdf'], dist['e_out'])
-        
-        return e_out
-    
     def __repr__(self) -> str:
         """Returns a formatted string representation of the ContinuousTabularDistribution object.
         
@@ -385,9 +352,7 @@ class ContinuousTabularDistribution(EnergyDistribution):
             ".get_distribution(energy_idx)": 
                 "Get the distribution for a specific incident energy index",
             ".get_interpolated_distribution(incident_energy)": 
-                "Get interpolated distribution for a specific incident energy",
-            ".sample_outgoing_energy(incident_energy, rng=None)": 
-                "Sample an outgoing energy for a given incident energy"
+                "Get interpolated distribution for a specific incident energy"
         }
         
         methods_section = create_repr_section(
