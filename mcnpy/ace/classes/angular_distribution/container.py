@@ -508,12 +508,11 @@ class AngularDistributionContainer:
         header += "=" * header_width + "\n\n"
         
         description = (
-            "This container holds angular distributions for different reaction types and particles.\n"
-            "Angular distributions describe the probability of a particle scattering at a specific angle,\n"
-            "represented by the cosine of the scattering angle (μ) ranging from -1 to +1.\n\n"
-            "Note: Some distributions (Kalbach-Mann/Law=44) require additional data from the energy\n"
-            "distribution section. For these distributions, the ACE object must be provided when\n"
-            "calling methods to avoid Law44DataError exceptions.\n\n"
+            "This container holds angular distributions read directly from the ACE file.\n"
+            "Each distribution preserves the original data structure as found in the ACE format.\n\n"
+            "Angular distributions describe the probability of scattering as a function of the\n"
+            "cosine of the scattering angle (μ), which ranges from -1 (backward scattering) to\n"
+            "+1 (forward scattering).\n\n"
         )
         
         # Create a summary table of available data
@@ -530,6 +529,9 @@ class AngularDistributionContainer:
         elastic_status = "Available"
         if not self.has_elastic_data:
             elastic_status = "Not available or isotropic"
+        else:
+            elastic_type = self.elastic.distribution_type.name
+            elastic_status = f"Available ({elastic_type})"
         
         info_table += "{:<{width1}} {:<{width2}}\n".format(
             "Elastic Scattering (MT=2)", elastic_status,
@@ -544,6 +546,19 @@ class AngularDistributionContainer:
             "Neutron Reactions", neutron_status,
             width1=property_col_width, width2=value_col_width)
         
+        if self.has_neutron_data:
+            # Count distribution types
+            dist_types = {}
+            for mt, dist in self.incident_neutron.items():
+                dist_type = dist.distribution_type.name
+                dist_types[dist_type] = dist_types.get(dist_type, 0) + 1
+            
+            # Add distribution type counts
+            for dist_type, count in dist_types.items():
+                info_table += "{:<{width1}} {:<{width2}}\n".format(
+                    f"  {dist_type}", f"{count} reactions",
+                    width1=property_col_width, width2=value_col_width)
+        
         # Photon production distributions
         photon_status = f"Available ({len(self.photon_production)} reactions)"
         if not self.has_photon_production_data:
@@ -553,83 +568,49 @@ class AngularDistributionContainer:
             "Photon Production", photon_status,
             width1=property_col_width, width2=value_col_width)
         
+        if self.has_photon_production_data:
+            # Count distribution types
+            dist_types = {}
+            for mt, dist in self.photon_production.items():
+                dist_type = dist.distribution_type.name
+                dist_types[dist_type] = dist_types.get(dist_type, 0) + 1
+            
+            # Add distribution type counts
+            for dist_type, count in dist_types.items():
+                info_table += "{:<{width1}} {:<{width2}}\n".format(
+                    f"  {dist_type}", f"{count} reactions",
+                    width1=property_col_width, width2=value_col_width)
+        
         # Particle production distributions
         if self.has_particle_production_data:
-            num_particle_types = len(self.particle_production)
             particle_counts = [len(p) for p in self.particle_production]
-            particle_status = f"Available ({num_particle_types} types, {sum(particle_counts)} total reactions)"
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Particle Production", f"{len(self.particle_production)} types, {sum(particle_counts)} total reactions",
+                width1=property_col_width, width2=value_col_width)
+            
+            # Add details for each particle type
+            for i, particle_dict in enumerate(self.particle_production):
+                if len(particle_dict) > 0:
+                    info_table += "{:<{width1}} {:<{width2}}\n".format(
+                        f"  Particle {i}", f"{len(particle_dict)} reactions",
+                        width1=property_col_width, width2=value_col_width)
         else:
-            particle_status = "Not available"
-        
-        info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Particle Production", particle_status,
-            width1=property_col_width, width2=value_col_width)
+            info_table += "{:<{width1}} {:<{width2}}\n".format(
+                "Particle Production", "Not available",
+                width1=property_col_width, width2=value_col_width)
         
         info_table += "-" * header_width + "\n\n"
         
-        # Create a section for data access - only include available data
-        data_access = {}
-        
-        # Only add elastic if available
-        if self.has_elastic_data:
-            data_access[".elastic"] = "Access elastic scattering angular distribution"
-        
-        # Only add neutron reactions if available
-        if self.has_neutron_data:
-            data_access[".incident_neutron[MT]"] = "Dictionary of angular distributions for neutron reactions"
-        
-        # Only add photon production if available
-        if self.has_photon_production_data:
-            data_access[".photon_production[MT]"] = "Dictionary of angular distributions for photon production"
-        
-        # Only add particle production if available
-        if self.has_particle_production_data:
-            data_access[".particle_production[particle_idx][MT]"] = "List of dictionaries for particle production"
-        
-        data_access_section = create_repr_section(
-            "Data Access Properties:", 
-            data_access, 
-            total_width=header_width, 
-            method_col_width=property_col_width
+        # Add property and method info without examples
+        properties_section = (
+            "Accessing Angular Distributions:\n"
+            f"{'-' * header_width}\n"
+            ".elastic                           Elastic scattering distribution (if available)\n"
+            ".incident_neutron[mt]              Get neutron reaction distribution by MT number\n"
+            ".photon_production[mt]             Get photon production distribution by MT number\n"
+            ".particle_production[part_idx][mt] Get particle production distribution by index and MT\n"
+            ".get_neutron_reaction_mt_numbers() Get list of available neutron reaction MT numbers\n"
+            ".get_photon_production_mt_numbers() Get list of available photon production MT numbers\n\n"
         )
         
-        # Add methods section - only include get methods for available data
-        methods = {}
-        
-        # Only add get methods for data types that are available
-        if self.has_neutron_data:
-            methods[".get_neutron_reaction_mt_numbers()"] = "Get list of MT numbers for neutron reactions"
-        
-        if self.has_photon_production_data:
-            methods[".get_photon_production_mt_numbers()"] = "Get list of MT numbers for photon production"
-        
-        if self.has_particle_production_data:
-            methods[".get_particle_production_mt_numbers()"] = "Get list of MT numbers for each particle type"
-        
-        # Always include these general methods
-        methods.update({
-            ".to_dataframe(...)": "Convert distribution to DataFrame",
-            ".plot(...)": "Plot an angular distribution",
-            ".plot_energy_comparison(...)": "Compare distributions at different energies"
-        })
-        
-        methods_section = create_repr_section(
-            "Available Methods:", 
-            methods, 
-            total_width=header_width, 
-            method_col_width=property_col_width
-        )
-        
-        # Add note about Kalbach-Mann to example section
-        example = (
-            "Example:\n"
-            "--------\n"
-            "# Get MT numbers for neutron reactions with angular distributions\n"
-            "mt_numbers = container.get_neutron_reaction_mt_numbers()\n\n"
-            "# Plot the angular distribution for MT=16 at 14 MeV\n"
-            "fig, ax = container.plot(mt=16, energy=14.0, ace=ace_object)  # ACE needed for Kalbach-Mann\n\n"
-            "# Compare angular distributions at different energies\n"
-            "fig, ax = container.plot_energy_comparison(mt=16, energies=[1.0, 5.0, 14.0], ace=ace_object)\n"
-        )
-        
-        return header + description + info_table + data_access_section + "\n" + methods_section + "\n" + example
+        return header + description + info_table + properties_section

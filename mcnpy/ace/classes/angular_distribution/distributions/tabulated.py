@@ -198,82 +198,69 @@ class TabulatedAngularDistribution(AngularDistribution):
         })
 
     def __repr__(self) -> str:
+        """
+        Returns a user-friendly string representation with detailed structure information.
+        
+        Returns
+        -------
+        str
+            Formatted string representation showing the distribution structure
+        """
         header_width = 85
         header = "=" * header_width + "\n"
-        header += f"{'Tabulated Angular Distribution Details':^{header_width}}\n"
+        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
+        header += f"{'Tabulated Angular Distribution for MT=' + str(mt_value):^{header_width}}\n"
         header += "=" * header_width + "\n\n"
         
+        # Detailed description of tabulated format
         description = (
-            "This object represents an angular distribution using tabulated probability density\n"
-            "functions (PDFs) and cumulative distribution functions (CDFs). The distribution\n"
-            "varies with incident energy, with each energy point having its own tabulated\n"
-            "probability function.\n\n"
-            "Data Structure Overview:\n"
-            "- For each incident energy point, the ACE file stores a table with:\n"
-            "  * Interpolation flag (1=histogram, 2=linear-linear interpolation)\n"
-            "  * Set of cosine values (μ) ranging from -1 to 1\n"
-            "  * PDF values (probability density) for each cosine value\n"
-            "  * CDF values (cumulative distribution) for each cosine value\n\n"
+            f"This object contains tabulated angular distribution data for reaction MT={mt_value}.\n\n"
+            f"DISTRIBUTION STRUCTURE:\n"
+            f"The tabulated format stores the angular distribution as explicit probability\n"
+            f"density functions (PDFs) and cumulative distribution functions (CDFs) for a set of\n"
+            f"incident energy points. The data is organized as follows:\n\n"
+            f"1. Energy Grid: A set of incident neutron energies (E₁, E₂, ..., Eₙ)\n"
+            f"2. For each energy point, the distribution includes:\n"
+            f"   a. Interpolation flag (1=histogram, 2=linear-linear)\n"
+            f"   b. Set of cosine values (μ) ranging from -1 to 1\n"
+            f"   c. PDF values (probability density function) for each cosine\n"
+            f"   d. CDF values (cumulative distribution function) for each cosine\n\n"
+            f"INTERPOLATION METHODS:\n"
+            f"- Between incident energy points: Linear interpolation of PDF values\n"
+            f"- Within a cosine grid (μ values):\n"
+            f"  * Histogram (flag=1): PDF value is constant within each cosine bin\n"
+            f"  * Linear-linear (flag=2): Linear interpolation between cosine points\n\n"
+            f"CALCULATION EXAMPLE:\n"
+            f"To calculate the PDF at incident energy E and scattering cosine μ:\n"
+            f"1. Find bounding energy points: E₁ ≤ E ≤ E₂\n"
+            f"2. Calculate interpolation factor: f = (E - E₁)/(E₂ - E₁)\n"
+            f"3. Get PDFs at μ for both energies: PDF₁(μ), PDF₂(μ)\n"
+            f"4. Interpolate: PDF(E,μ) = (1-f) × PDF₁(μ) + f × PDF₂(μ)\n\n"
         )
         
-        # Create a summary table of data information
-        property_col_width = 35
-        value_col_width = header_width - property_col_width - 3
-        
-        info_table = "Data Information:\n"
-        info_table += "-" * header_width + "\n"
-        info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Property", "Value", width1=property_col_width, width2=value_col_width)
-        info_table += "-" * header_width + "\n"
-        
-        # MT number
-        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
-        info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "MT Number", f"{mt_value}", width1=property_col_width, width2=value_col_width)
-        
-        # Distribution properties
-        info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Distribution Type", "Tabulated PDF/CDF",
-            width1=property_col_width, width2=value_col_width)
-        
         # Energy grid information
-        if self.energies:
-            num_energies = len(self.energies)
-            info_table += "{:<{width1}} {:<{width2}}\n".format(
-                "Number of Energy Points", num_energies,
-                width1=property_col_width, width2=value_col_width)
+        if hasattr(self, "energies") and self.energies:
+            description += "ENERGY GRID:\n"
+            description += "-" * header_width + "\n"
+            description += f"Number of energy points: {len(self.energies)}\n"
             
-            min_energy = self.energies[0]  # Now directly a float
-            max_energy = self.energies[-1]  # Now directly a float
-            energy_range = f"{min_energy:.6g} - {max_energy:.6g} MeV"
-            info_table += "{:<{width1}} {:<{width2}}\n".format(
-                "Energy Range", energy_range,
-                width1=property_col_width, width2=value_col_width)
-        
-        # Distribution table information
-        if self.cosine_grid:
-            num_tables = len(self.cosine_grid)
-            info_table += "{:<{width1}} {:<{width2}}\n".format(
-                "Number of Distribution Tables", num_tables,
-                width1=property_col_width, width2=value_col_width)
+            # Show the first few energy points
+            max_display = min(5, len(self.energies))
+            description += f"First {max_display} energy points (MeV):\n"
+            for i in range(max_display):
+                e_value = self.energies[i]
+                description += f"  Energy[{i}] = {e_value:.6g}\n"
             
-            # Information about the first table if available
-            if num_tables > 0 and len(self.cosine_grid[0]) > 0:
-                num_points = len(self.cosine_grid[0])
-                first_cosine = self.cosine_grid[0][0]  # Now directly a float
-                last_cosine = self.cosine_grid[0][-1]  # Now directly a float
-                
-                info_table += "{:<{width1}} {:<{width2}}\n".format(
-                    "Points in First Table", num_points,
-                    width1=property_col_width, width2=value_col_width)
-                
-                table_range = f"[{first_cosine:.3f}, {last_cosine:.3f}]"
-                info_table += "{:<{width1}} {:<{width2}}\n".format(
-                    "First Table Cosine Range", table_range,
-                    width1=property_col_width, width2=value_col_width)
+            # If there are more than max_display points, show the last one too
+            if len(self.energies) > max_display:
+                e_value = self.energies[-1]
+                description += f"  ...\n"
+                description += f"  Energy[{len(self.energies)-1}] = {e_value:.6g}\n"
+            
+            description += "\n"
         
-        # Interpolation scheme
-        if self.interpolation:
+        # Interpolation information
+        if hasattr(self, "interpolation") and self.interpolation:
             interp_types = set(self.interpolation)
             interp_desc = {
                 1: "Histogram",
@@ -281,54 +268,49 @@ class TabulatedAngularDistribution(AngularDistribution):
             }
             interp_str = ", ".join(interp_desc.get(i, f"Type {i}") for i in interp_types)
             
-            info_table += "{:<{width1}} {:<{width2}}\n".format(
-                "Interpolation Type(s)", interp_str,
-                width1=property_col_width, width2=value_col_width)
+            description += "INTERPOLATION FLAGS:\n"
+            description += "-" * header_width + "\n"
+            description += f"Interpolation type(s) used: {interp_str}\n\n"
         
-        info_table += "-" * header_width + "\n\n"
+        # Information about cosine grid structure at first energy
+        if hasattr(self, "cosine_grid") and self.cosine_grid and len(self.cosine_grid) > 0:
+            first_cosines = self.cosine_grid[0]
+            num_points = len(first_cosines)
+            
+            description += "COSINE GRID STRUCTURE:\n"
+            description += "-" * header_width + "\n"
+            description += f"Number of points in first energy's cosine grid: {num_points}\n"
+            if num_points > 0:
+                description += f"Cosine range: [{first_cosines[0]:.4f}, {first_cosines[-1]:.4f}]\n\n"
         
-        # Raw data properties section
+        # Add property descriptions (only public attributes)
         properties = {
-            ".mt": "MT number of the reaction (int)",
-            ".energies": "List of incident energy points as float values (List[float])",
-            ".interpolation": "List of interpolation flags for each energy point (List[int])",
-            ".cosine_grid": "List of cosine grids for each energy as float values (List[List[float]])",
-            ".pdf": "List of PDF values for each energy as float values (List[List[float]])",
-            ".cdf": "List of CDF values for each energy as float values (List[List[float]])"
+            ".energies": "List of incident energy points (MeV)",
+            ".interpolation": "List of interpolation flags for each energy",
+            ".cosine_grid": "List of cosine grids for each energy",
+            ".pdf": "List of PDF values for each energy",
+            ".cdf": "List of CDF values for each energy"
         }
         
+        property_col_width = 35
         properties_section = create_repr_section(
-            "Raw Data Properties (Direct from ACE file):", 
+            "Public Properties:", 
             properties, 
             total_width=header_width, 
             method_col_width=property_col_width
         )
         
-        # Methods section - Update to remove sample_mu reference
+        # Create a section for available methods
         methods = {
-            ".to_dataframe(energy, num_points)": "Convert to a pandas DataFrame at a specific energy",
-            ".plot(energy)": "Create a plot of the distribution at a specific energy"
+            ".to_dataframe(energy, interpolate=False)": "Get distribution at a specific energy as DataFrame",
+            ".plot(energy)": "Plot the distribution at a specific energy"
         }
         
         methods_section = create_repr_section(
-            "Calculation Methods:", 
+            "Methods to Visualize Data:", 
             methods, 
             total_width=header_width, 
             method_col_width=property_col_width
         )
         
-        # Add example for using this specific distribution type - Update to remove sample_mu usage
-        example = (
-            "Example:\n"
-            "--------\n"
-            "# Directly access raw data for the first energy point\n"
-            "first_energy = distribution.energies[0]  # Returns a float\n"
-            "interp_flag = distribution.interpolation[0]  # 1=histogram, 2=linear-linear\n"
-            "cosines = distribution.cosine_grid[0]  # List of floats for cosine values\n"
-            "pdf_values = distribution.pdf[0]     # PDF values\n"
-            "cdf_values = distribution.cdf[0]     # CDF values\n\n"
-            "# Create a plot showing the PDF at 2 MeV\n"
-            "fig, ax = distribution.plot(energy=2.0)\n"
-        )
-        
-        return header + description + info_table + properties_section + "\n" + methods_section + "\n" + example
+        return header + description + properties_section + "\n" + methods_section

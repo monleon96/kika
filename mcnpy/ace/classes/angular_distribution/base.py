@@ -132,101 +132,82 @@ class AngularDistribution:
     
     def __repr__(self) -> str:
         """
-        Returns a user-friendly, formatted string representation of the angular distribution.
+        Returns a user-friendly string representation focusing on raw ACE data.
         
         Returns
         -------
         str
-            Formatted string representation
+            Formatted string representation showing the raw ACE data
         """
         header_width = 85
         header = "=" * header_width + "\n"
-        header += f"{'Angular Distribution Details':^{header_width}}\n"
+        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
+        header += f"{'Angular Distribution for MT=' + str(mt_value):^{header_width}}\n"
+        header += f"{self.distribution_type.name:^{header_width}}\n"
         header += "=" * header_width + "\n\n"
         
-        # Description
-        description = "This object contains angular distribution data "
+        # Description focused on ACE data
+        description = (
+            f"This object contains angular distribution data for reaction MT={mt_value}.\n"
+            f"Distribution Type: {self.distribution_type.name}\n\n"
+        )
         
-        # Add type-specific description based on the distribution_type
-        if self.distribution_type.name == "ISOTROPIC":
-            description += "for isotropic scattering (uniform in all directions).\n\n"
-        elif self.distribution_type.name == "EQUIPROBABLE":
-            description += "in equiprobable bin format (32 cosine bins with equal probability).\n\n"
-        elif self.distribution_type.name == "TABULATED":
-            description += "in tabulated format (explicit PDF and CDF functions).\n\n"
-        elif self.distribution_type.name == "KALBACH_MANN":
-            description += "using the Kalbach-Mann formalism (correlated with energy distribution).\n\n"
-        else:
-            description += "in an unknown format.\n\n"
-        
-        # Create a summary table of data information
-        property_col_width = 35
-        value_col_width = header_width - property_col_width - 3  # -3 for spacing and formatting
-        
-        info_table = "Data Information:\n"
-        info_table += "-" * header_width + "\n"
-        info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Property", "Value", width1=property_col_width, width2=value_col_width)
-        info_table += "-" * header_width + "\n"
-        
-        # MT number
-        mt_value = int(self.mt.value) if hasattr(self.mt, 'value') else int(self.mt)
-        info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "MT Number", f"{mt_value}", width1=property_col_width, width2=value_col_width)
-        
-        # Distribution type
-        info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Distribution Type", self.distribution_type.name,
-            width1=property_col_width, width2=value_col_width)
-        
-        # Energy grid information
-        if self.energies:
-            num_energies = len(self.energies)
-            info_table += "{:<{width1}} {:<{width2}}\n".format(
-                "Number of Energy Points", num_energies,
-                width1=property_col_width, width2=value_col_width)
+        # Energy grid information from raw ACE data
+        if hasattr(self, "energies") and self.energies:
+            description += "ENERGY GRID STRUCTURE:\n"
+            description += "-" * header_width + "\n"
+            description += f"Number of energy points: {len(self.energies)}\n"
             
-            min_energy = self.energies[0]  # Now directly a float
-            max_energy = self.energies[-1]  # Now directly a float
-            energy_range = f"{min_energy:.6g} - {max_energy:.6g} MeV"
-            info_table += "{:<{width1}} {:<{width2}}\n".format(
-                "Energy Range", energy_range,
-                width1=property_col_width, width2=value_col_width)
+            # Show the first few energy points
+            max_display = min(5, len(self.energies))
+            description += f"First {max_display} energy points (MeV):\n"
+            for i in range(max_display):
+                e_value = self.energies[i]
+                description += f"  Energy[{i}] = {e_value:.6g}\n"
+            
+            # If there are more than max_display points, show the last one too
+            if len(self.energies) > max_display:
+                e_value = self.energies[-1]
+                description += f"  ...\n"
+                description += f"  Energy[{len(self.energies)-1}] = {e_value:.6g}\n"
+            
+            description += "\n"
+        else:
+            description += "No energy grid data available (isotropic at all energies)\n\n"
         
-        info_table += "-" * header_width + "\n\n"
-        
-        # Create a section for available methods
-        methods = {
-            ".to_dataframe(...)": "Convert to a pandas DataFrame at a specific energy",
-            ".plot(...)": "Create a plot of the angular distribution at a specific energy"
-        }
-        
-        methods_section = create_repr_section(
-            "Available Methods:", 
-            methods, 
-            total_width=header_width, 
-            method_col_width=property_col_width
+        # Add a note that this is the base representation
+        description += (
+            "NOTE: This is the base representation. For detailed distribution data,\n"
+            "access the derived class attributes directly.\n\n"
         )
         
-        # Add an example section
-        example = (
-            "Example:\n"
-            "--------\n"
-            "# Create a plot of the distribution at 2 MeV\n"
-            "fig, ax = angular_distribution.plot(energy=2.0)\n"
-        )
-        
-        # Add property descriptions
+        # Add property descriptions (only public attributes)
         properties = {
-            ".mt": "MT number of the reaction (int)",
-            ".energies": "List of incident energy points as float values (List[float])"
+            ".energies": "List of incident energy points (MeV)",
+            ".mt": "MT number of the reaction",
+            ".distribution_type": "Type of angular distribution",
+            ".is_isotropic": "Boolean indicating if distribution is isotropic"
         }
         
+        property_col_width = 35
         properties_section = create_repr_section(
-            "Property Access:", 
+            "Public Properties:", 
             properties, 
             total_width=header_width, 
             method_col_width=property_col_width
         )
         
-        return header + description + info_table + properties_section + "\n" + methods_section + "\n" + example
+        # Create a section for available methods but keep it minimal
+        methods = {
+            ".to_dataframe(energy, interpolate=False)": "Get distribution at a specific energy as DataFrame",
+            ".plot(energy)": "Plot the distribution at a specific energy"
+        }
+        
+        methods_section = create_repr_section(
+            "Methods to Visualize Data:", 
+            methods, 
+            total_width=header_width, 
+            method_col_width=property_col_width
+        )
+        
+        return header + description + properties_section + "\n" + methods_section
