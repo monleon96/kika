@@ -1,37 +1,45 @@
 """
-Parser functions for specific MF sections in ENDF files.
+Parser functions for MF1 sections in ENDF files.
 """
-from typing import Dict, List, Optional
+from typing import Dict, List, Tuple
 
 from ..classes.mf import MF
-from ..classes.mt import MT, MT451
-from ..utils import parse_line, parse_endf_id
+from ..classes.mf1.mf1mt import MT451
+from ..utils import parse_line, parse_endf_id, group_lines_by_mt_with_positions
 
 
-def parse_mf1(lines: List[str]) -> MF:
+def parse_mf1(lines: List[str], file_offset: int = 0) -> MF:
     """
     Parse MF1 (General Information) data.
     
     Args:
         lines: List of string lines from the MF1 section
+        file_offset: Line number offset from the start of the original file
         
     Returns:
         MF object with parsed MF1 data
     """
     mf = MF(number=1)
     
-    # Group lines by MT sections
-    mt_groups = _group_lines_by_mt(lines)
+    # Record number of lines
+    mf.num_lines = len(lines)
+    
+    # Group lines by MT sections with position tracking
+    mt_groups, line_counts = group_lines_by_mt_with_positions(lines)
     
     # Parse MT451 (General Information)
     if 451 in mt_groups:
-        # Directly add the MT451 object to the MF sections
+        # Directly add the MT451 object to the MF sections with line count information
         mt451 = parse_mt451(mt_groups[451])
+        if 451 in line_counts:
+            mt451.num_lines = line_counts[451]
         mf.add_section(mt451)
     
     # Parse other MT sections in MF1 if present
     # Example: if 452 in mt_groups:
     #     mt452 = parse_mt452(mt_groups[452])
+    #     if 452 in positions:
+    #         mt452._start_line, mt452._end_line = positions[452]
     #     mf.add_section(mt452)
     
     return mf
@@ -135,81 +143,3 @@ def parse_mt451(lines: List[str]) -> MT451:
             mt451.add_directory_entry(mf_val, mt_val, nc_val, mod_val)
     
     return mt451
-
-
-def parse_mf2(lines: List[str]) -> MF:
-    """
-    Parse MF2 (Resonance Parameters) data.
-    
-    Args:
-        lines: List of string lines from the MF2 section
-        
-    Returns:
-        MF object with parsed MF2 data
-    """
-    mf = MF(number=2)
-    # Placeholder for MF2 parsing logic
-    return mf
-
-
-def _group_lines_by_mt(lines: List[str]) -> Dict[int, List[str]]:
-    """
-    Group lines by MT section.
-    
-    Args:
-        lines: List of lines for a single MF section
-        
-    Returns:
-        Dictionary mapping MT numbers to lists of lines
-    """
-    result: Dict[int, List[str]] = {}
-    current_mt = None
-    current_lines: List[str] = []
-    
-    for line in lines:
-        # Get the MT number from the line
-        if len(line) >= 75:
-            try:
-                mt = int(line[72:75])
-                
-                # Handle section changes and end markers
-                if mt == 0:
-                    # End of section marker
-                    if current_mt is not None and current_lines:
-                        if current_mt not in result:
-                            result[current_mt] = []
-                        result[current_mt].extend(current_lines)
-                    break
-                
-                if current_mt is None:
-                    # First section
-                    current_mt = mt
-                    current_lines = [line]
-                elif current_mt != mt:
-                    # Section change
-                    if current_mt not in result:
-                        result[current_mt] = []
-                    result[current_mt].extend(current_lines)
-                    
-                    # Start new section
-                    current_mt = mt
-                    current_lines = [line]
-                else:
-                    # Continue current section
-                    current_lines.append(line)
-            except ValueError:
-                # If MT can't be parsed, just add to current group
-                if current_mt is not None:
-                    current_lines.append(line)
-        else:
-            # Short line, add to current group
-            if current_mt is not None:
-                current_lines.append(line)
-    
-    # Add the last section if needed
-    if current_mt is not None and current_lines:
-        if current_mt not in result:
-            result[current_mt] = []
-        result[current_mt].extend(current_lines)
-    
-    return result
