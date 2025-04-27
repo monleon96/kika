@@ -11,12 +11,14 @@ from ..classes.mf import MF
 from ..utils import parse_endf_id
 from .parse_mf1 import parse_mf1
 from .parse_mf4 import parse_mf4
+from .parse_mf34 import parse_mf34
 
 
 # Dictionary mapping MF numbers to their parser functions
 MF_PARSERS = {
     1: parse_mf1,
     4: parse_mf4,
+    34: parse_mf34,
     # Additional parsers will be registered here
 }
 

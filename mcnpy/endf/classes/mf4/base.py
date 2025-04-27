@@ -17,7 +17,7 @@ class MF4MT(MT):
     _za: float = None    # ZA identifier
     _awr: float = None   # Atomic weight ratio
     _ltt: int = None     # Angular distribution format flag
-    _li: int = None      # Flag for identical particles
+    _li: int = None      # Flag to specify if angular distributions are isotropic (0=not all isotropic, 1=all isotropic)
     _lct: int = None     # Frame of reference (1=LAB, 2=CM)
     _mat: int = None     # Material identifier
     

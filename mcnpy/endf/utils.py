@@ -105,11 +105,8 @@ def format_endf_data_line(values: Sequence[Union[int, float, None]],
         
         for i, (value, fmt) in enumerate(zip(values, format_list)):
             if fmt == ENDF_FORMAT_INT and value is not None:
-                # Format as integer, with zero as blank
-                if value == 0:
-                    data_part += " " * 11  # Zero as blank for regular integers
-                else:
-                    data_part += f"{int(value):11d}"
+                # Format as integer, always show zero (don't use blank for zero)
+                data_part += f"{int(value):11d}"
             elif fmt == ENDF_FORMAT_INT_ZERO and value is not None:
                 # Format as integer, with zero as actual zero
                 data_part += f"{int(value):11d}"

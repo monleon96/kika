@@ -309,3 +309,305 @@ class CovMat:
     
     def __str__(self) -> str:
         return self.__repr__()
+
+@dataclass
+class Ang_CovMat:
+    """
+    Class for storing angular distribution covariance matrix data.
+    
+    Attributes
+    ----------
+    num_energies : int
+        Number of energy points in the covariance matrices
+    isotope_rows : List[int]
+        List of row isotope IDs
+    reaction_rows : List[int]
+        List of row reaction MT numbers
+    l_rows : List[int]
+        List of row Legendre coefficient indices
+    isotope_cols : List[int]
+        List of column isotope IDs
+    reaction_cols : List[int]
+        List of column reaction MT numbers
+    l_cols : List[int]
+        List of column Legendre coefficient indices
+    matrices : List[np.ndarray]
+        List of covariance matrices
+    """
+    num_energies: int = 0
+    isotope_rows: List[int] = field(default_factory=list)
+    reaction_rows: List[int] = field(default_factory=list)
+    l_rows: List[int] = field(default_factory=list)
+    isotope_cols: List[int] = field(default_factory=list)
+    reaction_cols: List[int] = field(default_factory=list)
+    l_cols: List[int] = field(default_factory=list)
+    matrices: List[np.ndarray] = field(default_factory=list)
+    
+    def add_matrix(self, 
+                  isotope_row: int, 
+                  reaction_row: int,
+                  l_row: int,
+                  isotope_col: int, 
+                  reaction_col: int,
+                  l_col: int,
+                  matrix: np.ndarray) -> None:
+        """
+        Add an angular covariance matrix to the collection.
+        
+        Parameters
+        ----------
+        isotope_row : int
+            Row isotope ID
+        reaction_row : int
+            Row reaction MT number
+        l_row : int
+            Row Legendre coefficient index
+        isotope_col : int
+            Column isotope ID
+        reaction_col : int
+            Column reaction MT number
+        l_col : int
+            Column Legendre coefficient index
+        matrix : np.ndarray
+            Covariance matrix of shape (num_energies, num_energies)
+        """
+        # Validate matrix shape
+        if matrix.shape != (self.num_energies, self.num_energies):
+            raise ValueError(f"Matrix shape {matrix.shape} does not match expected shape ({self.num_energies}, {self.num_energies})")
+        
+        self.isotope_rows.append(isotope_row)
+        self.reaction_rows.append(reaction_row)
+        self.l_rows.append(l_row)
+        self.isotope_cols.append(isotope_col)
+        self.reaction_cols.append(reaction_col)
+        self.l_cols.append(l_col)
+        self.matrices.append(matrix)
+    
+    @property
+    def num_matrices(self) -> int:
+        """
+        Get the number of covariance matrices stored.
+        
+        Returns
+        -------
+        int
+            Number of matrices
+        """
+        return len(self.matrices)
+    
+    @property
+    def unique_isotopes(self) -> Set[int]:
+        """
+        Get the set of unique isotope IDs in the covariance matrices.
+        
+        Returns
+        -------
+        Set[int]
+            Set of unique isotope IDs
+        """
+        return set(self.isotope_rows + self.isotope_cols)
+    
+    @property
+    def unique_reactions(self) -> Set[int]:
+        """
+        Get the set of unique reaction MT numbers in the covariance matrices.
+        
+        Returns
+        -------
+        Set[int]
+            Set of unique reaction MT numbers
+        """
+        return set(self.reaction_rows + self.reaction_cols)
+    
+    @property
+    def unique_legendre_indices(self) -> Set[int]:
+        """
+        Get the set of unique Legendre coefficient indices in the covariance matrices.
+        
+        Returns
+        -------
+        Set[int]
+            Set of unique Legendre coefficient indices
+        """
+        return set(self.l_rows + self.l_cols)
+    
+    def get_isotope_reactions_legendre(self) -> Dict[Tuple[int, int], Set[int]]:
+        """
+        Get a mapping of (isotope, reaction) pairs to their available Legendre indices.
+        
+        Returns
+        -------
+        Dict[Tuple[int, int], Set[int]]
+            Dictionary mapping (isotope, MT) to sets of Legendre indices
+        """
+        result = {}
+        
+        # Process all row combinations
+        for i in range(len(self.isotope_rows)):
+            iso = self.isotope_rows[i]
+            mt = self.reaction_rows[i]
+            l = self.l_rows[i]
+            key = (iso, mt)
+            
+            if key not in result:
+                result[key] = set()
+            result[key].add(l)
+        
+        # Process all column combinations
+        for i in range(len(self.isotope_cols)):
+            iso = self.isotope_cols[i]
+            mt = self.reaction_cols[i]
+            l = self.l_cols[i]
+            key = (iso, mt)
+            
+            if key not in result:
+                result[key] = set()
+            result[key].add(l)
+        
+        return result
+    
+    def get_matrix(self, 
+                  isotope_row: int, 
+                  reaction_row: int,
+                  l_row: int,
+                  isotope_col: int, 
+                  reaction_col: int,
+                  l_col: int) -> Optional[np.ndarray]:
+        """
+        Get a specific angular covariance matrix by isotope, reaction, and Legendre indices.
+        
+        Parameters
+        ----------
+        isotope_row : int
+            Row isotope ID
+        reaction_row : int
+            Row reaction MT number
+        l_row : int
+            Row Legendre coefficient index
+        isotope_col : int
+            Column isotope ID
+        reaction_col : int
+            Column reaction MT number
+        l_col : int
+            Column Legendre coefficient index
+            
+        Returns
+        -------
+        np.ndarray or None
+            Covariance matrix if found, None otherwise
+        """
+        for i in range(self.num_matrices):
+            if (self.isotope_rows[i] == isotope_row and 
+                self.reaction_rows[i] == reaction_row and 
+                self.l_rows[i] == l_row and
+                self.isotope_cols[i] == isotope_col and 
+                self.reaction_cols[i] == reaction_col and
+                self.l_cols[i] == l_col):
+                return self.matrices[i]
+        return None
+    
+    def to_dataframe(self) -> pd.DataFrame:
+        """
+        Convert the angular covariance matrix data to a pandas DataFrame.
+        
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame containing the covariance matrix data with columns:
+            ISO_H, REAC_H, L_H, ISO_V, REAC_V, L_V, STD
+        """
+        # Convert matrices to Python lists for storing in DataFrame
+        matrix_lists = [matrix.tolist() for matrix in self.matrices]
+        
+        # Create DataFrame
+        data = {
+            "ISO_H": self.isotope_rows,
+            "REAC_H": self.reaction_rows,
+            "L_H": self.l_rows,
+            "ISO_V": self.isotope_cols,
+            "REAC_V": self.reaction_cols,
+            "L_V": self.l_cols,
+            "STD": matrix_lists
+        }
+        
+        return pd.DataFrame(data)
+    
+    def save_excel(self, output_path: str) -> None:
+        """
+        Save the angular covariance matrix data to an Excel file.
+        
+        Parameters
+        ----------
+        output_path : str
+            Path to save the Excel file
+        """
+        df = self.to_dataframe()
+        
+        if output_path.endswith(".xlsx"):
+            df.to_excel(output_path)
+        elif os.path.isdir(output_path):
+            df.to_excel(os.path.join(output_path, "ANGULAR_COVMAT.xlsx"))
+        else:
+            df.to_excel(output_path + ".xlsx")
+    
+    def get_full_covariance_matrix(self, isotope: int, mt: int) -> Dict[Tuple[int, int], np.ndarray]:
+        """
+        Build full covariance matrices for all Legendre coefficient pairs of a given isotope and reaction.
+        
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID to build the covariance matrix for
+        mt : int
+            Reaction MT number
+            
+        Returns
+        -------
+        Dict[Tuple[int, int], np.ndarray]
+            Dictionary mapping (L, L1) pairs to their full covariance matrices
+            
+        Raises
+        ------
+        ValueError
+            If the isotope/reaction has no covariance data
+        """
+        # Get all Legendre coefficients for this isotope and reaction
+        iso_react_legendre = self.get_isotope_reactions_legendre().get((isotope, mt), set())
+        
+        if not iso_react_legendre:
+            raise ValueError(f"No covariance data available for isotope {isotope}, reaction {mt}")
+        
+        # Dictionary to store results for each L,L1 pair
+        result = {}
+        
+        # Build matrices for each L,L1 pair
+        for l_row in iso_react_legendre:
+            for l_col in iso_react_legendre:
+                # Get the matrix directly if it exists
+                matrix = self.get_matrix(isotope, mt, l_row, isotope, mt, l_col)
+                
+                # If matrix doesn't exist, it might exist with reversed indices (if it's symmetric)
+                if matrix is None and l_col < l_row:
+                    matrix = self.get_matrix(isotope, mt, l_col, isotope, mt, l_row)
+                    if matrix is not None:
+                        # Transpose for correct orientation
+                        matrix = matrix.T
+                
+                # Store the matrix if found
+                if matrix is not None:
+                    result[(l_row, l_col)] = matrix
+        
+        return result
+    
+    def __str__(self) -> str:
+        """String representation showing summary information."""
+        unique_isos = len(self.unique_isotopes)
+        unique_mts = len(self.unique_reactions)
+        unique_ls = len(self.unique_legendre_indices)
+        
+        return (f"Angular Covariance Matrix Data:\n"
+                f"- {self.num_matrices} matrices\n"
+                f"- {self.num_energies} energy points\n"
+                f"- {unique_isos} unique isotopes\n"
+                f"- {unique_mts} unique reaction types\n"
+                f"- {unique_ls} unique Legendre indices")

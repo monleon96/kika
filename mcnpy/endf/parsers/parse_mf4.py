@@ -19,13 +19,12 @@ from ..classes.mf4.mixed import MF4MTMixed
 from ..utils import parse_line, parse_endf_id, group_lines_by_mt_with_positions
 
 
-def parse_mf4(lines: List[str], file_offset: int = 0) -> MF:
+def parse_mf4(lines: List[str]) -> MF:
     """
     Parse MF4 (Angular Distributions) data.
     
     Args:
         lines: List of string lines from the MF4 section
-        file_offset: Line number offset from the start of the original file
         
     Returns:
         MF object with parsed MF4 data
