@@ -116,198 +116,11 @@ def process_sample(
         elapsed = time.time() - start_time
         return (i, elapsed, False, str(e), read_time, perturb_time, write_time)
 
-def write_perturbation_data(
-    output_dir: str,
-    base_name: str,
-    isotope_id: int,
-    mt_numbers: List[int],
-    expanded_mt_numbers: List[int],
-    mt_to_original_map: Dict[int, int],
-    energy_grid: np.ndarray,
-    seed: Optional[int],
-    decomposition_method: str,
-    sampling_method: str,
-    perturbation_factors: np.ndarray,
-    num_samples: int,
-    effective_original_mts: List[int], # Added parameter
-    available_covmat_mts: Set[int] = None,
-    skipped_mts: List[int] = None,
-    mt_warnings: Dict[int, str] = None
-) -> str:
-    """
-    Write perturbation data to a text file for reproducibility.
-    
-    Parameters
-    ----------
-    output_dir : str
-        Directory to save the file
-    base_name : str
-        Base name for the file
-    isotope_id : int
-        Isotope ID
-    mt_numbers : List[int]
-        Original list of MT numbers requested for perturbation
-    expanded_mt_numbers : List[int]
-        Expanded list of MT numbers actually perturbed (may include MT=4 and MT=51-91 for an MT=4 request)
-    mt_to_original_map : Dict[int, int]
-        Mapping from expanded MT numbers to original MT numbers
-    energy_grid : np.ndarray
-        Energy grid used for perturbation
-    seed : Optional[int]
-        Random seed used
-    decomposition_method : str
-        Method used to decompose the covariance matrix
-    sampling_method : str
-        Method used to generate samples
-    perturbation_factors : np.ndarray
-        Perturbation factors for each sample
-    num_samples : int
-        Number of samples
-    effective_original_mts : List[int]
-        List of original MT numbers for which covariance data was found and factors were generated
-    available_covmat_mts : Set[int], optional
-        Set of MT numbers available in the covariance matrix
-    skipped_mts : List[int], optional
-        List of MT numbers that were skipped due to missing covariance data
-    mt_warnings : Dict[int, str], optional
-        Dictionary mapping MT numbers to warning messages
-        
-    Returns
-    -------
-    str
-        Path to the created file
-    """
-    # Create filename without timestamp
-    file_name = f"{base_name}_perturbation_data.txt"
-    file_path = os.path.join(output_dir, file_name)
-    
-    with open(file_path, 'w') as f:
-        # Write header and parameters
-        f.write("=" * 80 + "\n")
-        f.write("PERTURBATION DATA\n")
-        f.write("=" * 80 + "\n\n")
-        
-        # Include creation timestamp in the file content but not in the filename
-        f.write("PARAMETERS:\n")
-        f.write("-" * 80 + "\n")
-        f.write(f"Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Isotope ID: {isotope_id}\n")
-        f.write(f"Original MT numbers requested: {mt_numbers}\n")
-        
-        # Report on available MTs in covariance matrix
-        if available_covmat_mts is not None:
-            avail_mts_sorted = sorted(list(available_covmat_mts))
-            f.write(f"\nMT numbers available in covariance matrix: {avail_mts_sorted}\n")
-        
-        # Report on skipped MTs
-        if skipped_mts and len(skipped_mts) > 0:
-            f.write(f"\nWARNING: The following requested MT numbers were skipped due to missing covariance data: {sorted(skipped_mts)}\n")
-            
-        # Check if MT=4 was requested and describe how it was handled
-        mt4_requested = 4 in mt_numbers
-        if mt4_requested:
-            mt4_perturbed = 4 in expanded_mt_numbers and mt_to_original_map.get(4) == 4
-            inelastic_mts_perturbed = sorted([mt for mt in expanded_mt_numbers if mt_to_original_map.get(mt) == 4 and mt >= 51 and mt <= 91])
-            
-            f.write("\nMT=4 (INELASTIC) PERTURBATION DETAILS:\n")
-            if mt4_perturbed and inelastic_mts_perturbed:
-                f.write(f"  - Perturbation factors for MT=4 were applied to both MT=4 and the discrete inelastic levels found:\n")
-                f.write(f"    MT={min(inelastic_mts_perturbed)}-{max(inelastic_mts_perturbed)} ({len(inelastic_mts_perturbed)} levels: {inelastic_mts_perturbed}).\n")
-            elif mt4_perturbed:
-                f.write(f"  - Perturbation factors for MT=4 were applied to MT=4.\n")
-                f.write(f"  - No discrete inelastic levels (MT=51-91) were found in the ACE file.\n")
-            elif inelastic_mts_perturbed:
-                f.write(f"  - MT=4 itself was not found in the ACE file.\n")
-                f.write(f"  - Perturbation factors for MT=4 were applied to the discrete inelastic levels found:\n")
-                f.write(f"    MT={min(inelastic_mts_perturbed)}-{max(inelastic_mts_perturbed)} ({len(inelastic_mts_perturbed)} levels: {inelastic_mts_perturbed}).\n")
-            else:
-                f.write(f"  - WARNING: MT=4 was requested, but neither MT=4 nor any discrete inelastic levels (MT=51-91) were found in the ACE file.\n")
-                f.write(f"  - No perturbation was applied based on the MT=4 request.\n")
-        
-        # Add information about specific MT warnings if any
-        if mt_warnings and len(mt_warnings) > 0:
-            f.write("\nMT NUMBER SPECIFIC WARNINGS:\n")
-            for mt, warning in mt_warnings.items():
-                f.write(f"  - MT={mt}: {warning}\n")
-
-        # Add information about other MT expansions if any (less common)
-        other_expansions = False
-        original_to_expanded_other = {}
-        for exp_mt, orig_mt in mt_to_original_map.items():
-            # Exclude MT=4 case handled above and self-mappings
-            if orig_mt != 4 and exp_mt != orig_mt:
-                if orig_mt not in original_to_expanded_other:
-                    original_to_expanded_other[orig_mt] = []
-                original_to_expanded_other[orig_mt].append(exp_mt)
-                other_expansions = True
-
-        if other_expansions:
-            f.write("\nOTHER MT NUMBER EXPANSIONS (if any):\n")
-            for orig_mt, exp_mts in original_to_expanded_other.items():
-                if exp_mts: # Only show if there was an expansion
-                    exp_mts.sort()
-                    f.write(f"  - MT={orig_mt} expanded to: {exp_mts}\n")
-        
-        # List all MT numbers that were actually perturbed
-        unique_expanded_mts = sorted(list(set(expanded_mt_numbers)))
-        f.write(f"\nActual MT numbers perturbed in ACE files: {unique_expanded_mts}\n")
-        f.write(f"Number of samples: {num_samples}\n")
-        f.write(f"Sampling method: {sampling_method}\n")
-        f.write(f"Decomposition method: {decomposition_method}\n")
-        f.write(f"Random seed: {seed if seed is not None else 'None (random)'}\n")
-        f.write(f"Energy grid points: {len(energy_grid)}\n")
-        f.write(f"Energy range: {energy_grid[0]:.2e} to {energy_grid[-1]:.2e} MeV\n\n")
-        
-        # Write energy grid for reference
-        f.write("ENERGY GRID (MeV):\n")
-        f.write("-" * 80 + "\n")
-        for i, energy in enumerate(energy_grid):
-            f.write(f"{energy:.6e}")
-            if (i+1) % 8 == 0 or i == len(energy_grid) - 1:
-                f.write("\n")
-            else:
-                f.write("  ")
-        f.write("\n")
-        
-        # Write perturbation factors for each MT and energy bin
-        f.write("\nPERTURBATION FACTORS (Applied based on original requested MTs):\n")
-        f.write("-" * 80 + "\n")
-        
-        # Calculate header width based on number of samples
-        header = "Orig MT | Lower E (MeV) | Upper E (MeV) |"
-        for s in range(num_samples):
-            header += f" Sample_{s+1:04d} |"
-        f.write(header + "\n")
-        f.write("-" * len(header) + "\n")
-        
-        # Write data for each EFFECTIVE ORIGINAL MT and energy bin with increased precision
-        # Iterate through MTs for which factors were actually generated
-        for mt_idx, eff_orig_mt in enumerate(effective_original_mts): 
-            num_bins = len(energy_grid) - 1
-            # Index into perturbation_factors is based on the order in effective_original_mts
-            start_idx = mt_idx * num_bins 
-            
-            for bin_idx in range(num_bins):
-                # Get perturbation factors for this effective original MT and bin across all samples
-                # Access based on the index derived from effective_original_mts
-                bin_factors = [perturbation_factors[s][start_idx + bin_idx] for s in range(num_samples)]
-                
-                # Format row with 12 decimal places instead of 6
-                row = f"{eff_orig_mt:7d} | {energy_grid[bin_idx]:.6e} | {energy_grid[bin_idx+1]:.6e} |"
-                for factor in bin_factors:
-                    row += f" {factor:.12f} |"
-                f.write(row + "\n")
-            
-            # Add a separator between original MTs
-            f.write("-" * len(header) + "\n")
-    
-    return file_path
-
 def create_perturbed_ace_files(
-    ace_file_path: str,
+    ace_file_path: Union[str, List[str]],
     mt_numbers: List[int],
     energy_grid: np.ndarray,
-    covmat: CovMat,
+    covmat: Union[CovMat, List[CovMat]],
     num_samples: int,
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
@@ -321,13 +134,13 @@ def create_perturbed_ace_files(
     
     Parameters
     ----------
-    ace_file_path : str
+    ace_file_path : Union[str, List[str]]
         Path to the ACE file to be perturbed
     mt_numbers : List[int]
         List of MT numbers to perturb (e.g., [1, 4, 18])
     energy_grid : np.ndarray
         Energy grid to be used for perturbation
-    covmat : CovMat
+    covmat : Union[CovMat, List[CovMat]]
         Covariance matrix object containing covariance data
     num_samples : int
         Number of perturbed samples to generate
@@ -342,6 +155,31 @@ def create_perturbed_ace_files(
     verbose : bool, default=True
         Whether to print detailed information during the execution
     """
+    # Validate list‐type mismatch: covmat list only allowed if ace_file_path is a list
+    if isinstance(covmat, (list, tuple)) and not isinstance(ace_file_path, (list, tuple)):
+        raise ValueError("Provided multiple CovMat objects but a single ACE path; lengths must match or both be singular.")
+
+    # Handle multiple ACE files at once
+    if isinstance(ace_file_path, (list, tuple)):
+        ace_paths = list(ace_file_path)
+        covmats = covmat if isinstance(covmat, (list, tuple)) else [covmat] * len(ace_paths)
+        if len(covmats) != len(ace_paths):
+            raise ValueError("Number of covariance matrices must match number of ACE file paths")
+        for path, cov in zip(ace_paths, covmats):
+            create_perturbed_ace_files(
+                path,
+                mt_numbers,
+                energy_grid,
+                cov,
+                num_samples,
+                decomposition_method,
+                sampling_method,
+                output_dir,
+                seed,
+                verbose
+            )
+        return
+
     # Start timing the entire process
     overall_start_time = time.time()
     
@@ -371,20 +209,13 @@ def create_perturbed_ace_files(
     
     # Extract isotope from ACE object
     isotope_id = ace_object.header.zaid
-    
+
+    # Get available MTs in the covariance matrix for this isotope
+    isotope_reactions = covmat.get_isotope_reactions().get(isotope_id, set())
+
     if verbose:
         print(f"Isotope ZAID            : {isotope_id}")
         print(f"Covariance MTs available: {sorted(list(isotope_reactions))}\n")
-    
-    # Get available MTs in the covariance matrix for this isotope
-    isotope_reactions = covmat.get_isotope_reactions().get(isotope_id, set())
-    if verbose:
-        print(f"MTs available in covariance matrix for isotope {isotope_id}: {sorted(list(isotope_reactions))}")
-    
-    # Determine which MTs to actually perturb based on request and availability
-    original_mt_numbers = sorted(list(set(mt_numbers))) # Use unique sorted list
-    expanded_mt_numbers = []
-    mt_to_original_map = {}  # Maps actually perturbed MTs back to original requested MTs for factor lookup
     
     # Get available MTs in the ACE file
     available_mts = set()
@@ -393,87 +224,151 @@ def create_perturbed_ace_files(
     if hasattr(ace_object, 'cross_section') and ace_object.cross_section:
         available_mts.update(ace_object.cross_section.reaction.keys())
     
-    # Track skipped MTs and MT-specific warnings
+    if verbose:
+        print(f"MTs available in ACE file: {sorted(list(available_mts))}\n")
+    
+    # Determine which MTs to actually perturb based on request and availability
+    original_mt_numbers = sorted(set(mt_numbers))
+    expanded_mt_numbers = []
+    mt_to_original_map = {}
     skipped_mts = []
     mt_warnings = {}
-    
-    if verbose:
-        print("=== MT Availability Check ===\n")
 
-    # Check each requested MT for presence in covmat
-    for mt in original_mt_numbers:
-        mt_in_covmat = covmat.has_isotope_mt(isotope_id, mt)
-        if mt == 4:
-            # Special handling for MT=4: perturb MT=4 and/or MT=51-91 if they exist
-            mt4_present = 4 in available_mts
-            inelastic_mts_present = sorted([m for m in range(51, 92) if m in available_mts])
-            
-            if not mt_in_covmat:
-                warning_msg = f"MT=4 requested but not found in covariance matrix for isotope {isotope_id}."
+    # Simplified inelastic handling: if user requests MT=4 or any MT in 51-91,
+    # perturb MT=4 (if present) and all available MTs 51-91 using MT=4 covariance
+    if any(mt == 4 or 51 <= mt <= 91 for mt in original_mt_numbers):
+        # Warn for individual inelastic requests
+        for mt in original_mt_numbers:
+            if 51 <= mt <= 91:
+                warning_msg = (
+                    f"MT={mt} requested; treating as MT=4. "
+                    "Perturbing all MT=4 and available MTs 51-91 with MT=4 covariance."
+                )
                 print(f"WARNING: {warning_msg}")
-                mt_warnings[4] = warning_msg
-                skipped_mts.append(4)
-                continue
-            
-            perturbed_mts_for_mt4 = []
+                mt_warnings[mt] = warning_msg
+
+        # Ensure MT=4 covariance exists
+        if not covmat.has_isotope_mt(isotope_id, 4):
+            warning_msg = (
+                f"MT=4 covariance data required but not found for isotope {isotope_id}. "
+                "Skipping MT=4 and inelastic levels."
+            )
+            if verbose:
+                print(f"WARNING: {warning_msg}")
+            mt_warnings[4] = warning_msg
+            skipped_mts.extend([m for m in original_mt_numbers if m == 4 or 51 <= m <= 91])
+        else:
+            # Identify what's in the ACE file
+            mt4_present = 4 in available_mts
+            inelastic_mts_present = [m for m in range(51, 92) if m in available_mts]
+            # Map MT=4
             if mt4_present:
                 expanded_mt_numbers.append(4)
                 mt_to_original_map[4] = 4
-                perturbed_mts_for_mt4.append(4)
-            
-            if inelastic_mts_present:
-                for inelastic_mt in inelastic_mts_present:
-                    # First check if this specific MT has its own covariance data
-                    if covmat.has_isotope_mt(isotope_id, inelastic_mt):
-                        # If user specifically requested this MT, don't handle it here - it will be handled in the other branch
-                        if inelastic_mt in original_mt_numbers:
-                            continue
-                    
-                    # Otherwise apply the MT=4 covariance
-                    expanded_mt_numbers.append(inelastic_mt)
-                    mt_to_original_map[inelastic_mt] = 4  # Map back to original MT=4
-                    perturbed_mts_for_mt4.append(inelastic_mt)
-            
+            # Map each available inelastic level back to MT=4
+            for m in inelastic_mts_present:
+                expanded_mt_numbers.append(m)
+                mt_to_original_map[m] = 4
             if verbose:
-                if perturbed_mts_for_mt4:
-                    perturbed_mts_for_mt4.sort()
-                    print(f"  - MT=4 requested and found in covariance data; applying to existing ACE MTs: {perturbed_mts_for_mt4}")
-                    if not mt4_present and inelastic_mts_present:
-                        print(f"    (Note: MT=4 itself not found in ACE, applied only to MT={min(inelastic_mts_present)}-{max(inelastic_mts_present)})")
-                    elif mt4_present and not inelastic_mts_present:
-                        print(f"    (Note: MTs 51-91 not found in ACE, applied only to MT=4)")
-                else:
-                    print(f"  - WARNING: MT=4 requested and found in covariance data, but neither MT=4 nor MTs 51-91 found in ACE. Skipping MT=4 perturbation.")
-        
-        # Handle individual MT numbers (including any 51-91 if specifically requested)
-        elif mt in available_mts:
-            if mt_in_covmat:
-                # append MTs that are present in both ACE and covariance
+                detail = (
+                    f"MT=4{' present' if mt4_present else ' not present'}, "
+                    f"inelastic levels found: {inelastic_mts_present}"
+                )
+                print(f"  - Inelastic handling: {detail}. Using MT=4 covariance for all.\n")
+
+        # Handle all other requested MTs normally
+        for mt in original_mt_numbers:
+            if mt == 4 or 51 <= mt <= 91:
+                continue
+            mt_in_covmat = covmat.has_isotope_mt(isotope_id, mt)
+            if mt in available_mts and mt_in_covmat:
                 expanded_mt_numbers.append(mt)
                 mt_to_original_map[mt] = mt
                 if verbose:
                     print(f"  - MT={mt} requested, found in ACE file and covariance data.")
+            elif mt in available_mts:
+                warning_msg = f"MT={mt} requested, found in ACE file but not in covariance data. Skipping."
+                print(f"WARNING: {warning_msg}")
+                mt_warnings[mt] = warning_msg
             else:
-                # special case for MT 51-91
-                if 51 <= mt <= 91 and covmat.has_isotope_mt(isotope_id, 4):
-                    expanded_mt_numbers.append(mt)
-                    mt_to_original_map[mt] = 4
-                    warning_msg = (
-                        f"MT={mt} requested, found in ACE file but not in covariance data. "
-                        "Using MT=4 covariance data instead."
-                    )
+                missing_msg = f"MT={mt} requested but not found in ACE file. Skipping."
+                print(f"WARNING: {missing_msg}")
+                mt_warnings[mt] = missing_msg
+    else:
+        # ...existing per‑MT availability check and mapping logic here...
+        # Check each requested MT for presence in covmat
+        for mt in original_mt_numbers:
+            mt_in_covmat = covmat.has_isotope_mt(isotope_id, mt)
+            if mt == 4:
+                # Special handling for MT=4: perturb MT=4 and/or MT=51-91 if they exist
+                mt4_present = 4 in available_mts
+                inelastic_mts_present = sorted([m for m in range(51, 92) if m in available_mts])
+                
+                if not mt_in_covmat:
+                    warning_msg = f"MT=4 requested but not found in covariance matrix for isotope {isotope_id}."
                     print(f"WARNING: {warning_msg}")
-                    mt_warnings[mt] = warning_msg
+                    mt_warnings[4] = warning_msg
+                    skipped_mts.append(4)
+                    continue
+                
+                perturbed_mts_for_mt4 = []
+                if mt4_present:
+                    expanded_mt_numbers.append(4)
+                    mt_to_original_map[4] = 4
+                    perturbed_mts_for_mt4.append(4)
+                
+                if inelastic_mts_present:
+                    for inelastic_mt in inelastic_mts_present:
+                        # First check if this specific MT has its own covariance data
+                        if covmat.has_isotope_mt(isotope_id, inelastic_mt):
+                            # If user specifically requested this MT, don't handle it here - it will be handled in the other branch
+                            continue
+                        
+                        # Otherwise apply the MT=4 covariance
+                        expanded_mt_numbers.append(inelastic_mt)
+                        mt_to_original_map[inelastic_mt] = 4  # Map back to original MT=4
+                        perturbed_mts_for_mt4.append(inelastic_mt)
+                
+                if verbose:
+                    if perturbed_mts_for_mt4:
+                        perturbed_mts_for_mt4.sort()
+                        print(f"  - MT=4 requested and found in covariance data; applying to existing ACE MTs: {perturbed_mts_for_mt4}")
+                        if not mt4_present and inelastic_mts_present:
+                            print(f"    (Note: MT=4 itself not found in ACE, applied only to MT={min(inelastic_mts_present)}-{max(inelastic_mts_present)})")
+                        elif mt4_present and not inelastic_mts_present:
+                            print(f"    (Note: MTs 51-91 not found in ACE, applied only to MT=4)")
+                    else:
+                        print(f"  - WARNING: MT=4 requested and found in covariance data, but neither MT=4 nor MTs 51-91 found in ACE. Skipping MT=4 perturbation.")
+            
+            # Handle individual MT numbers (including any 51-91 if specifically requested)
+            elif mt in available_mts:
+                if mt_in_covmat:
+                    # append MTs that are present in both ACE and covariance
+                    expanded_mt_numbers.append(mt)
+                    mt_to_original_map[mt] = mt
+                    if verbose:
+                        print(f"  - MT={mt} requested, found in ACE file and covariance data.")
                 else:
-                    skipped_msg = f"MT={mt} requested, found in ACE file but not in covariance data. Skipping."
-                    print(f"WARNING: {skipped_msg}")
-                    mt_warnings[mt] = skipped_msg
-                    skipped_mts.append(mt)
-        else:
-            missing_msg = f"MT={mt} requested but not found in ACE file. Skipping."
-            print(f"WARNING: {missing_msg}")
-            mt_warnings[mt] = missing_msg
-            skipped_mts.append(mt)
+                    # special case for MT 51-91
+                    if 51 <= mt <= 91 and covmat.has_isotope_mt(isotope_id, 4):
+                        expanded_mt_numbers.append(mt)
+                        mt_to_original_map[mt] = 4
+                        warning_msg = (
+                            f"MT={mt} requested, found in ACE file but not in covariance data. "
+                            "Using MT=4 covariance data instead."
+                        )
+                        print(f"WARNING: {warning_msg}")
+                        mt_warnings[mt] = warning_msg
+                    else:
+                        skipped_msg = f"MT={mt} requested, found in ACE file but not in covariance data. Skipping."
+                        print(f"WARNING: {skipped_msg}")
+                        mt_warnings[mt] = skipped_msg
+                        skipped_mts.append(mt)
+            else:
+                missing_msg = f"MT={mt} requested but not found in ACE file. Skipping."
+                print(f"WARNING: {missing_msg}")
+                mt_warnings[mt] = missing_msg
+                skipped_mts.append(mt)
 
     if verbose:
         print()   # blank line after availability loop
@@ -549,33 +444,25 @@ def create_perturbed_ace_files(
     else:
         extension = ".ace"
     
-    # Write perturbation data to file for reproducibility (always write this regardless of verbose)
-    if verbose:
-        print("Writing perturbation data file...\n")
-    
-    # Pass the original requested MTs and the expanded list to the writer function
-    data_file_path = write_perturbation_data(
-        output_dir,
-        base_name,
+    # prepare streaming perturbation‐data file
+    data_file_path = os.path.join(output_dir or ".", f"{base_name}_perturbation_data.txt")
+    initialize_perturbation_data_file(
+        data_file_path,
         isotope_id,
-        original_mt_numbers,  # Original MT numbers requested by user
-        expanded_mt_numbers,  # Actual MT numbers being perturbed in ACE
-        mt_to_original_map,   # Mapping from expanded MTs to original MTs
-        energy_grid,
-        seed,
-        decomposition_method,
-        sampling_method,
-        perturbation_factors, # Factors correspond to effective_original_mts order
-        num_samples,
-        effective_original_mts, # Pass the effective list here
-        isotope_reactions,    # Available MTs in covariance matrix
-        skipped_mts,          # MTs that were skipped
-        mt_warnings           # MT-specific warnings
+        requested_mt_numbers=original_mt_numbers,
+        perturbed_mt_numbers=expanded_mt_numbers,
+        available_covmat_mts=isotope_reactions,
+        skipped_mts=skipped_mts,
+        mt_warnings=mt_warnings,
+        energy_grid=energy_grid,
+        seed=seed,
+        decomposition_method=decomposition_method,
+        sampling_method=sampling_method,
+        num_samples=num_samples
     )
-    
     if verbose:
-        print(f"Data recorded at         : {data_file_path}\n")
-    
+        print(f"Initialized perturbation data file: {data_file_path}\n")
+
     # OPTIMIZATION: Precompute mappings from ace energies to perturbation grid bins
     precomp_start_time = time.time()
     precomputed_mappings = {}
@@ -650,6 +537,15 @@ def create_perturbed_ace_files(
             read_times.append(res_read_time)
             perturb_times.append(res_perturb_time)
             write_times.append(res_write_time)
+            append_sample_perturbation_data(
+                data_file_path,
+                i,
+                perturbation_factors[i],
+                effective_original_mts,
+                energy_grid
+            )
+            if verbose:
+                print(f"Appended sample {i+1:04d} to data file\n")
         else:
             # Always print errors regardless of verbose setting
             # Use i+1 for the sample number in the error message
@@ -797,3 +693,61 @@ def extract_covariance_matrix(
         return combined_cov
     except Exception as e:
         raise ValueError(f"Failed to extract covariance matrix: {str(e)}")
+
+def initialize_perturbation_data_file(
+    file_path: str,
+    isotope_id: int,
+    requested_mt_numbers: List[int],
+    perturbed_mt_numbers: List[int],
+    available_covmat_mts: Set[int],
+    skipped_mts: List[int],
+    mt_warnings: Dict[int, str],
+    energy_grid: np.ndarray,
+    seed: Optional[int],
+    decomposition_method: str,
+    sampling_method: str,
+    num_samples: int
+) -> None:
+    """Write header, parameters, energy grid & table header."""
+    with open(file_path, 'w') as f:
+        f.write("="*80 + "\nPERTURBATION DATA\n" + "="*80 + "\n\n")
+        # basic parameters
+        f.write(f"Timestamp                     : {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n")
+        f.write(f"Isotope ZAID                  : {isotope_id}\n")
+        f.write(f"Requested MT numbers          : {requested_mt_numbers}\n")
+        f.write(f"MTs available in covariance   : {sorted(available_covmat_mts)}\n")
+        f.write(f"MTs to be perturbed           : {perturbed_mt_numbers}\n")
+        if skipped_mts:
+            f.write(f"Skipped MTs                   : {sorted(skipped_mts)}\n")
+        if mt_warnings:
+            f.write("MT-specific warnings:\n")
+            for mt, msg in mt_warnings.items():
+                f.write(f"  - MT={mt}: {msg}\n")
+        f.write(f"Number of samples             : {num_samples}\n")
+        f.write(f"Sampling method               : {sampling_method}\n")
+        f.write(f"Decomposition method          : {decomposition_method}\n")
+        f.write(f"Random seed                   : {seed if seed is not None else 'None'}\n\n")
+        # energy grid
+        f.write("ENERGY GRID (MeV):\n" + "-"*80 + "\n")
+        for i,e in enumerate(energy_grid):
+            f.write(f"{e:.6e}" + ("\n" if (i+1)%8==0 or i==len(energy_grid)-1 else "  "))
+        f.write("\n\n")
+        # table header
+        header = "Orig MT | Lower E (MeV) | Upper E (MeV) | Factor\n"
+        f.write(header + "-"*len(header) + "\n")
+
+def append_sample_perturbation_data(
+    file_path: str,
+    sample_idx: int,
+    factors: np.ndarray,
+    effective_original_mts: List[int],
+    energy_grid: np.ndarray
+) -> None:
+    """Append one sample's factors row by row."""
+    with open(file_path, 'a') as f:
+        f.write(f"\n# Sample {sample_idx+1:04d}\n")
+        num_bins = len(energy_grid)-1
+        for mt_idx, mt in enumerate(effective_original_mts):
+            start = mt_idx * num_bins
+            for b in range(num_bins):
+                f.write(f"{mt:7d} | {energy_grid[b]:.6e} | {energy_grid[b+1]:.6e} | {factors[start+b]:.12f}\n")
