@@ -158,67 +158,34 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                 current_line += 1
                 
                 # C1 and C2 are 0.0 (unused)
-                ls = list_header.get("C3")  # Flag for symmetric matrix
-                lb = list_header.get("C4")  # Flag for covariance pattern
-                nt = list_header.get("C5")  # Total number of items in list
-                
+                ls = list_header.get("C3")
+                lb = list_header.get("C4")
+                nt = list_header.get("C5")
+                ne_field = list_header.get("C6")
+
                 # Create LIST record
-                list_record = SubSubsectionRecord(
-                    ls=ls,
-                    lb=lb,
-                    nt=nt
-                )
-                
-                if lb >= 0 and lb <= 4:
-                    # For LB=0 to LB=4
-                    np_value = list_header.get("C6")  # Number of pairs
-                    list_record.np = np_value
-                    list_record.lt = ls  # In LB=0-4, LT is stored in C3 position
-                    
-                    # Total values to read
+                list_record = SubSubsectionRecord(ls=ls, lb=lb, nt=nt)
+
+                if lb in (0, 1, 2):
+                    # one (E,F) table: NT=2*NE
+                    list_record.ne = ne_field
+                    list_record.lt = 0
+                    list_record.np = list_record.ne
                     values_to_read = nt
-                    
-                    # Calculate sizes of tables
-                    if list_record.lt == 0:
-                        # Only one table: {E_k, F_k}
-                        num_k_pairs = np_value
-                        num_l_pairs = 0
-                    else:
-                        # Two tables: {E_k, F_k}{E_l, F_l}
-                        num_l_pairs = list_record.lt
-                        num_k_pairs = np_value - num_l_pairs
-                    
-                    # Read values
                     all_values = []
-                    values_read = 0
-                    
-                    while values_read < values_to_read and current_line < len(lines):
-                        value_line = parse_line(lines[current_line])
-                        current_line += 1
-                        
-                        # Read up to 6 values per line
-                        for i in range(1, 7):
-                            if values_read < values_to_read:
-                                value = value_line.get(f"C{i}")
-                                if value is not None:
-                                    all_values.append(value)
-                                    values_read += 1
-                    
-                    # Distribute values to appropriate tables
-                    for i in range(num_k_pairs):
+                    while len(all_values) < values_to_read and current_line < len(lines):
+                        vl = parse_line(lines[current_line]); current_line += 1
+                        for i in range(1,7):
+                            if len(all_values) < values_to_read:
+                                v = vl.get(f"C{i}")
+                                if v is not None:
+                                    all_values.append(v)
+                    # distribute into E_k, F_k
+                    for i in range(list_record.ne):
                         list_record.e_table_k.append(all_values[2*i])
                         list_record.f_table_k.append(all_values[2*i+1])
-                    
-                    # If there's a second table
-                    if num_l_pairs > 0:
-                        offset = 2 * num_k_pairs
-                        for i in range(num_l_pairs):
-                            list_record.e_table_l.append(all_values[offset + 2*i])
-                            list_record.f_table_l.append(all_values[offset + 2*i+1])
-                    
-                    print(f"DEBUG - Parsed LB={lb} record with NP={np_value}, LT={list_record.lt}")
-                    print(f"DEBUG - First table: {num_k_pairs} pairs, Second table: {num_l_pairs} pairs")
-                
+                    print(f"DEBUG - Parsed LB={lb} one-table record NE={list_record.ne}")
+
                 elif lb == 5:
                     # For LB=5 (original implementation)
                     ne = list_header.get("C6")  # Number of energy entries
@@ -260,8 +227,28 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                     list_record.matrix = matrix_values
                     
                     print(f"DEBUG - Parsed LB=5 record with LS={ls}, NE={ne}")
+                elif lb == 6:
+                    # rectangular matrix: NT=1+NER*NEC
+                    ner = ne_field
+                    nec = (nt - 1) // ner
+                    list_record.ne = ner
+                    values_to_read = nt
+                    all_values = []
+                    while len(all_values) < values_to_read and current_line < len(lines):
+                        vl = parse_line(lines[current_line]); current_line += 1
+                        for i in range(1,7):
+                            if len(all_values) < values_to_read:
+                                v = vl.get(f"C{i}")
+                                if v is not None:
+                                    all_values.append(v)
+                    # split row energies, col energies, matrix
+                    list_record.row_energies = all_values[:ner]
+                    list_record.col_energies = all_values[ner:ner+nec]
+                    list_record.rect_matrix   = all_values[ner+nec:]
+                    print(f"DEBUG - Parsed LB=6 record NER={ner}, NEC={nec}")
+
                 else:
-                    raise ValueError(f"Unsupported LB value: {lb}. Only LB=0-5 are currently supported")
+                    raise ValueError(f"Unsupported LB value: {lb}")
                 
                 # Add the list record to the sub-subsection
                 sub_subsection.records.append(list_record)

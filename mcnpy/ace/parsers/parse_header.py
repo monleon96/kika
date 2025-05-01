@@ -22,6 +22,7 @@ def read_header(header, lines, debug=False):
     int
         The index of the next line to read after the header
     """
+
     if debug:
         logger.debug("Reading ACE header")
         

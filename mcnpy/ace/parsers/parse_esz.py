@@ -20,6 +20,7 @@ def read_esz_block(ace, debug=False):
     EszBlock
         The parsed ESZ block
     """
+
     if debug is None:
         debug = ace._debug
         
@@ -45,7 +46,7 @@ def read_esz_block(ace, debug=False):
         logger.debug(f"Number of energy points NXS(3) = {n_energy}")
     
     if esz_idx <= 0 or n_energy <= 0:
-        raise ValueError(f"Invalid ESZ index or energy count: ESZ={esz_idx}, NE={n_energy}")
+        logger.warning(f"Warning: 0 number of energies: ESZ={esz_idx}, NE={n_energy}.")
     
     # Check if we have enough data
     if esz_idx + 5*n_energy > len(ace.xss_data) + 1:

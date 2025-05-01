@@ -8,6 +8,7 @@ from typing import Dict, Optional, Union, TypeVar, Tuple, List, Any
 
 from .mt import MT
 from .mf1.mf1mt import MT451
+from ...cov.mf34_covmat import MF34CovMat 
 
 # Type for any MT section class (MT, MT451, etc.)
 MTSection = TypeVar('MTSection', bound=MT)
@@ -19,8 +20,6 @@ class MF:
     """
     number: int
     sections: Dict[int, Union[MT, MT451]] = field(default_factory=dict)
-    
-    # Line count
     num_lines: int = 0  # Number of lines in this MF section
     
     def add_section(self, section: Union[MT, MT451]) -> None:
@@ -48,8 +47,6 @@ class MF:
     def mt(self) -> Dict[int, Union[MT, MT451]]:
         """Direct access to MT sections dictionary"""
         return self.sections
-    
-    @property
     
     def __repr__(self):
         return f"MF({self.number}, {len(self.sections)} sections)"
@@ -98,15 +95,15 @@ class MF:
         
         return result
         
-    def to_ang_covmat(self) -> Any:
+    def to_ang_covmat(self, debug = False) -> MF34CovMat:
         """
-        Convert MF34 data to an Ang_CovMat object that contains data from all MT sections.
+        Convert MF34 data to an MF34CovMat object that contains data from all MT sections.
         
         This method aggregates angular covariance data from all MT sections in this MF file
-        (if it's MF34) and returns a combined Ang_CovMat object.
+        (if it's MF34) and returns a combined MF34CovMat object.
         
         Returns:
-            Ang_CovMat object containing data from all MT sections, or None if not MF34
+            MF34CovMat object containing data from all MT sections, or None if not MF34
             
         Raises:
             ValueError: If this method is called on an MF that is not MF34
@@ -116,23 +113,19 @@ class MF:
             raise ValueError(f"The to_ang_covmat method is only available for MF34, not MF{self.number}")
         
         # Import here to avoid circular imports
-        from ...cov.covmat import Ang_CovMat
+        from ...cov.mf34_covmat import MF34CovMat
         
-        # Create a new Ang_CovMat object
-        combined_ang_covmat = Ang_CovMat()
+        # Create a new MF34CovMat object to store the combined data
+        combined_ang_covmat = MF34CovMat()
         
         # Loop through all MT sections and combine their data
         for mt_number, mt_section in self.sections.items():
-            # Get the individual Ang_CovMat for this MT section
+            # Get the individual MF34CovMat for this MT section
             try:
                 # The MT section must be an MF34MT object with to_ang_covmat method
-                mt_ang_covmat = mt_section.to_ang_covmat()
+                mt_ang_covmat: MF34CovMat = mt_section.to_ang_covmat(debug=debug)
                 
-                # Set the number of energy points if not already set
-                if combined_ang_covmat.num_energies == 0 and mt_ang_covmat.num_energies > 0:
-                    combined_ang_covmat.num_energies = mt_ang_covmat.num_energies
-                
-                # Add all matrices from this MT section
+                # Add all matrices and their energy grids from this MT section
                 for i in range(mt_ang_covmat.num_matrices):
                     combined_ang_covmat.add_matrix(
                         mt_ang_covmat.isotope_rows[i],
@@ -141,9 +134,11 @@ class MF:
                         mt_ang_covmat.isotope_cols[i],
                         mt_ang_covmat.reaction_cols[i],
                         mt_ang_covmat.l_cols[i],
-                        mt_ang_covmat.matrices[i]
+                        mt_ang_covmat.matrices[i],
+                        mt_ang_covmat.energy_grids[i]  # Pass the corresponding energy grid
                     )
             except (AttributeError, ValueError) as e:
-                print(f"Warning: Could not convert MT{mt_number} to Ang_CovMat: {e}")
+                # Catch potential errors if a section isn't a valid MF34MT or conversion fails
+                print(f"Warning: Could not convert MT{mt_number} to MF34CovMat: {e}")
         
         return combined_ang_covmat
