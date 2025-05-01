@@ -144,6 +144,25 @@ class CovMat:
         
         return result
     
+    def has_isotope_mt(self, isotope: int, mt: int) -> bool:
+        """
+        Check if covariance data is available for a specific isotope and MT number.
+        
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID to check
+        mt : int
+            MT reaction number to check
+            
+        Returns
+        -------
+        bool
+            True if covariance data is available, False otherwise
+        """
+        isotope_reactions = self.get_isotope_reactions().get(isotope, set())
+        return mt in isotope_reactions
+        
     def get_reactions_summary(self) -> pd.DataFrame:
         """
         Get a summary of available reactions for each isotope.
