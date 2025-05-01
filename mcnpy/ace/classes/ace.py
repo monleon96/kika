@@ -79,6 +79,18 @@ class Ace:
     _debug: bool = False
     
     @property
+    def zaid(self) -> int:
+        """
+        Get the ZAID (Z number, A number, isotope identifier) of the ACE file.
+        
+        :returns: ZAID as an integer
+        :rtype: int
+        """
+        if self.header and self.header.zaid:
+            return self.header.zaid
+        return None
+
+    @property
     def energies(self):
         """Energy grid - returns list of float values"""
         if self.esz_block and self.esz_block.energies:

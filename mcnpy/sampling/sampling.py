@@ -20,7 +20,8 @@ def process_sample(
     base_name: str,
     extension: str,
     output_dir: Optional[str],
-    precomputed_mappings: Dict[int, np.ndarray]
+    precomputed_mappings: Dict[int, np.ndarray],
+    xsdir: Optional[str] = None
 ) -> Tuple[int, float, bool, Optional[str], float, float, float]:
     """
     Process a single sample and create a perturbed ACE file.
@@ -101,11 +102,68 @@ def process_sample(
             )
         perturb_time = time.time() - perturb_start
         
-        # Write the perturbed ACE file with timing
+        # Write the perturbed ACE file with timing, into per-isotope/sample dirs
         write_start = time.time()
+        if output_dir:
+            iso_id = perturbed_ace.header.zaid
+            sample_dir = os.path.join(output_dir, str(iso_id), f"{i+1:04d}")
+            os.makedirs(sample_dir, exist_ok=True)
+            file_path = os.path.join(sample_dir, file_name)
+        # else file_path was set above for no output_dir
         write_ace(perturbed_ace, file_path, overwrite=True)
         write_time = time.time() - write_start
-        
+
+        # --- new: write .xsdir alongside perturbed ACE ---
+        if output_dir:
+            # determine relative path for xsdir record
+            rel_path = os.path.relpath(file_path, output_dir)
+            rel_path = rel_path.replace(os.sep, "/")
+            zaid = perturbed_ace.header.zaid
+            awr = perturbed_ace.header.atomic_weight_ratio
+            nxs = perturbed_ace.header.nxs_array[1]
+            temp = perturbed_ace.header.temperature
+            ptable = 'ptable' if getattr(perturbed_ace.unresolved_resonance, 'has_data', False) else ''
+            name_noext, _ = os.path.splitext(file_name)
+            xsdir_path = os.path.join(sample_dir, f"{name_noext}.xsdir")
+            line = (
+                f"{zaid}{extension} "
+                f"{awr:.6f} "
+                f"{rel_path} "
+                "0 1 1 "
+                f"{nxs} 0 0 "
+                f"{temp:.3E} "
+                f"{ptable}"
+            )
+            with open(xsdir_path, 'w') as fx:
+                fx.write(line + "\n")
+
+        # --- new: modify master xsdir per sample if requested ---
+        if xsdir and output_dir:
+            # build sample-xsdir name
+            base = os.path.basename(xsdir)
+            name, ext = os.path.splitext(base)
+            new_name = f"{name}_{i+1:04d}{ext}"
+            out_path = os.path.join(output_dir, new_name)
+
+            # if we've already written a sample-xsdir, read that;
+            # otherwise read the original master xsdir
+            source_xs_path = out_path if os.path.exists(out_path) else xsdir
+            with open(source_xs_path, 'r') as fx:
+                xs_lines = fx.readlines()
+
+            # replace only the line for this ZAID
+            zaid_str = f"{zaid}{extension}"
+            new_lines = []
+            for l in xs_lines:
+                if l.startswith(zaid_str):
+                    new_lines.append(line + "\n")
+                else:
+                    new_lines.append(l)
+
+            # write back (accumulating multiple ZAID replacements)
+            with open(out_path, 'w') as fx:
+                fx.writelines(new_lines)
+
         elapsed = time.time() - start_time
         
         # Clean up to free memory
@@ -125,6 +183,7 @@ def create_perturbed_ace_files(
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
     output_dir: Optional[str] = None,
+    xsdir: Optional[str] = None,
     seed: Optional[int] = None,
     verbose: bool = False
 ) -> None:
@@ -150,6 +209,8 @@ def create_perturbed_ace_files(
         Method to generate the samples ("random", "lhs", or "sobol")
     output_dir : str, optional
         Directory to save the perturbed ACE files. If None, uses the current directory.
+    xsdir : str, optional
+        Path to the master xsdir file to be modified per sample
     seed : int, optional
         Random seed for reproducibility
     verbose : bool, default=True
@@ -175,6 +236,7 @@ def create_perturbed_ace_files(
                 decomposition_method,
                 sampling_method,
                 output_dir,
+                xsdir,
                 seed,
                 verbose
             )
@@ -295,7 +357,6 @@ def create_perturbed_ace_files(
                 print(f"WARNING: {missing_msg}")
                 mt_warnings[mt] = missing_msg
     else:
-        # ...existing per‑MT availability check and mapping logic here...
         # Check each requested MT for presence in covmat
         for mt in original_mt_numbers:
             mt_in_covmat = covmat.has_isotope_mt(isotope_id, mt)
@@ -444,24 +505,40 @@ def create_perturbed_ace_files(
     else:
         extension = ".ace"
     
-    # prepare streaming perturbation‐data file
-    data_file_path = os.path.join(output_dir or ".", f"{base_name}_perturbation_data.txt")
+    # NEW: one log file per ZAID
+    if output_dir:
+        zaid_dir = os.path.join(output_dir, str(isotope_id))
+    else:
+        zaid_dir = str(isotope_id)
+    os.makedirs(zaid_dir, exist_ok=True)
+    log_path = os.path.join(zaid_dir, f"{base_name}_log.txt")
+    
     initialize_perturbation_data_file(
-        data_file_path,
+        log_path,
         isotope_id,
-        requested_mt_numbers=original_mt_numbers,
-        perturbed_mt_numbers=expanded_mt_numbers,
-        available_covmat_mts=isotope_reactions,
-        skipped_mts=skipped_mts,
-        mt_warnings=mt_warnings,
-        energy_grid=energy_grid,
-        seed=seed,
-        decomposition_method=decomposition_method,
-        sampling_method=sampling_method,
-        num_samples=num_samples
+        original_mt_numbers,
+        expanded_mt_numbers,
+        isotope_reactions,
+        skipped_mts,
+        mt_warnings,
+        energy_grid,
+        seed,
+        decomposition_method,
+        sampling_method,
+        num_samples
     )
-    if verbose:
-        print(f"Initialized perturbation data file: {data_file_path}\n")
+    # --- verification block for ZAID log ---
+    with open(log_path, 'a') as f:
+        centered = perturbation_factors - 1.0
+        emp_cov = np.cov(centered, rowvar=False, bias=True)
+        fro_diff = np.linalg.norm(combined_cov_matrix - emp_cov)
+        fro_orig = np.linalg.norm(combined_cov_matrix)
+        rel_pct = 100.0 * fro_diff / fro_orig if fro_orig != 0 else np.nan
+
+        f.write("\n" + "="*40 + "\nSAMPLING VERIFICATION\n" + "="*40 + "\n")
+        f.write(f"Relative error through Frobenius norm : {rel_pct:.4f}%\n\n")
+        header = "Orig MT | Lower E (MeV) | Upper E (MeV) | Factor\n"
+        f.write(header + "-"*len(header) + "\n")
 
     # OPTIMIZATION: Precompute mappings from ace energies to perturbation grid bins
     precomp_start_time = time.time()
@@ -523,7 +600,8 @@ def create_perturbed_ace_files(
             base_name, 
             extension, 
             output_dir, 
-            precomputed_mappings
+            precomputed_mappings,
+            xsdir
         )
         # Use different names for unpacked results to avoid shadowing loop variable 'i'
         res_idx, res_elapsed, res_success, res_error, res_read_time, res_perturb_time, res_write_time = result
@@ -537,10 +615,12 @@ def create_perturbed_ace_files(
             read_times.append(res_read_time)
             perturb_times.append(res_perturb_time)
             write_times.append(res_write_time)
+
+            # use single ZAID log; append all samples here
             append_sample_perturbation_data(
-                data_file_path,
-                i,
-                perturbation_factors[i],
+                log_path,
+                res_idx,
+                perturbation_factors[res_idx],
                 effective_original_mts,
                 energy_grid
             )
@@ -731,10 +811,7 @@ def initialize_perturbation_data_file(
         f.write("ENERGY GRID (MeV):\n" + "-"*80 + "\n")
         for i,e in enumerate(energy_grid):
             f.write(f"{e:.6e}" + ("\n" if (i+1)%8==0 or i==len(energy_grid)-1 else "  "))
-        f.write("\n\n")
-        # table header
-        header = "Orig MT | Lower E (MeV) | Upper E (MeV) | Factor\n"
-        f.write(header + "-"*len(header) + "\n")
+        f.write("\n")
 
 def append_sample_perturbation_data(
     file_path: str,

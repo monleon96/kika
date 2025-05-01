@@ -1,5 +1,4 @@
 import numpy as np
-from typing import Tuple
 
 def svd_decomposition(cov: np.ndarray) -> np.ndarray:
     """

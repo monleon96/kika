@@ -1,16 +1,16 @@
 import numpy as np
 import scipy.stats
 from scipy.stats import qmc
-from typing import Optional, Literal
+from typing import Optional, Tuple
 from mcnpy.sampling.decomposition import svd_decomposition, cholesky_decomposition
 
 def generate_samples(
-    cov: np.ndarray, 
-    n_samples: int, 
+    cov: np.ndarray,
+    n_samples: int,
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
     seed: Optional[int] = None
-) -> np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Generate correlated samples for cross section perturbation.
     
