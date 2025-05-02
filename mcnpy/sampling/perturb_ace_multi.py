@@ -1,6 +1,8 @@
 # File: mcnpy/sampling/perturb_parallel.py
 
 import os
+import shutil
+import re
 import fcntl
 from multiprocessing import Pool
 from typing import List, Optional, Union
@@ -11,7 +13,7 @@ from mcnpy.ace.parsers.parse_ace import read_ace
 from mcnpy.sampling.generators import generate_samples
 from mcnpy.cov.covmat import CovMat
 
-from mcnpy.sampling.perturb_core import (
+from mcnpy.sampling.perturb_ace import (
     extract_covariance_matrix,
     initialize_perturbation_data_file,
     process_sample,
@@ -30,6 +32,23 @@ _OUTPUT_DIR              = None
 _PRECOMP_MAPPINGS        = None
 _XSDIR                   = None
 _PERTURBATION_FACTORS    = None
+
+
+def _move_xsdir_files(output_dir: str, xsdir: str, num_samples: int):
+    """
+    Move every file named <base>_0001 … <base>_<num_samples:04d>
+    (no extension) into output_dir/<base>/ in O(num_samples) renames.
+    """
+    xs_base = os.path.splitext(os.path.basename(xsdir))[0]
+    dest    = os.path.join(output_dir, xs_base)
+    os.makedirs(dest, exist_ok=True)
+
+    for i in range(1, num_samples+1):
+        name = f"{xs_base}_{i:04d}"
+        src  = os.path.join(output_dir, name)
+        if os.path.exists(src):
+            os.rename(src, os.path.join(dest, name))
+
 
 def _append_log_block(path: str, block: str):
     """Safely append under a file lock."""
@@ -133,8 +152,8 @@ def parallel_perturb(
 
     # — if they want purely sequential, just call your existing function
     if nprocs == 1:
-        from mcnpy.sampling.perturb_core import create_perturbed_ace_files
-        return create_perturbed_ace_files(
+        from mcnpy.sampling.perturb_ace import create_perturbed_ace_files
+        result = create_perturbed_ace_files(
             ace_file_path,
             mt_numbers,
             energy_grid,
@@ -147,6 +166,9 @@ def parallel_perturb(
             seed,
             verbose,
         )
+        if xsdir and output_dir:
+            _move_xsdir_files(output_dir, xsdir, num_samples)
+        return result
 
     # — support list of ACEs by recursion
     if isinstance(ace_file_path, (list, tuple)):
@@ -169,6 +191,8 @@ def parallel_perturb(
                 verbose,
                 nprocs,
             )
+        if xsdir and output_dir:
+            _move_xsdir_files(output_dir, xsdir, num_samples)
         return
 
     # ————— single ACE path now —————
@@ -418,3 +442,7 @@ def parallel_perturb(
 
     if verbose:
         print(f"[parallel_perturb] done for isotope {isotope_id}, log → {log_path}\n\n")
+
+    # once *all* samples (and recursive calls) are finished, move xsdir files
+    if xsdir and output_dir:
+        _move_xsdir_files(output_dir, xsdir, num_samples)

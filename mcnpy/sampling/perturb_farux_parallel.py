@@ -1,7 +1,7 @@
 # run_my_perturb.py
 
 import mcnpy
-from mcnpy.sampling.perturb_parallel import parallel_perturb
+from mcnpy.sampling.perturb_ace_multi import parallel_perturb
 
 # 1) Prepare inputs just like you did before
 scale_file = '/share_snc/.../scale.rev05.44groupcov.txt'

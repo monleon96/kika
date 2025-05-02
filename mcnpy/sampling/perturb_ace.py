@@ -118,6 +118,7 @@ def process_sample(
             # determine relative path for xsdir record
             rel_path = os.path.relpath(file_path, output_dir)
             rel_path = rel_path.replace(os.sep, "/")
+            rel_path = "../" + rel_path
             zaid = perturbed_ace.header.zaid
             awr = perturbed_ace.header.atomic_weight_ratio
             nxs = perturbed_ace.header.nxs_array[1]

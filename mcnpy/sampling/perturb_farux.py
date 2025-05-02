@@ -1,6 +1,6 @@
 import mcnpy
 import numpy as np
-from mcnpy.sampling.perturb_core import create_perturbed_ace_files
+from mcnpy.sampling.perturb_ace import create_perturbed_ace_files
 
 
 scale_file_path = '/share_snc/projets/INSIDER/SENSIBILITE/Covariances_scale_txt/scale.rev05.44groupcov.txt'
