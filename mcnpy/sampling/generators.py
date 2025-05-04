@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import scipy.stats
 from scipy.stats import qmc
 from typing import Optional, Tuple
@@ -10,7 +11,7 @@ def generate_samples(
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
     seed: Optional[int] = None
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> np.ndarray:
     """
     Generate correlated samples for cross section perturbation.
     
@@ -42,8 +43,6 @@ def generate_samples(
     """
     # Determine dimensions
     n_dimensions = cov.shape[0]
-    
-    cov, perm = reorder_to_descending(cov, n_groups=44, n_reactions=2)
 
     # Generate uncorrelated standard normal samples using the specified method
     if sampling_method.lower() == "random":
@@ -83,58 +82,5 @@ def generate_samples(
     
     # Transform uncorrelated samples to correlated samples with mean 1.0
     correlated_samples = uncorrelated_samples @ L.T
-    
-    # center the samples around 1.0
-    correlated_samples_1 = correlated_samples + 1.0
 
-
-    debug = True
-    if debug:
-        print(f"\n\nDEBUG: Uncorrelated samples:\n{uncorrelated_samples[-1]}\n")
-        print(f"DEBUG: Correlated samples:\n{correlated_samples[-1]}\n")
-
-
-        with open("debug_mcnpy.txt", "w") as f:
-            f.write("L:\n")
-            for item in L:
-                f.write(f"{item}\n")
-
-
-    return correlated_samples_1
-
-
-
-
-def reorder_to_descending(cov: np.ndarray,
-                          n_groups: int = 44,
-                          n_reactions: int = 2
-                         ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Return cov matrix with each reaction's energy‐groups reversed,
-    plus the integer permutation array used.
-    
-    cov        : (n_groups*n_reactions, n_groups*n_reactions) matrix
-    n_groups   : number of energy groups per reaction
-    n_reactions: number of reactions (here 2)
-    
-    Returns
-    -------
-    cov_desc : cov with rows & cols permuted so that within each
-               reaction block, energies go from high→low
-    perm     : 1D array of length n_groups*n_reactions giving
-               the new order of indices
-    """
-    # sanity check
-    assert cov.shape == (n_groups*n_reactions, n_groups*n_reactions)
-    
-    perm = []
-    for r in range(n_reactions):
-        start = r * n_groups
-        stop  = (r + 1) * n_groups
-        block = np.arange(start, stop)
-        perm.extend(block[::-1])   # reverse each block
-    perm = np.array(perm, dtype=int)
-    
-    # apply to both axes
-    cov_desc = cov[np.ix_(perm, perm)]
-    return cov_desc, perm
+    return correlated_samples + 1.0

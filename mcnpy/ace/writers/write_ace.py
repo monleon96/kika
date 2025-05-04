@@ -115,32 +115,3 @@ def write_ace_ascii(ace: Ace, filepath: str = None, overwrite: bool = False) -> 
         A success message including the path to the written file
     """
     return write_ace(ace, filepath, overwrite)
-
-def write_ace_binary(ace: Ace, filepath: str = None, overwrite: bool = False) -> str:
-    """
-    Write an Ace object to a binary file.
-    Note: This is a placeholder for a future implementation.
-    
-    Parameters
-    ----------
-    ace : Ace
-        The Ace object to write
-    filepath : str, optional
-        The file path to write to. If None, will use the original filename
-        from which the ACE data was read, or create a name based on ZAID and temperature.
-    overwrite : bool, optional
-        Whether to overwrite an existing file, defaults to False
-        
-    Returns
-    -------
-    str
-        A success message including the path to the written file
-        
-    Raises
-    ------
-    NotImplementedError
-        This function is not yet implemented
-    """
-    raise NotImplementedError("Writing ACE files in binary format is not yet implemented")
-
-
