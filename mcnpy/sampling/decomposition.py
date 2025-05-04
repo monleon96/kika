@@ -14,19 +14,20 @@ def svd_decomposition(cov: np.ndarray) -> np.ndarray:
     np.ndarray
         Transformation matrix L where L @ L.T = cov
     """
-    # Check if matrix is positive semi-definite
-    #eigenvalues = np.linalg.eigvalsh(cov)
-    #if np.any(eigenvalues < -1e-7):  # Allow for small numerical errors
-    #    raise ValueError("Covariance matrix is not positive semi-definite")
     
     # Perform SVD
-    U, s, Vt = np.linalg.svd(cov, full_matrices=False)
-    
-    # Remove very small negative eigenvalues (numerical artifacts)
-    s = np.maximum(s, 0)
+    U, s, Vt = np.linalg.svd(cov)
     
     # Return the transformation matrix
     return U @ np.diag(np.sqrt(s))
+
+def eigen_decomposition(cov):
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    if np.any(eigvals < 0):
+        eigvals[eigvals < 0] = 0 
+
+    return eigvecs @ np.diag(np.sqrt(eigvals))
+
 
 def cholesky_decomposition(cov: np.ndarray) -> np.ndarray:
     """

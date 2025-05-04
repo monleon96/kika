@@ -130,7 +130,7 @@ def _worker_top(i: int) -> str:
         return f"\nERROR processing sample {idx+1:04d}: {error}\n"
 
 # ————————————————————————————————————————————
-def parallel_perturb(
+def perturb_ace_files(
     ace_file_path: Union[str, List[str]],
     mt_numbers: List[int],
     energy_grid: np.ndarray,
@@ -177,7 +177,7 @@ def parallel_perturb(
         if len(covmats) != len(ace_paths):
             raise ValueError("Number of covariance objects must match number of ACE file paths")
         for path, cm in zip(ace_paths, covmats):
-            parallel_perturb(
+            perturb_ace_files(
                 path,
                 mt_numbers,
                 energy_grid,
@@ -196,6 +196,22 @@ def parallel_perturb(
         return
 
     # ————— single ACE path now —————
+    if verbose:
+        print("\n" + "="*90)
+        print(" MCNPy ACE Perturbation - Isotope Processing ".center(90, "="))
+        print("="*90)
+        ace_obj_tmp = read_ace(ace_file_path)
+        print(f"Isotope ZAID: {ace_obj_tmp.header.zaid if hasattr(ace_obj_tmp.header, 'zaid') else 'Unknown'}")
+        print("-"*90)
+        print(f"Number of samples      : {num_samples}")
+        print(f"Requested MT numbers   : {mt_numbers}")
+        print(f"Sampling method        : {sampling_method}")
+        print(f"Decomposition method   : {decomposition_method}")
+        print("="*90 + "\n")
+        print("Step 1: Reading Input Files".center(90, "-"))
+        print(f"ACE file path          : {ace_file_path}\n")
+        del ace_obj_tmp
+
     ace_obj    = read_ace(ace_file_path)
     isotope_id = ace_obj.header.zaid
 
@@ -203,9 +219,9 @@ def parallel_perturb(
     isotope_reactions = covmat.get_isotope_reactions().get(isotope_id, set())
 
     if verbose:
-        print(f"Isotope ZAID            : {isotope_id}")
-        print(f"Covariance MTs available: {sorted(list(isotope_reactions))}\n")
-    
+        print("Step 2: ACE File Loaded".center(90, "-"))
+        print(f"Initial ACE load complete for isotope ZAID: {isotope_id}\n")
+
     # Get available MTs in the ACE file
     available_mts = set()
     if hasattr(ace_obj, 'mt_numbers'):
@@ -214,7 +230,10 @@ def parallel_perturb(
         available_mts.update(ace_obj.cross_section.reaction.keys())
     
     if verbose:
-        print(f"MTs available in ACE file: {sorted(list(available_mts))}\n")
+        print("Step 3: Covariance & MT Availability".center(90, "-"))
+        print(f"Isotope ZAID           : {isotope_id}")
+        print(f"Covariance MTs avail.  : {sorted(list(isotope_reactions))}")
+        print(f"MTs in ACE file        : {sorted(list(available_mts))}\n")
     
     # Determine which MTs to actually perturb based on request and availability
     original_mt_numbers = sorted(set(mt_numbers))
@@ -233,7 +252,8 @@ def parallel_perturb(
                     f"MT={mt} requested; treating as MT=4. "
                     "Perturbing all MT=4 and available MTs 51-91 with MT=4 covariance."
                 )
-                print(f"WARNING: {warning_msg}")
+                if verbose:
+                    print(f"WARNING: {warning_msg}")
                 mt_warnings[mt] = warning_msg
 
         # Ensure MT=4 covariance exists
@@ -277,11 +297,13 @@ def parallel_perturb(
                     print(f"  - MT={mt} requested, found in ACE file and covariance data.")
             elif mt in available_mts:
                 warning_msg = f"MT={mt} requested, found in ACE file but not in covariance data. Skipping."
-                print(f"WARNING: {warning_msg}")
+                if verbose:
+                    print(f"WARNING: {warning_msg}")
                 mt_warnings[mt] = warning_msg
             else:
                 missing_msg = f"MT={mt} requested but not found in ACE file. Skipping."
-                print(f"WARNING: {missing_msg}")
+                if verbose:
+                    print(f"WARNING: {missing_msg}")
                 mt_warnings[mt] = missing_msg
     else:
         # Check each requested MT for presence in covmat
@@ -294,7 +316,8 @@ def parallel_perturb(
                 
                 if not mt_in_covmat:
                     warning_msg = f"MT=4 requested but not found in covariance matrix for isotope {isotope_id}."
-                    print(f"WARNING: {warning_msg}")
+                    if verbose:
+                        print(f"WARNING: {warning_msg}")
                     mt_warnings[4] = warning_msg
                     skipped_mts.append(4)
                     continue
@@ -345,16 +368,19 @@ def parallel_perturb(
                             f"MT={mt} requested, found in ACE file but not in covariance data. "
                             "Using MT=4 covariance data instead."
                         )
-                        print(f"WARNING: {warning_msg}")
+                        if verbose:
+                            print(f"WARNING: {warning_msg}")
                         mt_warnings[mt] = warning_msg
                     else:
                         skipped_msg = f"MT={mt} requested, found in ACE file but not in covariance data. Skipping."
-                        print(f"WARNING: {skipped_msg}")
+                        if verbose:
+                            print(f"WARNING: {skipped_msg}")
                         mt_warnings[mt] = skipped_msg
                         skipped_mts.append(mt)
             else:
                 missing_msg = f"MT={mt} requested but not found in ACE file. Skipping."
-                print(f"WARNING: {missing_msg}")
+                if verbose:
+                    print(f"WARNING: {missing_msg}")
                 mt_warnings[mt] = missing_msg
                 skipped_mts.append(mt)
 
@@ -364,10 +390,26 @@ def parallel_perturb(
     expanded_mt_numbers     = sorted(set(expanded_mt_numbers))
     effective_original_mts  = sorted(set(mt_to_original_map.values()))
 
+    if verbose:
+        print("\nStep 5: Covariance Matrix Preparation".center(90, "-"))
+        print(f"Covariance MT blocks   : {effective_original_mts}")
+        print(f"MTs to perturb in ACE  : {expanded_mt_numbers}")
+        print("Extracting combined covariance matrix...\n")
+
     # 2) build covariance & sample factors once
+    import time
+    cov_start_time = time.time()
     combined_cov = extract_covariance_matrix(
         covmat, isotope_id, effective_original_mts, energy_grid
     )
+    cov_time = time.time() - cov_start_time
+
+    if verbose:
+        print(f"Covariance matrix extracted in {cov_time:.2f} seconds\n")
+        print("Step 6: Generating Perturbation Factors".center(90, "-"))
+        print(f"Generating {num_samples} perturbation factors...")
+
+    generation_start_time = time.time()
     perturbation_factors = generate_samples(
         combined_cov,
         num_samples,
@@ -375,10 +417,33 @@ def parallel_perturb(
         sampling_method,
         seed
     )
+    generation_time = time.time() - generation_start_time
 
-    # 3) precompute bin mappings (your existing loop)
+    if verbose:
+        print(f"Perturbation factors generated in {generation_time:.2f} seconds\n")
+
+    # 3) precompute bin mappings (your existing precompute mappings loop) …
+    precomp_start_time = time.time()
     precomputed_mappings = {}
-    # … <YOUR EXISTING PRECOMPUTE MAPPINGS LOOP> …
+    for mt in expanded_mt_numbers:
+        try:
+            if ace_obj.cross_section and mt in ace_obj.cross_section.reaction:
+                reaction_xs = ace_obj.cross_section.reaction[mt]
+                if reaction_xs._energy_entries:
+                    ace_energies = np.array([e.value for e in reaction_xs._energy_entries])
+                    bin_indices = np.searchsorted(energy_grid, ace_energies) - 1
+                    bin_indices = np.clip(bin_indices, 0, len(energy_grid) - 2)
+                    precomputed_mappings[mt] = bin_indices
+        except Exception as e:
+            if verbose:
+                print(f"Warning: Could not precompute mappings for MT={mt}: {e}")
+    precomp_time = time.time() - precomp_start_time
+
+    if verbose:
+        print(f"Precomputed mappings in {precomp_time:.2f} seconds\n")
+        print("Step 8: Cleaning Up ACE Object".center(90, "-"))
+
+    del ace_obj
 
     # 4) prepare output dir & master log
     if output_dir is None:
@@ -404,6 +469,11 @@ def parallel_perturb(
         num_samples,
     )
 
+    if verbose:
+        print("Step 10: Starting Sample Perturbations".center(90, "-"))
+        print(f"Processing {num_samples} samples for isotope ZAID: {isotope_id}")
+        print("-" * 90)
+
     # 5) now fire up the Pool, passing **all** the context via initargs
     initargs = (
         ace_file_path,
@@ -419,10 +489,31 @@ def parallel_perturb(
         perturbation_factors,
     )
 
+    import time
+    overall_start_time = time.time()
+    from collections import deque
+    sample_count = 0
+    elapsed_times = []
+    read_times = []
+    perturb_times = []
+    write_times = []
+
     with Pool(nprocs, initializer=_init_worker, initargs=initargs) as pool:
         # chunksize=1 gives best dynamic load‐balancing
         for block in pool.imap_unordered(_worker_top, range(num_samples), chunksize=1):
             _append_log_block(log_path, block)
+            # Parse block for timing info if available
+            if block.startswith("\n# Sample"):
+                # Try to extract elapsed time
+                import re
+                m = re.match(r"\n# Sample\s+(\d+)\s+\|\s+Elapsed:\s+([0-9.]+)\s+s", block)
+                if m:
+                    sample_count += 1
+                    elapsed_times.append(float(m.group(2)))
+            elif block.startswith("\nERROR"):
+                print(block.strip())
+
+    overall_time = time.time() - overall_start_time
 
     # --- append sampling verification just like in perturb_core ---
     centered = perturbation_factors - 1.0
@@ -441,8 +532,20 @@ def parallel_perturb(
         print(ver_block)
 
     if verbose:
-        print(f"[parallel_perturb] done for isotope {isotope_id}, log → {log_path}\n\n")
+        print("\n" + "="*90)
+        print(" Perturbation Summary ".center(90, "="))
+        print("="*90)
+        print(f"Files created          : {sample_count}/{num_samples}")
+        print(f"Total run time         : {overall_time:.2f} seconds")
+        avg_time = sum(elapsed_times) / len(elapsed_times) if elapsed_times else 0
+        if avg_time > 0:
+            print(f"Average time per file  : {avg_time:.2f} seconds")
+        print("Initial Computation Times".center(90, "-"))
+        print(f"Covariance extraction  : {cov_time:.2f} s")
+        print(f"Sample factor gen.     : {generation_time:.2f} s")
+        print(f"Mapping precomp.       : {precomp_time:.2f} s\n")
+        print(f"Results directory      : {output_dir}\n")
+        print("="*90 + "\n")
 
-    # once *all* samples (and recursive calls) are finished, move xsdir files
-    if xsdir and output_dir:
-        _move_xsdir_files(output_dir, xsdir, num_samples)
+    if verbose:
+        print(f"[perturb_ace_files] done for isotope {isotope_id}, log → {log_path}\n\n")

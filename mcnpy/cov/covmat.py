@@ -345,7 +345,74 @@ class CovMat:
         
         return combined_cov
 
-    
+    # Get covariance matrix for all mt in list, including 0's when its not in the matrix
+    def get_full_isotope_covariance_matrix(self,
+                                  isotope: int,
+                                  mt_list: Optional[List[int]] = None
+                                 ) -> np.ndarray:
+        """
+        Build a combined covariance matrix for all specified reactions of a given isotope.
+
+        This method constructs a block matrix where each block represents the covariance
+        between two specific reactions. If you pass MT numbers that have no covariance data,
+        their blocks will simply remain zero matrices.
+
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID to build the covariance matrix for
+        mt_list : List[int], optional
+            List of MT reaction numbers to include. If None, all available reactions
+            for the isotope are used (in sorted order). If you pass an empty list,
+            a ValueError is raised.
+
+        Returns
+        -------
+        np.ndarray
+            Combined covariance matrix with shape (N*G, N*G) where N is the number
+            of requested reactions and G is the number of energy groups
+
+        Raises
+        ------
+        ValueError
+            If the isotope has no covariance data at all, or if mt_list is given
+            but empty.
+        """
+        # Fetch the set of all MTs with any covariance data for this isotope
+        isotope_reactions = self.get_isotope_reactions().get(isotope, set())
+        if not isotope_reactions:
+            raise ValueError(f"Isotope {isotope} has no covariance data.")
+
+        # Decide which MTs to include
+        if mt_list is None:
+            # use every available MT, in sorted order
+            reactions = sorted(isotope_reactions)
+        else:
+            # keep exactly what the user asked for (no filtering), but don't accept an empty list
+            if not mt_list:
+                raise ValueError(f"No reactions specified for isotope {isotope}.")
+            reactions = list(mt_list)
+
+        n_reactions = len(reactions)
+        n_total = n_reactions * self.num_groups
+
+        # initialize big zero matrix
+        combined_cov = np.zeros((n_total, n_total), dtype=float)
+
+        # fill in each block; any missing block (get_matrix returns None) stays zero
+        for i, mt_i in enumerate(reactions):
+            for j, mt_j in enumerate(reactions):
+                block = self.get_matrix(isotope, mt_i, isotope, mt_j)
+                if block is not None:
+                    row_start = i * self.num_groups
+                    row_end   = row_start + self.num_groups
+                    col_start = j * self.num_groups
+                    col_end   = col_start + self.num_groups
+                    combined_cov[row_start:row_end, col_start:col_end] = block
+
+        return combined_cov
+
+
     def __repr__(self) -> str:
         """
         Get a detailed string representation of the CovMat object.

@@ -61,7 +61,7 @@ def read_ace(filename, debug=False):
         lines = file.readlines()
     
     # Determine if it's a legacy or 2.0.1 header and read it
-    if lines and "2.0" in lines[0][:10]:
+    if lines and "2.0.1" in lines[0][:10]:
         ace.header.format_version = "2.0.1"
     else:
         ace.header.format_version = "legacy"

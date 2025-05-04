@@ -21,7 +21,8 @@ def process_sample(
     extension: str,
     output_dir: Optional[str],
     precomputed_mappings: Dict[int, np.ndarray],
-    xsdir: Optional[str] = None
+    xsdir: Optional[str] = None,
+    debug: Optional[bool] = True
 ) -> Tuple[int, float, bool, Optional[str], float, float, float]:
     """
     Process a single sample and create a perturbed ACE file.
@@ -80,6 +81,15 @@ def process_sample(
         
         # Apply perturbation factors to each MT with timing
         perturb_start = time.time()
+
+
+        if debug and i == 0:
+            print(f"\n\nDEBUG: Sample factors for sample {i+1}:\n{sample_factors}\n")
+            print(f"DEBUG: MT numbers: {mt_numbers}\n")
+            print(f"DEBUG: Energy grid: {energy_grid}\n")
+            print(f"DEBUG: Original MT numbers: {original_mt_numbers}\n")
+            
+
         for mt in mt_numbers:
             # Get the original MT to use for perturbation factors
             orig_mt = mt_to_original_map.get(mt, mt)
@@ -186,7 +196,7 @@ def create_perturbed_ace_files(
     output_dir: Optional[str] = None,
     xsdir: Optional[str] = None,
     seed: Optional[int] = None,
-    verbose: bool = False
+    verbose: bool = True
 ) -> None:
     """
     Create perturbed ACE files based on covariance data.
@@ -247,15 +257,18 @@ def create_perturbed_ace_files(
     overall_start_time = time.time()
     
     if verbose:
-        print("\n=== Perturbation Setup ===")
-        print(f"Number of samples       : {num_samples}")
-        print(f"Requested MT numbers    : {mt_numbers}")
-        print(f"Sampling method         : {sampling_method}")
-        print(f"Decomposition method    : {decomposition_method}\n")
-    
-    if verbose:
-        print("=== Reading Input Files ===")
-        print(f"ACE file path           : {ace_file_path}\n")
+        print("\n" + "="*90)
+        print(" MCNPy ACE Perturbation - Isotope Processing ".center(90, "="))
+        print("="*90)
+        print(f"Isotope ZAID: {read_ace(ace_file_path).header.zaid if hasattr(read_ace(ace_file_path).header, 'zaid') else 'Unknown'}")
+        print("-"*90)
+        print(f"Number of samples      : {num_samples}")
+        print(f"Requested MT numbers   : {mt_numbers}")
+        print(f"Sampling method        : {sampling_method}")
+        print(f"Decomposition method   : {decomposition_method}")
+        print("="*90 + "\n")
+        print("Step 1: Reading Input Files".center(90, "-"))
+        print(f"ACE file path          : {ace_file_path}\n")
     
     # Input validation
     if not mt_numbers:
@@ -268,17 +281,14 @@ def create_perturbed_ace_files(
     ace_object = read_ace(ace_file_path)
     
     if verbose:
-        print("Initial ACE load complete.\n")
+        print("Step 2: ACE File Loaded".center(90, "-"))
+        print(f"Initial ACE load complete for isotope ZAID: {ace_object.header.zaid}\n")
     
     # Extract isotope from ACE object
     isotope_id = ace_object.header.zaid
 
     # Get available MTs in the covariance matrix for this isotope
     isotope_reactions = covmat.get_isotope_reactions().get(isotope_id, set())
-
-    if verbose:
-        print(f"Isotope ZAID            : {isotope_id}")
-        print(f"Covariance MTs available: {sorted(list(isotope_reactions))}\n")
     
     # Get available MTs in the ACE file
     available_mts = set()
@@ -288,7 +298,10 @@ def create_perturbed_ace_files(
         available_mts.update(ace_object.cross_section.reaction.keys())
     
     if verbose:
-        print(f"MTs available in ACE file: {sorted(list(available_mts))}\n")
+        print("Step 3: Covariance & MT Availability".center(90, "-"))
+        print(f"Isotope ZAID           : {isotope_id}")
+        print(f"Covariance MTs avail.  : {sorted(list(isotope_reactions))}")
+        print(f"MTs in ACE file        : {sorted(list(available_mts))}\n")
     
     # Determine which MTs to actually perturb based on request and availability
     original_mt_numbers = sorted(set(mt_numbers))
@@ -450,10 +463,10 @@ def create_perturbed_ace_files(
         raise ValueError("None of the requested MT numbers were found in the ACE file or resulted in valid perturbations. Cannot proceed.")
 
     if verbose:
-        print("=== Covariance Matrix Preparation ===")
-        print(f"Covariance MT blocks     : {effective_original_mts}")
-        print(f"MTs to perturb in ACE    : {expanded_mt_numbers}\n")
-        print("Extracting combined covariance matrix...")
+        print("\n" + "Step 4: Covariance Matrix Preparation".center(90, "-"))
+        print(f"Covariance MT blocks   : {effective_original_mts}")
+        print(f"MTs to perturb in ACE  : {expanded_mt_numbers}")
+        print("Extracting combined covariance matrix...\n")
     
     cov_start_time = time.time()
     # Use the effective original MTs to extract the correct covariance blocks
@@ -462,14 +475,12 @@ def create_perturbed_ace_files(
     
     if verbose:
         print(f"Covariance matrix extracted in {cov_time:.2f} seconds\n")
-        print("Generating perturbation factors...\n")
-    
-    # Generate perturbation factors using the specified sampling method
-    if verbose:
-        print(f"Generating {num_samples} perturbation factors...")
+        print("Step 5: Generating Perturbation Factors".center(90, "-"))
+        print(f"Generating {num_samples} perturbation factors...\n")
     
     generation_start_time = time.time()
     # Perturbation factors are generated based on the effective original MTs
+    
     perturbation_factors = generate_samples(
         combined_cov_matrix, 
         num_samples, 
@@ -478,9 +489,6 @@ def create_perturbed_ace_files(
         seed
     )
     generation_time = time.time() - generation_start_time
-    
-    if verbose:
-        print(f"Perturbation factors generated in {generation_time:.2f} seconds\n")
     
     # Prepare output directory if needed
     if output_dir is not None:
@@ -491,10 +499,9 @@ def create_perturbed_ace_files(
         elif verbose:
             print(f"Using existing output directory: {output_dir}")
     else:
-        output_dir = "."  # Use current directory if none specified
-    
-    if output_dir is not None and verbose:
-        print(f"Output directory exists  : {output_dir}\n")
+        output_dir = "."
+        if verbose:
+            print("Using current directory as output directory.")
     
     # Set up base file name
     base_name = "perturbed_ace"
@@ -566,14 +573,17 @@ def create_perturbed_ace_files(
     precomp_time = time.time() - precomp_start_time
     
     if verbose:
-        print(f"Precomputed mappings in  {precomp_time:.2f} seconds\n")
-        print("Cleaning up ACE object to free memory\n")
+        print("Step 7: Precomputing Energy Bin Mappings".center(90, "-"))
+    
+    if verbose:
+        print(f"Precomputed mappings in {precomp_time:.2f} seconds\n")
     
     # Clean up the initial ACE object to free memory
     del ace_object
     
     if verbose:
-        print("=== Starting Sample Perturbations ===\n")
+        print("Step 8: Starting Sample Perturbations".center(90, "-"))
+        print(f"Processing {num_samples} samples for isotope ZAID: {isotope_id}")
     
     # Process samples sequentially
     if verbose:
@@ -587,16 +597,16 @@ def create_perturbed_ace_files(
     
     for i in range(num_samples):
         if verbose:
-            print(f"Processing sample {i+1}/{num_samples}... ", end="", flush=True)
+            print(f"  [Sample {i+1:04d}/{num_samples}] ... ", end="", flush=True)
         
         # Process the sample
         result = process_sample(
             i, 
             perturbation_factors[i], # Factors for this sample, ordered by effective_original_mts
             ace_file_path,
-            expanded_mt_numbers,  # List of MTs to actually modify in the ACE file
+            expanded_mt_numbers,    # List of MTs to actually modify in the ACE file
             effective_original_mts, # List of original MTs corresponding to factor blocks
-            mt_to_original_map,   # Map expanded MT -> original MT to find correct factor block
+            mt_to_original_map,     # Map expanded MT -> original MT to find correct factor block
             energy_grid,
             base_name, 
             extension, 
@@ -610,7 +620,7 @@ def create_perturbed_ace_files(
         if res_success:
             if verbose:
                 # Use res_elapsed for the time taken
-                print(f"done in {res_elapsed:.2f} seconds") 
+                print(f"done in {res_elapsed:.2f} s") 
             # Append the original index 'i' and the elapsed time
             results.append((i, res_elapsed)) 
             read_times.append(res_read_time)
@@ -626,7 +636,7 @@ def create_perturbed_ace_files(
                 energy_grid
             )
             if verbose:
-                print(f"Appended sample {i+1:04d} to data file\n")
+                print(f"    Appended sample {i+1:04d} to log\n")
         else:
             # Always print errors regardless of verbose setting
             # Use i+1 for the sample number in the error message
@@ -642,22 +652,24 @@ def create_perturbed_ace_files(
         avg_perturb = sum(perturb_times) / len(perturb_times) if perturb_times else 0
         avg_write = sum(write_times) / len(write_times) if write_times else 0
         
-        print("\n=== Perturbation Summary ===")
-        print(f"Files created           : {len(results)}/{num_samples}")
-        print(f"Total run time          : {overall_time:.2f} seconds")
+        print("\n" + "="*90)
+        print(" Perturbation Summary ".center(90, "="))
+        print("="*90)
+        print(f"Files created          : {len(results)}/{num_samples}")
+        print(f"Total run time         : {overall_time:.2f} seconds")
         if avg_time > 0:
-            print(f"Average time per file   : {avg_time:.2f} seconds")
+            print(f"Average time per file  : {avg_time:.2f} seconds")
             print("\nPerformance breakdown:")
-            print(f"  Read ACE file         : {avg_read:.4f} s ({100*avg_read/avg_time:.1f}%)")
-            print(f"  Apply perturbation    : {avg_perturb:.4f} s ({100*avg_perturb/avg_time:.1f}%)")
-            print(f"  Write to file         : {avg_write:.4f} s ({100*avg_write/avg_time:.1f}%)")
-            print(f"  Other                 : {max(0, avg_time-avg_read-avg_perturb-avg_write):.4f} s ({100*(avg_time-avg_read-avg_perturb-avg_write)/avg_time:.1f}%)\n")
-        
-        print("=== Initial Computation Times ===")
-        print(f"Covariance extraction   : {cov_time:.2f} s")
-        print(f"Sample factor generation: {generation_time:.2f} s")
-        print(f"Mapping precomputation  : {precomp_time:.2f} s\n")
-        print(f"Results directory       : {output_dir}\n")
+            print(f"  Read ACE file        : {avg_read:.4f} s ({100*avg_read/avg_time:.1f}%)")
+            print(f"  Apply perturbation   : {avg_perturb:.4f} s ({100*avg_perturb/avg_time:.1f}%)")
+            print(f"  Write to file        : {avg_write:.4f} s ({100*avg_write/avg_time:.1f}%)")
+            print(f"  Other                : {max(0, avg_time-avg_read-avg_perturb-avg_write):.4f} s ({100*(avg_time-avg_read-avg_perturb-avg_write)/avg_time:.1f}%)\n")
+        print("Initial Computation Times".center(90, "-"))
+        print(f"Covariance extraction  : {cov_time:.2f} s")
+        print(f"Sample factor gen.     : {generation_time:.2f} s")
+        print(f"Mapping precomp.       : {precomp_time:.2f} s\n")
+        print(f"Results directory      : {output_dir}\n")
+        print("="*90 + "\n")
 
 def apply_perturbation_to_mt(
     ace_object: Ace, 
@@ -828,4 +840,4 @@ def append_sample_perturbation_data(
         for mt_idx, mt in enumerate(effective_original_mts):
             start = mt_idx * num_bins
             for b in range(num_bins):
-                f.write(f"{mt:7d} | {energy_grid[b]:.6e} | {energy_grid[b+1]:.6e} | {factors[start+b]:.12f}\n")
+                f.write(f"{mt:7d} | {energy_grid[b]:.6e} | {energy_grid[b+1]:.6e} | {factors[start+b]:.12e}\n")

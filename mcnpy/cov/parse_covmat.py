@@ -1,7 +1,6 @@
 import numpy as np
 from mcnpy._constants import MT_TO_REACTION
 from mcnpy.cov.covmat import CovMat
-# Import the specific SCALE energy grids
 from mcnpy.energy_grids.grids import SCALE44, SCALE56, SCALE238, SCALE252
 import re
 import pandas as pd
@@ -44,6 +43,7 @@ def read_scale_covmat(file_path: str):
     
     # Create CovMat object
     covmat = CovMat(num_groups)
+    covmat.cov_type = "SCALE"
 
     # Determine the energy grid based on the number of groups
     potential_grids = {
@@ -84,6 +84,9 @@ def read_scale_covmat(file_path: str):
                     # Convert to numpy array and reshape
                     matrix = np.array(matrix_values).reshape(num_groups, num_groups)
                     
+                    # Flip the matrix to get ascending order
+                    matrix = np.flipud(np.fliplr(matrix))
+
                     # Add to CovMat object
                     covmat.add_matrix(isotope_row, reaction_row, isotope_col, reaction_col, matrix)
             except (ValueError, IndexError):
@@ -240,6 +243,7 @@ def read_njoy_covmat(file_path: str):
 
     # Now, build CovMat object
     covmat = CovMat(num_groups=group_nb)
+    covmat.cov_type = "NJOY"
     # Set energy grid if found
     if len(dikt_cov['STD']) > 0 and isinstance(dikt_cov['STD'][0], list) and len(dikt_cov['STD'][0]) == group_nb+1:
         # If energy grid is present as first row
