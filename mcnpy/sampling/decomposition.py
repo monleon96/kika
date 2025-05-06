@@ -17,7 +17,6 @@ def svd_decomposition(cov: np.ndarray) -> np.ndarray:
     
     # Perform SVD
     U, s, Vt = np.linalg.svd(cov)
-    
     # Return the transformation matrix
     return U @ np.diag(np.sqrt(s))
 
@@ -25,7 +24,6 @@ def eigen_decomposition(cov):
     eigvals, eigvecs = np.linalg.eigh(cov)
     if np.any(eigvals < 0):
         eigvals[eigvals < 0] = 0 
-
     return eigvecs @ np.diag(np.sqrt(eigvals))
 
 

@@ -13,7 +13,7 @@ class InvalidDataFormatError(Exception):
     """Raised when the data format is invalid or corrupted."""
     pass
 
-def read_scale_covmat(file_path: str):
+def read_scale_covmat(file_path: str, ascending: bool = True):
     """
     Read a SCALE covariance matrix file and convert it to a CovMat object.
     
@@ -21,6 +21,8 @@ def read_scale_covmat(file_path: str):
     ----------
     file_path : str
         Path to the SCALE covariance matrix text file
+    ascending : bool, optional
+        If True, the energies will be ordered in ascending order (default is True)
         
     Returns
     -------
@@ -84,8 +86,8 @@ def read_scale_covmat(file_path: str):
                     # Convert to numpy array and reshape
                     matrix = np.array(matrix_values).reshape(num_groups, num_groups)
                     
-                    # Flip the matrix to get ascending order
-                    matrix = np.flipud(np.fliplr(matrix))
+                    if ascending:
+                        matrix = np.flipud(np.fliplr(matrix))
 
                     # Add to CovMat object
                     covmat.add_matrix(isotope_row, reaction_row, isotope_col, reaction_col, matrix)

@@ -3,6 +3,7 @@ from typing import List, Optional, Union, Dict, Any
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+from collections import defaultdict
 from mcnpy.ace.classes.xss import XssEntry
 from mcnpy.ace.classes.header import Header
 from mcnpy.ace.classes.nubar.nubar import NuContainer
@@ -362,3 +363,80 @@ class Ace:
         ax.legend()
             
         return ax
+    
+
+    def update_cross_sections(self):
+        cs = self.cross_section.reaction
+
+        # ----------------------------------------------------------------------------
+        # 1) Map "feeders → total" ordered deepest first
+        # ----------------------------------------------------------------------------
+        partial_mt_map = {
+            103: range(600, 650),
+            104: range(650, 700),
+            105: range(700, 750),
+            106: range(750, 800),
+            107: range(800, 850),
+
+            101: range(102, 118),
+
+            18: list(range(19, 22)) + [38],
+
+            4:  range(50, 92),
+
+            3: (
+                [4, 5, 11]
+                + list(range(16, 19))
+                + list(range(22, 27))
+                + list(range(28, 38))
+                + [41, 42, 44, 45]
+            ),
+        }
+
+        # ----------------------------------------------------------------------------
+        # 2+3) For each total_mt, we sum from its feeders:
+        #       - if cs[mt] exists, we use its values
+        #       - if it does not exist but we already calculated computed_totals[mt], we use that
+        # ----------------------------------------------------------------------------
+        computed_totals = {}
+        for total_mt, feeders in partial_mt_map.items():
+            energy_sums = defaultdict(float)
+
+            for mt in feeders:
+                if mt in cs:
+                    rx = cs[mt]
+                    for E, x in zip(rx.energies, rx.xs_values):
+                        energy_sums[E] += x
+
+                elif mt in computed_totals:
+                    for E, x in computed_totals[mt].items():
+                        energy_sums[E] += x
+
+                # if it's neither in cs nor in computed_totals, we ignore it
+
+            computed_totals[total_mt] = energy_sums
+
+            # if there is an original reaction for total_mt, we overwrite it
+            if total_mt in cs:
+                total_rx = cs[total_mt]
+                for E, entry in zip(total_rx.energies, total_rx._xs_entries):
+                    entry.value = energy_sums.get(E, 0.0)
+
+        # ----------------------------------------------------------------------------
+        # 4) Rebuild MT=1 = ΣMT: 2 + 3 + 101
+        # ----------------------------------------------------------------------------
+        energy_mt1 = defaultdict(float)
+        for mt in (2, 3, 101):
+            if mt in cs:
+                rx = cs[mt]
+                for E, x in zip(rx.energies, rx.xs_values):
+                    energy_mt1[E] += x
+            else:
+                for E, x in computed_totals.get(mt, {}).items():
+                    energy_mt1[E] += x
+
+        rx1 = cs.get(1)
+        if not rx1:
+            raise RuntimeError("MT=1 debe estar presente")
+        for E, entry in zip(rx1.energies, rx1._xs_entries):
+            entry.value = energy_mt1.get(E, 0.0)

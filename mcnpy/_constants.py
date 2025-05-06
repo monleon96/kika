@@ -16,18 +16,23 @@ ATOMIC_NUMBER_TO_SYMBOL = {
 N_AVOGADRO = 6.02214e23
 
 MT_TO_REACTION = {
+    0: 'scatter',
     1: 'total',
     2: 'elastic',
     4: 'inelastic',
     16: 'n,2n',
     18: 'fission',
-    51: 'inelastic-1st',
-    52: 'inelastic-2nd',
+    51: 'n,n1',
+    52: 'n,n2',
     101: 'capture',
     102: 'n,gamma',
     103: 'n,p',
+    104: 'n,d',
+    105: 'n,t',
+    106: 'n,He3',
     107: 'n,alpha',
     452: 'nubar',
+    455: 'delayed_nubar',
     1018: 'chi'
 }
 
