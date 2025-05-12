@@ -86,7 +86,7 @@ cov_Cr52  = '/soft_snc/lib/cov/80/600/240520_80.06.xs.gendf'
 cov_Cr53  = '/soft_snc/lib/cov/80/600/240530_80.06.xs.gendf'
 cov_Cr54  = '/soft_snc/lib/cov/80/600/240540_80.06.xs.gendf'
 cov_Mn55  = '/soft_snc/lib/cov/80/600/250550_80.06.xs.gendf'
-cov_Fe54  = '/soft_snc/lib/cov/80/600/260540_80.06.xs.gendf'
+cov_Fe54  = '/share_snc/snc/JuanMonleon/COV/cov/80/600/260540_80.06.xs.gendf'
 cov_Fe56  = '/soft_snc/lib/cov/80/600/260560_80.06.xs.gendf'
 cov_Fe57  = '/soft_snc/lib/cov/80/600/260570_80.06.xs.gendf'
 cov_Fe58  = '/soft_snc/lib/cov/80/600/260580_80.06.xs.gendf'
@@ -125,15 +125,24 @@ cov_paths = [
 ]
 
 covmatlist = []
-for covmat in cov_paths:
-    if os.path.exists(cov_H1):
-        cov = mcnpy.read_scale_covmat(covmat)
+missing_paths = []
+for cov_path in cov_paths:
+    if os.path.exists(cov_path):
+        cov = mcnpy.read_njoy_covmat(cov_path)
     else:
+        missing_paths.append(cov_path)
         cov = mcnpy.cov.covmat.CovMat()
     covmatlist.append(cov)
 
+if missing_paths:
+    print("Following covariance matrix files are missing:")
+    for path in missing_paths:
+        print(f" - {path}")
+else:
+    print("All covariance matrix files are present.")
 
-mt_numbers   = [2,4,102,103,107]
+
+mt_numbers   = []
 num_samples  = 1024
 output_dir   = "/SCRATCH/users/monleon-de-la-jan/MCNPy_LIB/ESP"
 xsdir_file   = "/soft_snc/lib/xsdir/xsdir80"
@@ -145,7 +154,7 @@ print(f"Generating {num_samples} perturbed ACE files...")
 perturb_ACE_files(
     ace_files            = acelist,
     covmat               = covmatlist,
-    mt_numbers           = mt_numbers,
+    mt_list              = mt_numbers,
     num_samples          = num_samples,
     output_dir           = output_dir,
     xsdir_file           = xsdir_file,

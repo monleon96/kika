@@ -437,6 +437,6 @@ class Ace:
 
         rx1 = cs.get(1)
         if not rx1:
-            raise RuntimeError("MT=1 debe estar presente")
+            raise RuntimeError("MT=1 not found in cross section data")
         for E, entry in zip(rx1.energies, rx1._xs_entries):
             entry.value = energy_mt1.get(E, 0.0)

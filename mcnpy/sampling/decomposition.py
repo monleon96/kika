@@ -22,8 +22,13 @@ def svd_decomposition(cov: np.ndarray) -> np.ndarray:
 
 def eigen_decomposition(cov):
     eigvals, eigvecs = np.linalg.eigh(cov)
-    if np.any(eigvals < 0):
-        eigvals[eigvals < 0] = 0 
+    
+    neg_mask = eigvals < 0
+    if np.any(neg_mask):
+        neg_vals = eigvals[neg_mask]
+        print(f"\nNegative eigenvalues found:\n{neg_vals}.\nSetting these to 0 for decomposition.")
+        eigvals[neg_mask] = 0
+
     return eigvecs @ np.diag(np.sqrt(eigvals))
 
 

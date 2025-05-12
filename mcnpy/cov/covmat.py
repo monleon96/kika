@@ -10,6 +10,64 @@ from mcnpy._utils import create_repr_section
 
 
 @dataclass
+class ValidationIssue:
+    """Single validation failure entry."""
+
+    kind: str  # "C-S", "SYM", "PSD"
+    row_isotope: int
+    col_isotope: int
+    row_mt: int
+    col_mt: int
+    g_i: int  # energy‑group index (row)   or −1 if N/A
+    g_j: int  # energy‑group index (column) or −1 if N/A
+    value: float
+    bound: float
+
+    def __str__(self) -> str:  # pragma: no cover
+        if self.kind == "C-S":
+            return (
+                f"[C‑S] iso {self.row_isotope}/{self.col_isotope} "
+                f"MT {self.row_mt}/{self.col_mt} g {self.g_i}/{self.g_j}: "
+                f"|cov|={self.value:.3e} > bound={self.bound:.3e}"
+            )
+        if self.kind == "SYM":
+            return (
+                f"[SYM] iso {self.row_isotope} MT {self.row_mt}: "
+                f"|C-Cᵀ|_∞={self.value:.3e} > tol={self.bound:.3e}"
+            )
+        # PSD
+        return (
+            f"[PSD] iso {self.row_isotope} MT {self.row_mt}: "
+            f"λ_min={self.value:.3e} < −{self.bound:.3e}"
+        )
+
+
+@dataclass
+class ValidationReport:
+    ok: bool
+    issues: List[ValidationIssue] = field(default_factory=list)
+
+    # ------------------------------------------------------------------
+    def summary(self) -> str:  # pragma: no cover
+        if self.ok:
+            return "All covariance blocks passed validation."
+        counts: Dict[str, int] = {}
+        for iss in self.issues:
+            counts[iss.kind] = counts.get(iss.kind, 0) + 1
+        return ", ".join(f"{k}: {v}" for k, v in counts.items())
+
+    def log(self) -> None:  # pragma: no cover
+        if self.ok:
+            print(self.summary())
+            return
+        print("Validation report – failures:")
+        for iss in self.issues:
+            print("  ", iss)
+
+
+
+
+@dataclass
 class CovMat:
     """
     Class for storing covariance matrix data from nuclear data files (SCALE, NJOY, etc).
@@ -282,135 +340,201 @@ class CovMat:
             # Assume it's a filename without extension, add .xlsx
             df.to_excel(output_path + ".xlsx", index=False)
     
-    def get_isotope_covariance_matrix(self, isotope: int, mt_list: Optional[List[int]] = None) -> np.ndarray:
+    def get_isotope_covariance_matrix(
+            self, isotope: int, mt_list: Optional[List[int]] = None
+    ) -> np.ndarray:
         """
-        Build a combined covariance matrix for all specified reactions of a given isotope.
-        
-        This method constructs a block matrix where each block represents the covariance
-        between two specific reactions. The resulting matrix can be used for uncertainty
-        propagation calculations.
-        
-        Parameters
-        ----------
-        isotope : int
-            Isotope ID to build the covariance matrix for
-        mt_list : List[int], optional
-            List of MT reaction numbers to include. If None, all available reactions for the isotope are used.
-            
-        Returns
-        -------
-        np.ndarray
-            Combined covariance matrix with shape (N*G, N*G) where N is the number of reactions
-            and G is the number of energy groups
-            
-        Raises
-        ------
-        ValueError
-            If the isotope has no covariance data or if none of the specified reactions are available
-        """
-        # Get all reactions for this isotope
-        isotope_reactions = self.get_isotope_reactions().get(isotope, set())
-        
-        if not isotope_reactions:
-            raise ValueError(f"Isotope {isotope} has no covariance data.")
-        
-        # If mt_list is not provided, use all available reactions for this isotope
-        if mt_list is None:
-            mt_list = sorted(list(isotope_reactions))
-        else:
-            # Filter mt_list to only include available reactions
-            mt_list = sorted([mt for mt in mt_list if mt in isotope_reactions])
-            
-        if not mt_list:
-            raise ValueError(f"None of the specified reactions are available for isotope {isotope}.")
-        
-        # Initialize the combined covariance matrix
-        n_reactions = len(mt_list)
-        n_total = n_reactions * self.num_groups
-        combined_cov = np.zeros((n_total, n_total))
-        
-        # Build the covariance matrix
-        for i, mt_i in enumerate(mt_list):
-            for j, mt_j in enumerate(mt_list):
-                # Get the sub-matrix C(i, j)
-                matrix_ij = self.get_matrix(isotope, mt_i, isotope, mt_j)
-                if matrix_ij is not None:
-                    # Place it in the correct block
-                    row_start = i * self.num_groups
-                    row_end = row_start + self.num_groups
-                    col_start = j * self.num_groups
-                    col_end = col_start + self.num_groups
-                    combined_cov[row_start:row_end, col_start:col_end] = matrix_ij
-                # else: block remains zero
-        
-        return combined_cov
-
-    # Get covariance matrix for all mt in list, including 0's when its not in the matrix
-    def get_full_isotope_covariance_matrix(self,
-                                  isotope: int,
-                                  mt_list: Optional[List[int]] = None
-                                 ) -> np.ndarray:
-        """
-        Build a combined covariance matrix for all specified reactions of a given isotope.
-
-        This method constructs a block matrix where each block represents the covariance
-        between two specific reactions. If you pass MT numbers that have no covariance data,
-        their blocks will simply remain zero matrices.
+        Return a symmetric combined covariance matrix for the given isotope.
 
         Parameters
         ----------
         isotope : int
-            Isotope ID to build the covariance matrix for
+            ENDF-style isotope identifier (e.g. 92235 for 235-U)
         mt_list : List[int], optional
-            List of MT reaction numbers to include. If None, all available reactions
-            for the isotope are used (in sorted order). If you pass an empty list,
-            a ValueError is raised.
+            List of MT numbers to include; if None, use every MT that
+            actually has covariance blocks in the library.
 
         Returns
         -------
         np.ndarray
-            Combined covariance matrix with shape (N*G, N*G) where N is the number
-            of requested reactions and G is the number of energy groups
-
-        Raises
-        ------
-        ValueError
-            If the isotope has no covariance data at all, or if mt_list is given
-            but empty.
+            2-D numpy array shaped (N*G, N*G) where N = len(mt_list)
+            and G = self.num_groups.
         """
-        # Fetch the set of all MTs with any covariance data for this isotope
-        isotope_reactions = self.get_isotope_reactions().get(isotope, set())
-        if not isotope_reactions:
-            raise ValueError(f"Isotope {isotope} has no covariance data.")
+        # --- 1. Select reactions -------------------------------------------------
+        all_reactions = self.get_isotope_reactions().get(isotope, set())
+        if not all_reactions:
+            raise ValueError(f"No covariance data for isotope {isotope}.")
 
-        # Decide which MTs to include
         if mt_list is None:
-            # use every available MT, in sorted order
-            reactions = sorted(isotope_reactions)
+            mt_list = sorted(all_reactions)
         else:
-            # keep exactly what the user asked for (no filtering), but don't accept an empty list
+            mt_list = sorted(mt for mt in mt_list if mt in all_reactions)
             if not mt_list:
-                raise ValueError(f"No reactions specified for isotope {isotope}.")
-            reactions = list(mt_list)
+                raise ValueError(
+                    f"None of the requested MTs have covariance data for isotope {isotope}."
+                )
 
-        n_reactions = len(reactions)
-        n_total = n_reactions * self.num_groups
+        # --- 2. Allocate result --------------------------------------------------
+        N, G = len(mt_list), self.num_groups
+        size = N * G
+        combined = np.zeros((size, size))
 
-        # initialize big zero matrix
-        combined_cov = np.zeros((n_total, n_total), dtype=float)
+        # --- 3. Fill only the upper triangle, then mirror -----------------------
+        for i, mt_i in enumerate(mt_list):
+            for j in range(i, N):
+                mt_j = mt_list[j]
 
-        # fill in each block; any missing block (get_matrix returns None) stays zero
-        for i, mt_i in enumerate(reactions):
-            for j, mt_j in enumerate(reactions):
                 block = self.get_matrix(isotope, mt_i, isotope, mt_j)
-                if block is not None:
-                    row_start = i * self.num_groups
-                    row_end   = row_start + self.num_groups
-                    col_start = j * self.num_groups
-                    col_end   = col_start + self.num_groups
-                    combined_cov[row_start:row_end, col_start:col_end] = block
+                if block is None and i != j:
+                    # Try the opposite ordering
+                    block = self.get_matrix(isotope, mt_j, isotope, mt_i)
+                    if block is not None:
+                        block = block.T  # transpose to match (mt_i, mt_j)
 
-        return combined_cov
+                if block is None:
+                    continue  # leave zeros for genuinely missing data
+
+                r0, r1 = i * G, (i + 1) * G
+                c0, c1 = j * G, (j + 1) * G
+                combined[r0:r1, c0:c1] = block
+                if i != j:
+                    combined[c0:c1, r0:r1] = block.T  # enforce symmetry
+
+        return combined
+
+    # ------------------------------------------------------------------
+    # Validation core
+    # ------------------------------------------------------------------
+
+    def validate(
+        self,
+        *,
+        eps_cs: float = 1.0e-10,
+        eps_sym: float = 1.0e-12,
+        eta_psd: float = 1.0e-8,
+        verbose: bool = True,
+    ) -> ValidationReport:
+        """Run all validation checks.
+
+        Parameters
+        ----------
+        eps_cs  : tolerance factor for the Cauchy–Schwarz inequality.
+        eps_sym : relative tolerance for symmetry (∞‑norm).
+        eta_psd : negative‑eigenvalue tolerance, as fraction of λ_max.
+        verbose : print a human‑readable report.
+        """
+
+        issues: List[ValidationIssue] = []
+
+        # --------------------------------------------------------------
+        # 0) Build a lookup dict for diagonal blocks (iso, mt) → matrix
+        # --------------------------------------------------------------
+        diag_lookup: Dict[Tuple[int, int], np.ndarray] = {}
+        for iso_r, mt_r, iso_c, mt_c, mat in zip(
+            self.isotope_rows,
+            self.reaction_rows,
+            self.isotope_cols,
+            self.reaction_cols,
+            self.matrices,
+        ):
+            if iso_r == iso_c and mt_r == mt_c:
+                diag_lookup[(iso_r, mt_r)] = mat
+
+        # --------------------------------------------------------------
+        # Iterate over *all* stored blocks
+        # --------------------------------------------------------------
+        for iso_r, mt_r, iso_c, mt_c, mat in zip(
+            self.isotope_rows,
+            self.reaction_rows,
+            self.isotope_cols,
+            self.reaction_cols,
+            self.matrices,
+        ):
+            # ---------- 1) Cauchy–Schwarz check ------------------------
+            try:
+                var_i = np.diag(diag_lookup[(iso_r, mt_r)])
+                var_j = np.diag(diag_lookup[(iso_c, mt_c)])
+            except KeyError as err:
+                raise ValueError(
+                    "Missing diagonal block needed for C‑S test: "
+                    f"isotope/MT {err.args[0]}"
+                ) from None
+
+            # Build bound and compare
+            bound = np.sqrt(np.outer(var_i, var_j)) + eps_cs * np.sqrt(
+                np.outer(var_i, var_j)
+            )
+            mask = np.abs(mat) > bound
+            for g_i, g_j in np.argwhere(mask):
+                issues.append(
+                    ValidationIssue(
+                        kind="C-S",
+                        row_isotope=iso_r,
+                        col_isotope=iso_c,
+                        row_mt=mt_r,
+                        col_mt=mt_c,
+                        g_i=int(g_i),
+                        g_j=int(g_j),
+                        value=float(mat[g_i, g_j]),
+                        bound=float(bound[g_i, g_j]),
+                    )
+                )
+
+            # ---------- 2) Symmetry check (diagonal blocks only) -------
+            if iso_r == iso_c and mt_r == mt_c:
+                asym = np.max(np.abs(mat - mat.T))
+                tol_sym = eps_sym * np.max(np.abs(mat))
+                if asym > tol_sym:
+                    issues.append(
+                        ValidationIssue(
+                            kind="SYM",
+                            row_isotope=iso_r,
+                            col_isotope=iso_c,
+                            row_mt=mt_r,
+                            col_mt=mt_c,
+                            g_i=-1,
+                            g_j=-1,
+                            value=float(asym),
+                            bound=float(tol_sym),
+                        )
+                    )
+
+                # ---------- 3) PSD check (also only diagonal) ---------
+                vals = np.linalg.eigvalsh(mat)
+                lam_max = vals.max()
+                lam_min = vals.min()
+                if lam_min < -eta_psd * lam_max:
+                    issues.append(
+                        ValidationIssue(
+                            kind="PSD",
+                            row_isotope=iso_r,
+                            col_isotope=iso_c,
+                            row_mt=mt_r,
+                            col_mt=mt_c,
+                            g_i=-1,
+                            g_j=-1,
+                            value=float(lam_min),
+                            bound=float(eta_psd * lam_max),
+                        )
+                    )
+
+        report = ValidationReport(ok=(len(issues) == 0), issues=issues)
+        if verbose:
+            report.log()
+        return report
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _col_iso(self, mt: int) -> int:
+        """Dummy helper – in case you want to map MT to isotope."
+        Currently returns the first isotope found for that MT in cols.
+        """
+        for iso, mt_c in zip(self.isotope_cols, self.reaction_cols):
+            if mt_c == mt:
+                return iso
+        return -1  # unknown
 
 
     def __repr__(self) -> str:
@@ -497,3 +621,6 @@ class CovMat:
         )
         
         return header + description + info_table + data_access_section + methods_section
+
+
+

@@ -1,5 +1,5 @@
 import numpy as np
-from mcnpy._constants import MT_TO_REACTION
+from mcnpy._constants import MT_TO_REACTION, ENDF_MAT_TO_ZAID
 from mcnpy.cov.covmat import CovMat
 from mcnpy.energy_grids.grids import SCALE44, SCALE56, SCALE238, SCALE252
 import re
@@ -198,7 +198,7 @@ def read_njoy_covmat(file_path: str):
                     else:
                         valXS = float(CrossSec_str)
                     crossSectionLine.append(valXS)
-            dikt_cov['ISO_H'].append(iMAT)
+            dikt_cov['ISO_H'].append(_map_mat(iMAT))
             dikt_cov['REAC_H'].append(iMT)
             dikt_cov['ISO_V'].append('0')
             dikt_cov['REAC_V'].append('0')
@@ -235,9 +235,9 @@ def read_njoy_covmat(file_path: str):
                 vals = []
                 if (len(lines[i_line+1].split()) < 3 or lines[i_line+1].split()[2] == '0'):
                     if not sum(np.array(sub_mat[:]).flatten()) == 0.0:
-                        dikt_cov['ISO_H'].append(iMAT)
+                        dikt_cov['ISO_H'].append(_map_mat(iMAT))
                         dikt_cov['REAC_H'].append(iMT)
-                        dikt_cov['ISO_V'].append(iMAT1)
+                        dikt_cov['ISO_V'].append(_map_mat(iMAT1))
                         dikt_cov['REAC_V'].append(reac_2_id)
                         dikt_cov['STD'].append(sub_mat.tolist())
                     grep_data = False
@@ -274,3 +274,27 @@ def read_njoy_covmat(file_path: str):
         raise EmptyParsingError(f"No valid data was extracted from the NJOY covariance matrix file: {file_path}")
 
     return covmat
+
+
+
+def _map_mat(mat_str: str) -> str:
+    """
+    Returns the ZAID code corresponding to a MAT.
+    If there is no entry in the dictionary, it is left as is.
+
+    Parameters
+    ----------
+    mat_str : str
+        The MAT field as read (it may contain spaces).
+
+    Returns
+    -------
+    str
+        MAT translated to ZAID, as a string, so that everything
+        continues to flow exactly as before.
+    """
+    try:
+        mat_int = int(mat_str.strip())
+    except ValueError:
+        return mat_str 
+    return str(ENDF_MAT_TO_ZAID.get(mat_int, mat_int))
