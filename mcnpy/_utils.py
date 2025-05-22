@@ -1,3 +1,27 @@
+from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL
+
+def zaid_to_symbol(zaid: int) -> str:
+    """
+    Convert a ZAID to element-mass symbol (e.g., 26056 -> Fe56)
+    
+    Parameters
+    ----------
+    zaid : int
+        ZAID identifier (ZZAAA format)
+    
+    Returns
+    -------
+    str
+        Element symbol with mass number (e.g., "Fe56")
+    """
+    z = zaid // 1000
+    a = str(zaid % 1000)
+        
+    if z in ATOMIC_NUMBER_TO_SYMBOL:
+        return f"{ATOMIC_NUMBER_TO_SYMBOL[z]}{a}"
+    return f"{zaid}"  # Fallback if conversion fails
+
+
 def add_repr_method(method_name, description, buffer=None, method_col_width=30, desc_col_width=45, 
                   align_method="<", align_desc="<"):
     """

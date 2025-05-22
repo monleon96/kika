@@ -62,7 +62,7 @@ def parse_mt451(lines: List[str]) -> MT451:
     
     # Parse first line - numeric data
     line1 = parse_line(lines[0])
-    mt451._za = line1.get("C1")
+    mt451._za = int(round(float(line1.get("C1"))))
     mt451._awr = line1.get("C2")
     mt451._lrp = line1.get("C3")
     mt451._lfi = line1.get("C4")
