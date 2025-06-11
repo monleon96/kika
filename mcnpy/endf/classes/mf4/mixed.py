@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Dict
 
 from .base import MF4MT
+from ....endf.utils import get_interpolation_scheme_name, describe_interpolation_region
 
 @dataclass
 class MF4MTMixed(MF4MT):
@@ -29,148 +30,162 @@ class MF4MTMixed(MF4MT):
     _tabulated_cosines: List[List[float]] = field(default_factory=list)  # Cosines for each energy
     _tabulated_probabilities: List[List[float]] = field(default_factory=list)  # Probabilities for each energy
     _angular_interpolation: List[List[Tuple[int, int]]] = field(default_factory=list)  # Interpolation schemes for angular data
-    
-    @property
-    def num_legendre_energy_points(self) -> int:
-        """Number of energy points with Legendre coefficients"""
-        return self._ne1
-    
-    @property
-    def max_legendre_order(self) -> int:
-        """Maximum order of Legendre polynomial"""
-        return self._nm
-    
-    @property
-    def num_legendre_interp_regions(self) -> int:
-        """Number of different energy interpolation intervals for Legendre coefficients"""
-        return self._nr
-    
-    
-    @property
-    def num_tabulated_energy_points(self) -> int:
-        """Number of energy points with tabulated distributions"""
-        return self._ne2
-    
-    @property
-    def num_tabulated_interp_regions(self) -> int:
-        """Number of different energy interpolation intervals for tabulated data"""
-        return self._nr_tab
-    
-    @property
-    def legendre_energy_interpolation(self) -> List[Tuple[int, int]]:
-        """Interpolation scheme pairs for Legendre energy grid (NBT, INT)"""
-        return self._interpolation
-    
-    @property
-    def tabulated_energy_interpolation(self) -> List[Tuple[int, int]]:
-        """Interpolation scheme pairs for tabulated energy grid (NBT, INT)"""
-        return self._tab_interpolation
-    
+
+    # ESSENTIAL PROPERTIES - Energy Grids
     @property
     def legendre_energies(self) -> List[float]:
         """Energy grid for Legendre coefficients"""
         return self._energies
     
     @property
+    def tabulated_energies(self) -> List[float]:
+        """Energy grid for tabulated angular distributions"""
+        return self._tabulated_energies
+
+    # ESSENTIAL PROPERTIES - Data Access
+    @property
     def legendre_coefficients(self) -> List[List[float]]:
         """
         Legendre coefficients for each energy point.
         
-        Returns a list of coefficient lists, aligned with the energy grid.
+        Returns a list of coefficient lists, aligned with the legendre_energies.
         Each inner list contains the coefficients for one energy point.
         """
         return self._legendre_coeffs
-    
-    @property
-    def tabulated_energies(self) -> List[float]:
-        """Energy grid for tabulated angular distributions"""
-        return self._tabulated_energies
     
     @property
     def tabulated_cosines(self) -> List[List[float]]:
         """
         Cosine values (μ) for each tabulated energy point.
         
-        Returns a list of cosine lists, aligned with the tabulated_energies.
-        Each inner list contains the cosine values for one energy point.
+        Returns a list of cosine lists, aligned with tabulated_energies.
         """
         return self._tabulated_cosines
     
     @property
     def tabulated_probabilities(self) -> List[List[float]]:
         """
-        Probability values f(μ,E) for each tabulated energy point and cosine.
+        Probability values f(μ,E) for each tabulated energy point.
         
-        Returns a list of probability lists, aligned with the tabulated_energies and tabulated_cosines.
-        Each inner list contains the probability values for one energy point, corresponding to each cosine.
+        Returns a list of probability lists, aligned with tabulated_energies and tabulated_cosines.
         """
         return self._tabulated_probabilities
+
+    # ESSENTIAL PROPERTIES - Interpolation Schemes
+    @property
+    def legendre_interpolation(self) -> List[Tuple[int, int]]:
+        """Interpolation scheme pairs for Legendre energy grid (NBT, INT)"""
+        return self._interpolation
     
     @property
-    def tabulated_cosine_interpolation(self) -> List[List[Tuple[int, int]]]:
+    def tabulated_interpolation(self) -> List[Tuple[int, int]]:
+        """Interpolation scheme pairs for tabulated energy grid (NBT, INT)"""
+        return self._tab_interpolation
+    
+    @property
+    def angular_interpolation(self) -> List[List[Tuple[int, int]]]:
         """
         Interpolation scheme pairs for angular data at each tabulated energy.
         
-        Returns a list of interpolation scheme lists, aligned with tabulated_energies.
-        Each inner list contains (NBT, INT) pairs for one energy point.
+        Returns a list aligned with tabulated_energies, where each element
+        contains the (NBT, INT) pairs for that energy's angular distribution.
         """
         return self._angular_interpolation
-    
-    def get_coefficients_at_energy(self, energy: float) -> List[float]:
-        """
-        Get Legendre coefficients at a specific energy.
-        
-        Args:
-            energy: Energy point to retrieve coefficients for
-            
-        Returns:
-            List of Legendre coefficients at that energy
-        """
-        # Find the index of this energy in the grid
+
+    # CONVENIENCE METHODS - Data Access
+    def get_legendre_coefficients(self, energy: float) -> List[float]:
+        """Get Legendre coefficients at a specific energy."""
         try:
             index = self._energies.index(energy)
             return self._legendre_coeffs[index]
         except (ValueError, IndexError):
             return []
     
-    def get_coefficients_dict(self) -> Dict[float, List[float]]:
-        """
-        Get Legendre coefficients as a dictionary mapping energies to coefficients.
-        
-        Returns:
-            Dictionary with energies as keys and coefficient lists as values
-        """
-        return {e: c for e, c in zip(self._energies, self._legendre_coeffs)}
-    
-    def get_tabulated_data_at_energy(self, energy: float) -> Tuple[List[float], List[float]]:
-        """
-        Get tabulated angular distribution at a specific energy.
-        
-        Args:
-            energy: Energy point to retrieve distribution for
-            
-        Returns:
-            Tuple of (cosines, probabilities) at that energy
-        """
+    def get_tabulated_distribution(self, energy: float) -> Tuple[List[float], List[float]]:
+        """Get tabulated angular distribution at a specific energy."""
         try:
             index = self._tabulated_energies.index(energy)
             return (self._tabulated_cosines[index], self._tabulated_probabilities[index])
         except (ValueError, IndexError):
             return ([], [])
-    
-    def get_tabulated_data_dict(self) -> Dict[float, Tuple[List[float], List[float]]]:
+
+    def get_interpolation_summary(self) -> str:
         """
-        Get tabulated data as a dictionary mapping energies to (cosines, probabilities).
+        Get a comprehensive summary of all interpolation schemes used in this mixed representation.
         
         Returns:
-            Dictionary with energies as keys and (cosines, probabilities) tuples as values
+            str: A formatted summary showing energy ranges and their interpolation schemes
         """
-        return {e: (c, p) for e, c, p in zip(
-            self._tabulated_energies, 
-            self._tabulated_cosines, 
-            self._tabulated_probabilities
-        )}
-    
+        summary_lines = []
+        summary_lines.append("Mixed Representation (LTT=3) Interpolation Summary:")
+        summary_lines.append("=" * 60)
+        
+        # Legendre coefficients section
+        if self._energies and self._interpolation:
+            summary_lines.append("\nLegendre Coefficients Section:")
+            summary_lines.append("-" * 35)
+            
+            energy_start = 0
+            for i, (nbt, int_code) in enumerate(self._interpolation):
+                energy_end_idx = min(nbt - 1, len(self._energies) - 1)
+                if energy_end_idx >= 0:
+                    start_energy = self._energies[energy_start] if energy_start < len(self._energies) else 0.0
+                    end_energy = self._energies[energy_end_idx]
+                    interp_name = get_interpolation_scheme_name(int_code)
+                    
+                    summary_lines.append(
+                        f"  Energy range: {start_energy:.3e} to {end_energy:.3e} eV"
+                    )
+                    summary_lines.append(
+                        f"  Interpolation: {interp_name}"
+                    )
+                    summary_lines.append("")
+                    
+                    energy_start = nbt
+        
+        # Tabulated distributions section
+        if self._tabulated_energies and self._tab_interpolation:
+            summary_lines.append("Tabulated Distributions Section:")
+            summary_lines.append("-" * 35)
+            
+            energy_start = 0
+            for i, (nbt, int_code) in enumerate(self._tab_interpolation):
+                energy_end_idx = min(nbt - 1, len(self._tabulated_energies) - 1)
+                if energy_end_idx >= 0:
+                    start_energy = self._tabulated_energies[energy_start] if energy_start < len(self._tabulated_energies) else 0.0
+                    end_energy = self._tabulated_energies[energy_end_idx]
+                    interp_name = get_interpolation_scheme_name(int_code)
+                    
+                    summary_lines.append(
+                        f"  Energy range: {start_energy:.3e} to {end_energy:.3e} eV"
+                    )
+                    summary_lines.append(
+                        f"  Interpolation: {interp_name}"
+                    )
+                    summary_lines.append("")
+                    
+                    energy_start = nbt
+        
+        # Angular interpolation schemes (brief overview)
+        if self._angular_interpolation:
+            summary_lines.append("Angular Interpolation Schemes:")
+            summary_lines.append("-" * 30)
+            
+            unique_schemes = set()
+            for ang_interp in self._angular_interpolation:
+                for nbt, int_code in ang_interp:
+                    unique_schemes.add(int_code)
+            
+            if unique_schemes:
+                summary_lines.append("  Angular distributions use:")
+                for scheme_code in sorted(unique_schemes):
+                    scheme_name = get_interpolation_scheme_name(scheme_code)
+                    summary_lines.append(f"    - {scheme_name}")
+            else:
+                summary_lines.append("  No angular interpolation schemes defined")
+        
+        return "\n".join(summary_lines)
+
     def __str__(self) -> str:
         """
         Convert the MF4MTMixed object back to ENDF format string.

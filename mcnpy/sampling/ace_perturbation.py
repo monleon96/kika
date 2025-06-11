@@ -1,15 +1,87 @@
 import numpy as np
 import os
 import shutil
-import glob
-from typing import List, Union, Optional
+import logging
+from typing import List, Union, Optional, Dict, Tuple
 from multiprocessing import Pool
+from datetime import datetime
 
 from mcnpy.sampling.generators import generate_samples
 from mcnpy.ace.parsers import read_ace
 from mcnpy.ace.writers.write_ace import write_ace
 from mcnpy.cov.parse_covmat import read_scale_covmat, read_njoy_covmat
 
+
+class DualLogger:
+    """Logger that writes detailed info to file and basic info to console."""
+    
+    def __init__(self, log_file: str, console_level: str = 'INFO'):
+        self.log_file = log_file
+        
+        # Create logger
+        self.logger = logging.getLogger('ace_perturbation')
+        self.logger.setLevel(logging.DEBUG)
+        
+        # Clear existing handlers
+        self.logger.handlers.clear()
+        
+        # File handler - gets everything
+        file_handler = logging.FileHandler(log_file, mode='w')
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter('%(message)s')
+        file_handler.setFormatter(file_formatter)
+        self.logger.addHandler(file_handler)
+        
+        # Console handler - only basic info
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(getattr(logging, console_level.upper()))
+        console_formatter = logging.Formatter('[%(levelname)s] %(message)s')
+        console_handler.setFormatter(console_formatter)
+        self.logger.addHandler(console_handler)
+    
+    def info(self, message: str, console: bool = False):
+        """Log info message. If console=True, also show in console."""
+        if console:
+            self.logger.info(message)
+        else:
+            # Only to file
+            for handler in self.logger.handlers:
+                if isinstance(handler, logging.FileHandler):
+                    handler.emit(logging.LogRecord(
+                        name=self.logger.name, level=logging.INFO, pathname='', lineno=0,
+                        msg=message, args=(), exc_info=None
+                    ))
+    
+    def warning(self, message: str, console: bool = True):
+        """Log warning message. Shows in console by default."""
+        if console:
+            self.logger.warning(message)
+        else:
+            for handler in self.logger.handlers:
+                if isinstance(handler, logging.FileHandler):
+                    handler.emit(logging.LogRecord(
+                        name=self.logger.name, level=logging.WARNING, pathname='', lineno=0,
+                        msg=message, args=(), exc_info=None
+                    ))
+    
+    def error(self, message: str, console: bool = True):
+        """Log error message. Shows in console by default."""
+        if console:
+            self.logger.error(message)
+        else:
+            for handler in self.logger.handlers:
+                if isinstance(handler, logging.FileHandler):
+                    handler.emit(logging.LogRecord(
+                        name=self.logger.name, level=logging.ERROR, pathname='', lineno=0,
+                        msg=message, args=(), exc_info=None
+                    ))
+
+# Global logger instance
+_logger = None
+
+def _get_logger():
+    """Get the global logger instance."""
+    return _logger
 
 def _process_sample(
     ace_file: str,
@@ -54,11 +126,15 @@ def _process_sample(
         fx.write(line + "\n")
 
     if xsdir_file:
+        # Create xsdir directory if it doesn't exist
+        xsdir_dir = os.path.join(output_dir, "xsdir")
+        os.makedirs(xsdir_dir, exist_ok=True)
+        
         # 1) build the sample suffix and master-filename (no extra extension)
         sample_tag       = f"_{sample_index+1:04d}"
         orig_xs_base     = os.path.splitext(os.path.basename(xsdir_file))[0]
         master_xs_name   = orig_xs_base + sample_tag
-        master_xs_path   = os.path.join(output_dir, master_xs_name)
+        master_xs_path   = os.path.join(xsdir_dir, master_xs_name)  # Create directly in xsdir directory
 
         # 2) copy original master once
         if not os.path.exists(master_xs_path):
@@ -79,7 +155,7 @@ def _process_sample(
                 else:
                     f.write(ln)
 
-    # — write this sample’s small summary file —
+    # — write this sample's small summary file —
     n_groups    = len(energy_grid) - 1
     boundaries  = np.asarray(energy_grid)
     summary_tmp = os.path.join(sample_dir, f"{base}_{sample_str}_summary.txt")
@@ -127,13 +203,30 @@ def perturb_ACE_files(
     dry_run: bool = False,
     autofix: Optional[str] = 'soft', 
     high_val_thresh: float = 1.0,
+    accept_tol: float = -1.0e-4,
+    remove_blocks: Optional[Dict[int, Union[Tuple[int, int], List[Tuple[int, int]]]]] = None,  # Add remove_blocks parameter
     verbose: bool = True,
 ):
-    # Print run parameters as metadata
+    global _logger
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Setup logging
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_file = os.path.join(output_dir, f'ace_perturbation_{timestamp}.log')
+    _logger = DualLogger(log_file)
+    
+    # Console: Basic start message
+    print(f"[INFO] Starting ACE perturbation job")
+    print(f"[INFO] Log file: {log_file}")
+    print(f"[INFO] Output directory: {os.path.abspath(output_dir)}")
+    
+    # Print run parameters as metadata TO LOG FILE
     separator = "=" * 80
-    print(f"\n{separator}")
-    print(f"[ACE] [PARAMETERS] Run Configuration")
-    print(f"{separator}")
+    _logger.info(f"\n{separator}")
+    _logger.info(f"[ACE] [PARAMETERS] Run Configuration")
+    _logger.info(f"{separator}")
     
     # Format and print input files
     if isinstance(ace_files, str):
@@ -160,25 +253,28 @@ def perturb_ACE_files(
     else:
         formatted_mt = f"{len(mt_list)} MTs: {', '.join(str(mt) for mt in mt_list[:5])}..."
     
-    # Print all parameters
-    print(f"  ACE files:             {formatted_ace}")
-    print(f"  Covariance files:      {formatted_cov}")
-    print(f"  MT numbers:            {formatted_mt}")
-    print(f"  Number of samples:     {num_samples}")
-    print(f"  Sampling space:        {space}")
-    print(f"  Decomposition method:  {decomposition_method}")
-    print(f"  Sampling method:       {sampling_method}")
-    print(f"  Output directory:      {os.path.abspath(output_dir)}")
-    print(f"  XSDIR file:            {xsdir_file if xsdir_file else 'None'}")
-    print(f"  Random seed:           {seed if seed is not None else 'Random'}")
-    print(f"  Parallel processes:    {nprocs}")
-    print(f"  Mode:                  {'Dry run (factors only)' if dry_run else 'Full ACE generation'}")
-    print(f"  Autofix covariance:    {autofix}")
+    # Print all parameters TO LOG FILE
+    _logger.info(f"  ACE files:             {formatted_ace}")
+    _logger.info(f"  Covariance files:      {formatted_cov}")
+    _logger.info(f"  MT numbers:            {formatted_mt}")
+    _logger.info(f"  Number of samples:     {num_samples}")
+    _logger.info(f"  Sampling space:        {space}")
+    _logger.info(f"  Decomposition method:  {decomposition_method}")
+    _logger.info(f"  Sampling method:       {sampling_method}")
+    _logger.info(f"  Output directory:      {os.path.abspath(output_dir)}")
+    _logger.info(f"  XSDIR file:            {xsdir_file if xsdir_file else 'None'}")
+    _logger.info(f"  Random seed:           {seed if seed is not None else 'Random'}")
+    _logger.info(f"  Parallel processes:    {nprocs}")
+    _logger.info(f"  Mode:                  {'Dry run (factors only)' if dry_run else 'Full ACE generation'}")
+    _logger.info(f"  Autofix covariance:    {autofix}")
+    _logger.info(f"  High value threshold:  {high_val_thresh}")
+    _logger.info(f"  Accept tolerance:      {accept_tol}")
+    _logger.info(f"  Remove blocks:         {remove_blocks if remove_blocks else 'None'}")
+    _logger.info(f"  Verbose output:        {verbose}")
     
     # Print timestamp
-    from datetime import datetime
-    print(f"  Timestamp:             {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{separator}\n")
+    _logger.info(f"  Timestamp:             {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    _logger.info(f"{separator}\n")
 
     # normalize inputs (already done in the prints, but needed for the rest of the function)
     if isinstance(ace_files, str):
@@ -192,13 +288,19 @@ def perturb_ACE_files(
     # Track skipped isotopes due to missing or invalid covariance
     skipped_isotopes = {}
 
-    for ace_file, cov_file in zip(ace_files, cov_files):
+    # Console: Show progress
+    print(f"[INFO] Processing {len(ace_files)} isotope(s)")
+
+    for i, (ace_file, cov_file) in enumerate(zip(ace_files, cov_files)):
 
         # ====== Start of ACE file processing ======
         separator = "=" * 80
-        print(f"\n{separator}")
-        print(f"[ACE] [PROCESSING] {ace_file}")
-        print(f"{separator}\n")
+        _logger.info(f"\n{separator}")
+        _logger.info(f"[ACE] [PROCESSING] {ace_file}")
+        _logger.info(f"{separator}\n")
+
+        # Console: Basic progress
+        print(f"\n[INFO] Processing isotope {i+1}/{len(ace_files)}: {os.path.basename(ace_file)}")
 
         # Read ACE file first to get ZAID
         ace = read_ace(ace_file)
@@ -213,30 +315,83 @@ def perturb_ACE_files(
             "mt_in_cov": [],
             "mt_perturbed": [],
             "removed_mts": {},  # Will store MT: reason pairs
+            "autofix_info": {  # Track autofix-specific information
+                "level": autofix,
+                "removed_pairs": [],
+                "removed_mts": [],
+                "removed_correlations": [],  # Track off-diagonal block removals
+                "converged": True,
+                "soft_threshold_warning": False  # Track if soft autofix didn't meet threshold
+            },
             "warnings": []
         }
         
         cov = load_covariance(cov_file)
         if cov is None:
-            print(f"[ACE] [ERROR] Unable to load a valid covariance matrix for {cov_file}")
+            _logger.error(f"[ACE] [ERROR] Unable to load a valid covariance matrix for {cov_file}")
             summary_data[zaid]["warnings"].append(f"No valid covariance file found: {os.path.basename(cov_file)}")
             skipped_isotopes[zaid] = "No valid covariance file found"
-            print(f"\n{separator}\n")
+            _logger.info(f"\n{separator}\n")
+            print(f"[ERROR] Failed to load covariance for {os.path.basename(ace_file)}")
             continue
 
-        print(f"  Covariance file: {cov_file}")
-        print(f"  Isotope: {zaid}")
+        _logger.info(f"  Covariance file: {cov_file}")
+        _logger.info(f"  Isotope: {zaid}")
         
         subseparator = "-" * 60
-        print(f"\n{subseparator}")
+        _logger.info(f"\n{subseparator}")
 
         # Check if the covariance matrix is empty (no data)
         if cov.num_matrices == 0:
-            print(f"[ACE] [SKIP] No covariance found in {zaid}. Skipping.")
+            _logger.info(f"[ACE] [SKIP] No covariance found in {zaid}. Skipping.")
             summary_data[zaid]["warnings"].append("No covariance data found in matrix")
             skipped_isotopes[zaid] = "No covariance data found in matrix"
-            print(f"\n{separator}\n")
+            _logger.info(f"\n{separator}\n")
+            print(f"[WARNING] No covariance data for {os.path.basename(ace_file)}")
             continue
+
+        # Apply user-specified block removals before clean_cov
+        if remove_blocks and zaid in remove_blocks:
+            _logger.info(f"[ACE] [BLOCK REMOVAL] Applying user-specified block removals for isotope {zaid}")
+            
+            # Normalize the removal specification to a list of tuples
+            removal_spec = remove_blocks[zaid]
+            if isinstance(removal_spec, tuple):
+                # Single tuple: convert to list
+                blocks_to_remove = [removal_spec]
+            else:
+                # Should be a list of tuples
+                blocks_to_remove = list(removal_spec)
+            
+            _logger.info(f"  Blocks to remove: {blocks_to_remove}")
+            
+            # Get reactions before removal for comparison
+            reactions_before = cov.reactions_by_isotope(zaid)
+            _logger.info(f"  Reactions before removal: {sorted(reactions_before)}")
+            
+            # Apply the removal
+            try:
+                cov = cov.remove_matrix(isotope=zaid, reaction_pairs=blocks_to_remove)
+                
+                # Get reactions after removal
+                reactions_after = cov.reactions_by_isotope(zaid)
+                _logger.info(f"  Reactions after removal:  {sorted(reactions_after)}")
+                
+                # Track removed reactions for the summary
+                removed_reactions = set(reactions_before) - set(reactions_after)
+                for mt in removed_reactions:
+                    summary_data[zaid]["removed_mts"][mt] = f"User-specified block removal: {blocks_to_remove}"
+                
+                if removed_reactions:
+                    _logger.info(f"  Successfully removed reactions: {sorted(removed_reactions)}")
+                else:
+                    _logger.info(f"  No reactions were removed (blocks may not have existed)")
+                    
+            except Exception as e:
+                _logger.error(f"  [ERROR] Failed to remove blocks {blocks_to_remove}: {str(e)}")
+                summary_data[zaid]["warnings"].append(f"Failed to remove user-specified blocks: {str(e)}")
+            
+            _logger.info(f"\n{subseparator}")
 
         cov = cov.clean_cov(zaid)
 
@@ -321,42 +476,96 @@ def perturb_ACE_files(
         if to_remove:
             cov = cov.remove_matrix(zaid, to_remove)
 
-        # Print available MT numbers
-        print(f"[ACE] [MT SELECTION]")
-        print(f"  MTs in ACE file:          {mt_in_ace}")
-        print(f"  MTs in covariance matrix: {mt_in_cov}")
-        print(f"  MTs to be perturbed:      {mt_perturb}")
+        # Print available MT numbers TO LOG FILE
+        _logger.info(f"[ACE] [MT SELECTION]")
+        _logger.info(f"  MTs in ACE file:          {mt_in_ace}")
+        _logger.info(f"  MTs in covariance matrix: {mt_in_cov}")
+        _logger.info(f"  MTs to be perturbed:      {mt_perturb}")
         
-        print(f"\n{subseparator}\n")
+        _logger.info(f"\n{subseparator}\n")
 
         energy_grid = cov.energy_grid
 
         # Save pre-autofix MT list
         pre_autofix_mts = list(mt_perturb)
         
-        factors, mt_perturb_final = generate_samples(
-            cov                  = cov,
-            space                = space,
-            n_samples            = num_samples,
-            decomposition_method = decomposition_method,
-            sampling_method      = sampling_method,
-            seed                 = None if seed is None else seed + zaid,
-            mt_numbers           = mt_perturb,
-            energy_grid          = energy_grid,
-            autofix              = autofix, 
-            high_val_thresh      = high_val_thresh,
-            verbose              = verbose,
-        )
+        # Console: Show sample generation start
+        print(f"[INFO] Generating {num_samples} samples for ZAID {zaid}")
         
-        # Update summary with autofix results
-        if autofix is not None:
+        try:
+            factors, mt_perturb_final, fix_info = generate_samples(
+                cov                  = cov,
+                space                = space,
+                n_samples            = num_samples,
+                decomposition_method = decomposition_method,
+                sampling_method      = sampling_method,
+                seed                 = None if seed is None else seed + zaid,
+                mt_numbers           = mt_perturb,
+                energy_grid          = energy_grid,
+                autofix              = autofix, 
+                high_val_thresh      = high_val_thresh,
+                accept_tol           = accept_tol,
+                verbose              = verbose,
+            )
+        except Exception as e:
+            # Import the exception classes to check for them
+            from mcnpy.sampling.generators import CovarianceFixError, SoftAutofixWarning
+            
+            if isinstance(e, SoftAutofixWarning):
+                # Soft autofix failed threshold but decomposition also failed
+                _logger.error(f"[ACE] [ERROR] Soft autofix warning for isotope {zaid}")
+                _logger.error(f"  Error details: {str(e)}")
+                
+                summary_data[zaid]["warnings"].append(f"Soft autofix failed to meet eigenvalue threshold and decomposition failed")
+                summary_data[zaid]["autofix_info"]["converged"] = False
+                summary_data[zaid]["autofix_info"]["soft_threshold_warning"] = True
+                skipped_isotopes[zaid] = str(e)
+                
+                _logger.info(f"\n{separator}\n")
+                print(f"[ERROR] Soft autofix and decomposition failed for {os.path.basename(ace_file)}")
+                continue
+            elif isinstance(e, CovarianceFixError):
+                _logger.error(f"[ACE] [ERROR] Covariance matrix fixing failed for isotope {zaid}")
+                _logger.error(f"  Error details: {str(e)}")
+                _logger.error(f"  Suggestion: Try processing isotope {zaid} separately with autofix='medium' or 'hard'")
+                
+                summary_data[zaid]["warnings"].append(f"Covariance matrix could not be fixed to meet eigenvalue threshold")
+                summary_data[zaid]["autofix_info"]["converged"] = False
+                skipped_isotopes[zaid] = str(e)
+                
+                _logger.info(f"\n{separator}\n")
+                print(f"[ERROR] Covariance fix failed for {os.path.basename(ace_file)}")
+                continue
+            else:
+                # Re-raise other exceptions
+                raise e
+        
+        # Update summary with autofix results - now get detailed removal information
+        if autofix is not None and fix_info is not None:
+            # Check for soft autofix threshold warning
+            if fix_info.get("soft_autofix_failed", False):
+                summary_data[zaid]["autofix_info"]["soft_threshold_warning"] = True
+                min_eigenvalue = fix_info.get("min_eigenvalue", float('nan'))
+                summary_data[zaid]["warnings"].append(
+                    f"Soft autofix failed to meet eigenvalue threshold (λ_min={min_eigenvalue:.4e} < {accept_tol:.4e}) but decomposition succeeded"
+                )
+                
             removed_in_autofix = set(pre_autofix_mts) - set(mt_perturb_final if mt_perturb_final else [])
             for mt in removed_in_autofix:
-                summary_data[zaid]["removed_mts"][mt] = "Removed during covariance autofix (non-positive definite matrix)"
-        
+                summary_data[zaid]["removed_mts"][mt] = f"Removed during covariance autofix (level='{autofix}')"
+                summary_data[zaid]["autofix_info"]["removed_mts"].append(mt)
+            
+            # Extract correlation removals from fix_info
+            if fix_info.get("removed_correlations"):
+                summary_data[zaid]["autofix_info"]["removed_correlations"] = fix_info["removed_correlations"]
+            
+            # Also store the removed pairs for completeness
+            if fix_info.get("removed_pairs"):
+                summary_data[zaid]["autofix_info"]["removed_pairs"] = fix_info["removed_pairs"]
+
         # Store final perturbed MTs
         summary_data[zaid]["mt_perturbed"] = mt_perturb_final if mt_perturb_final else []
-        
+
         # -- prepare output dirs ----------------------------------------------
         iso_dir = os.path.join(output_dir, str(zaid))
         os.makedirs(iso_dir, exist_ok=True)
@@ -365,20 +574,20 @@ def perturb_ACE_files(
         #  DRY‑RUN
         # =====================================================================
         if dry_run:
-            if verbose:
-                print(f"\n[ACE] [DRY-RUN] Generating only perturbation factors (no ACE files will be written)")
+            _logger.info(f"\n[ACE] [DRY-RUN] Generating only perturbation factors (no ACE files will be written)")
             for j in range(num_samples):
                 _write_sample_summary(factors[j], j, energy_grid, mt_perturb_final, iso_dir, base)
-            print(f"\n{separator}\n")
+            _logger.info(f"\n{separator}\n")
+            print(f"[INFO] Completed dry run for ZAID {zaid}")
             continue
 
         # =====================================================================
         #  FULL processing (ACE rewrite)
         # =====================================================================
-        print(f"\n[ACE] [PROCESSING] Creating {num_samples} perturbed ACE files")
-        print(f"  Output directory: {os.path.abspath(output_dir)}")
+        _logger.info(f"\n[ACE] [PROCESSING] Creating {num_samples} perturbed ACE files")
+        _logger.info(f"  Output directory: {os.path.abspath(output_dir)}")
         if nprocs > 1:
-            print(f"  Using {nprocs} parallel processes")
+            _logger.info(f"  Using {nprocs} parallel processes")
             
         # Create progress tracking variables
         report_interval = max(1, min(100, num_samples // 10))  # Report at most 10 times
@@ -387,7 +596,7 @@ def perturb_ACE_files(
 
         if nprocs > 1:
             # For parallel processing, just show start and end messages
-            print(f"  Starting parallel sample generation... (progress updates disabled in parallel mode)")
+            _logger.info(f"  Starting parallel sample generation... (progress updates disabled in parallel mode)")
             
             with Pool(processes=nprocs) as pool:
                 for args in tasks:
@@ -395,95 +604,124 @@ def perturb_ACE_files(
                 pool.close()
                 pool.join()
                 
-            print(f"  Completed generating {num_samples} samples")
+            _logger.info(f"  Completed generating {num_samples} samples")
+            print(f"[INFO] Completed ACE generation for ZAID {zaid}")
         else:
             # For sequential processing, show periodic progress updates
-            print(f"  Generating samples (progress updates every {report_interval} samples)")
+            _logger.info(f"  Generating samples (progress updates every {report_interval} samples)")
             
             for i, args in enumerate(tasks):
                 _process_sample(*args)
                 
-                # Report progress periodically
+                # Report progress periodically TO LOG FILE
                 if (i + 1) % report_interval == 0 or i + 1 == num_samples:
                     progress = (i + 1) / num_samples * 100
-                    print(f"  Progress: {i + 1}/{num_samples} samples ({progress:.1f}%)")
+                    _logger.info(f"  Progress: {i + 1}/{num_samples} samples ({progress:.1f}%)")
+            
+            print(f"[INFO] Completed ACE generation for ZAID {zaid}")
 
         # ====== End of ACE file processing ======
-        print(f"\n{separator}")
-        print(f"[ACE] [COMPLETED] {ace_file} ({num_samples} samples generated)")
-        print(f"{separator}\n")
+        _logger.info(f"\n{separator}")
+        _logger.info(f"[ACE] [COMPLETED] {ace_file} ({num_samples} samples generated)")
+        _logger.info(f"{separator}\n")
 
-    # -- gather all master xsdir files ---------------------------------------
-    if xsdir_file and not dry_run:
-        _collect_master_xsdir(xsdir_file, output_dir)
-    
     # =====================================================================
-    #  Print final summary for all isotopes
+    #  Print final summary for all isotopes TO LOG FILE
     # =====================================================================
     separator = "=" * 80
-    print(f"\n{separator}")
-    print(f"[ACE] [SUMMARY] Processing Results")
-    print(f"{separator}")
+    _logger.info(f"\n{separator}")
+    _logger.info(f"[ACE] [SUMMARY] Processing Results")
+    _logger.info(f"{separator}")
     
     if not summary_data and not skipped_isotopes:
-        print("  No isotopes were processed.")
+        _logger.info("  No isotopes were processed.")
     else:
         # First report isotopes that were successfully processed
         processed_isotopes = {zaid: data for zaid, data in sorted(summary_data.items()) 
                              if zaid not in skipped_isotopes}
         
         if processed_isotopes:
-            print("\n  SUCCESSFULLY PROCESSED ISOTOPES:")
-            print(f"  {'-' * 50}")
+            _logger.info("\n  SUCCESSFULLY PROCESSED ISOTOPES:")
+            _logger.info(f"  {'-' * 50}")
             
             for zaid, data in processed_isotopes.items():
-                print(f"\n  Isotope: {zaid} ({data['ace_file']})")
-                print(f"  {'-' * 50}")
+                _logger.info(f"\n  Isotope: {zaid} ({data['ace_file']})")
+                _logger.info(f"  {'-' * 50}")
                 
                 # MT numbers that were perturbed
                 if data['mt_perturbed']:
-                    print(f"  ► Perturbed MT numbers: {', '.join(map(str, data['mt_perturbed']))}")
+                    _logger.info(f"  ► Perturbed MT numbers: {', '.join(map(str, data['mt_perturbed']))}")
                 else:
-                    print(f"  ► No MT numbers were perturbed")
+                    _logger.info(f"  ► No MT numbers were perturbed")
                 
-                # MT numbers that were removed and why
-                if data['removed_mts']:
-                    print(f"  ► Removed MT numbers:")
-                    for mt, reason in sorted(data['removed_mts'].items()):
-                        print(f"    • MT={mt}: {reason}")
+                # Autofix information (for medium/hard levels)
+                autofix_info = data.get('autofix_info', {})
+                if autofix_info.get('level') in ['medium', 'hard']:
+                    autofix_lines = []
+                    if autofix_info.get('removed_mts'):
+                        autofix_lines.append(f"removed MTs {', '.join(map(str, sorted(autofix_info['removed_mts'])))}")
+                    if autofix_info.get('removed_correlations'):
+                        corr_pairs = autofix_info['removed_correlations']
+                        if len(corr_pairs) <= 3:
+                            corr_str = ', '.join(f"({a},{b})" for a, b in corr_pairs)
+                        else:
+                            corr_str = f"({corr_pairs[0][0]},{corr_pairs[0][1]}), ({corr_pairs[1][0]},{corr_pairs[1][1]}), ... (+{len(corr_pairs)-2} more)"
+                        autofix_lines.append(f"removed correlations {corr_str}")
+                    
+                    if autofix_lines:
+                        _logger.info(f"  ► Autofix (level='{autofix_info['level']}'): {'; '.join(autofix_lines)}")
+
+                # MT numbers that were removed and why (excluding autofix info already shown above)
+                other_removed = {mt: reason for mt, reason in data['removed_mts'].items() 
+                               if not reason.startswith("Removed during covariance autofix")}
+                if other_removed:
+                    _logger.info(f"  ► Other removed MT numbers:")
+                    for mt, reason in sorted(other_removed.items()):
+                        _logger.info(f"    • MT={mt}: {reason}")
                 
                 # Warnings if any
                 if data['warnings']:
-                    print(f"  ► Warnings:")
+                    _logger.info(f"  ► Warnings:")
                     for warning in data['warnings']:
-                        print(f"    • {warning}")
-        
+                        _logger.info(f"    • {warning}")
+
         # Then report isotopes that were skipped completely
         if skipped_isotopes or any(not data['mt_perturbed'] for data in summary_data.values()):
-            print("\n  ISOTOPES WITH NO PERTURBATION:")
-            print(f"  {'-' * 50}")
+            _logger.info("\n  ISOTOPES WITH NO PERTURBATION:")
+            _logger.info(f"  {'-' * 50}")
             
             # First report explicitly skipped isotopes
             for zaid, reason in sorted(skipped_isotopes.items()):
                 if zaid in summary_data:
-                    print(f"  Isotope: {zaid} ({summary_data[zaid]['ace_file']})")
-                    print(f"    • Reason: {reason}")
+                    _logger.info(f"  Isotope: {zaid} ({summary_data[zaid]['ace_file']})")
+                    _logger.info(f"    • Reason: {reason}")
             
             # Then report isotopes that were processed but had no MTs perturbed
             for zaid, data in sorted(summary_data.items()):
                 if zaid not in skipped_isotopes and not data['mt_perturbed']:
-                    print(f"  Isotope: {zaid} ({data['ace_file']})")
+                    _logger.info(f"  Isotope: {zaid} ({data['ace_file']})")
                     if data['warnings']:
                         for warning in data['warnings']:
-                            print(f"    • Reason: {warning}")
+                            _logger.info(f"    • Reason: {warning}")
                     else:
-                        print(f"    • Reason: No eligible MT numbers to perturb")
+                        _logger.info(f"    • Reason: No eligible MT numbers to perturb")
+
+    _logger.info(f"\n{separator}")
     
-    print(f"\n{separator}")
+    # Console: Final summary
+    processed_count = len([zaid for zaid in summary_data.keys() if zaid not in skipped_isotopes])
+    skipped_count = len(skipped_isotopes)
+    
+    print(f"\n[INFO] Job completed!")
+    print(f"[INFO] Processed: {processed_count} isotope(s)")
+    print(f"[INFO] Skipped: {skipped_count} isotope(s)")
+    print(f"[INFO] Detailed log saved to: {log_file}")
 
 
 def apply_perturbation_factor_to_ace(ace, sample, sample_index, energy_grid, mt_numbers, verbose=True):
     """Apply per-group perturbation factors to ACE, and list which MTs were actually perturbed."""
+    logger = _get_logger()
+    
     n_groups = len(energy_grid) - 1
     if sample.shape[0] != len(mt_numbers) * n_groups:
         raise ValueError(f"sample length {sample.shape[0]} ≠ {len(mt_numbers)}×{n_groups}")
@@ -541,9 +779,9 @@ def apply_perturbation_factor_to_ace(ace, sample, sample_index, energy_grid, mt_
     # remove duplicates and sort for neatness
     perturbed_mts = sorted(set(perturbed_mts))
 
-    if verbose:
-        print(f"[ACE] [PERTURB] Applying factors for sample #{sample_index+1:04d}")
-        print(f"  Perturbed MT numbers: {perturbed_mts}")
+    if verbose and logger:
+        logger.info(f"[ACE] [PERTURB] Applying factors for sample #{sample_index+1:04d}")
+        logger.info(f"  Perturbed MT numbers: {perturbed_mts}")
         
     return perturbed_mts
 
@@ -552,10 +790,12 @@ def _apply_factors_to_mt(ace, mt, factors, boundaries, verbose=True):
     """Multiply each entry.value by factors[group] for this mt,
     **unless any factor is non-positive**.
     """
+    logger = _get_logger()
+    
     if (factors <= 0).any():
         bad = ", ".join(f"{f:+.3e}" for f in factors if f <= 0)
-        if verbose:
-            print(f"  [WARNING] MT={mt}: negative or zero factors detected ({bad}). Reaction not perturbed.")
+        if verbose and logger:
+            logger.warning(f"  [WARNING] MT={mt}: negative or zero factors detected ({bad}). Reaction not perturbed.")
         return  # leave this reaction unperturbed
 
     reac       = ace.cross_section.reaction[mt]
@@ -596,13 +836,3 @@ def _write_sample_summary(
                 f.write(f"{mt:<3}\t{lo:.12e}\t{hi:.12e}\t{fac:.12e}\n")
         f.write("\n")
 
-
-def _collect_master_xsdir(xsdir_file: str, output_dir: str):
-    """Gather all per-sample xsdir files into *output_dir/xsdir/*."""
-    orig = os.path.splitext(os.path.basename(xsdir_file))[0]
-    dest = os.path.join(output_dir, "xsdir")
-    os.makedirs(dest, exist_ok=True)
-
-    pattern = os.path.join(output_dir, f"{orig}_*")
-    for xf in glob.glob(pattern):
-        shutil.move(xf, os.path.join(dest, os.path.basename(xf)))

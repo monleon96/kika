@@ -34,7 +34,6 @@ class SubSubsectionRecord:
     col_energies: List[float] = field(default_factory=list)   # NEC column energies
     rect_matrix:   List[float] = field(default_factory=list)   # NER×NEC matrix values
 
-
 @dataclass
 class SubSubsection:
     """Sub-subsection for a particular (L,L1) pair"""
@@ -43,7 +42,6 @@ class SubSubsection:
     lct: int = None      # Frame of reference flag
     ni: int = None       # Number of LIST records
     records: List[SubSubsectionRecord] = field(default_factory=list)  # LIST records in this sub-subsection
-
 
 @dataclass
 class Subsection:
@@ -576,8 +574,13 @@ class MF34MT(MT):
             for subsub_idx, sub_subsec in enumerate(subsection.sub_subsections):
                 l = sub_subsec.l
                 l1 = sub_subsec.l1
-                if debug: print(f"    DEBUG: Processing sub-subsection {subsub_idx+1}/{len(subsection.sub_subsections)}: L={l}, L1={l1}, NI={sub_subsec.ni}")
-
+                is_variance_matrix = (l == l1)  # Only same L coefficients represent variances
+                if debug: 
+                    print(f"    DEBUG: Processing sub-subsection {subsub_idx+1}/{len(subsection.sub_subsections)}: L={l}, L1={l1}, NI={sub_subsec.ni}")
+                    if is_variance_matrix:
+                        print(f"           This is a VARIANCE matrix (L=L1={l}) - diagonal should be non-negative")
+                    else:
+                        print(f"           This is a COVARIANCE matrix (L≠L1) - diagonal can be negative")
 
                 if not sub_subsec.records:
                     if debug: print("      DEBUG: Skipping sub-subsection - No LIST records.")
@@ -617,7 +620,31 @@ class MF34MT(MT):
                              native_grids_map[idx] = (native_grid, native_col_grid) # Store grids
                              component_matrices.append((idx, component_matrix, is_lb6)) # Store matrix and type
                              if debug: print(f"        DEBUG: Decoded component {idx+1} (LB={record.lb}), Native NE={len(native_grid)}")
-
+                             
+                             # Check for problematic diagonals in decoded component
+                             if debug:
+                                 diag_vals = np.diag(component_matrix)
+                                 if is_variance_matrix:
+                                     # For variance matrices (L=L1), diagonal should be non-negative
+                                     neg_diag_indices = np.where(diag_vals < 0)[0]
+                                     if len(neg_diag_indices) > 0:
+                                         print(f"        DEBUG: *** COMPONENT {idx+1} (LB={record.lb}) HAS NEGATIVE VARIANCE DIAGONALS! ***")
+                                         print(f"               This is PROBLEMATIC for variance matrix (L=L1={l})")
+                                         print(f"               Negative diagonal indices: {neg_diag_indices}")
+                                         print(f"               Negative diagonal values: {diag_vals[neg_diag_indices]}")
+                                         print(f"               Min diagonal value: {np.min(diag_vals)}")
+                                         print(f"               Max diagonal value: {np.max(diag_vals)}")
+                                     else:
+                                         print(f"        DEBUG: Component {idx+1} variance diagonal OK - min: {np.min(diag_vals):.2e}, max: {np.max(diag_vals):.2e}")
+                                 else:
+                                     # For covariance matrices (L≠L1), negative diagonals are allowed
+                                     neg_diag_indices = np.where(diag_vals < 0)[0]
+                                     if len(neg_diag_indices) > 0:
+                                         print(f"        DEBUG: Component {idx+1} (LB={record.lb}) has negative covariance diagonals (EXPECTED for L≠L1)")
+                                         print(f"               Negative diagonal count: {len(neg_diag_indices)}")
+                                         print(f"               Diagonal range: [{np.min(diag_vals):.2e}, {np.max(diag_vals):.2e}]")
+                                     else:
+                                         print(f"        DEBUG: Component {idx+1} covariance diagonal - min: {np.min(diag_vals):.2e}, max: {np.max(diag_vals):.2e}")
 
                     except ValueError as e: # Catch decoding errors (e.g., NE<2, size mismatch)
                         print(f"Error decoding record {idx+1} (LB={record.lb}) in sub-subsection (L={l}, L1={l1}): {e}")
@@ -644,9 +671,9 @@ class MF34MT(MT):
                 # 4. Project each component onto the Union Grid and Sum
                 start_sum = time.time()
                 if debug: print(f"      DEBUG: Projecting and summing {len(component_matrices)} components...")
-                for idx, component_matrix, is_lb6 in component_matrices:
+                for comp_idx, (idx, component_matrix, is_lb6) in enumerate(component_matrices):
                     try:
-                        if debug: print(f"        DEBUG: Projecting component {idx+1}...")
+                        if debug: print(f"        DEBUG: Projecting component {idx+1} (#{comp_idx+1}/{len(component_matrices)})...")
                         native_grid, native_col_grid = native_grids_map[idx]
                         projected_component = self._project_matrix_piecewise_constant(
                             component_matrix,
@@ -656,14 +683,83 @@ class MF34MT(MT):
                             native_col_point_grid=native_col_grid,
                             debug=debug # Pass debug flag down
                         )
+                        
+                        # Check for problematic diagonals after projection
+                        if debug:
+                            proj_diag_vals = np.diag(projected_component)
+                            if is_variance_matrix:
+                                # For variance matrices (L=L1), diagonal should be non-negative
+                                neg_proj_indices = np.where(proj_diag_vals < 0)[0]
+                                if len(neg_proj_indices) > 0:
+                                    print(f"        DEBUG: *** PROJECTED COMPONENT {idx+1} HAS NEGATIVE VARIANCE DIAGONALS! ***")
+                                    print(f"               This is PROBLEMATIC for variance matrix (L=L1={l})")
+                                    print(f"               Negative diagonal indices: {neg_proj_indices}")
+                                    print(f"               Negative diagonal values: {proj_diag_vals[neg_proj_indices]}")
+                                    print(f"               Min projected diagonal: {np.min(proj_diag_vals)}")
+                                    print(f"               Max projected diagonal: {np.max(proj_diag_vals)}")
+                                else:
+                                    print(f"        DEBUG: Projected component {idx+1} variance diagonal OK - min: {np.min(proj_diag_vals):.2e}, max: {np.max(proj_diag_vals):.2e}")
+                            else:
+                                # For covariance matrices (L≠L1), negative diagonals are allowed
+                                neg_proj_indices = np.where(proj_diag_vals < 0)[0]
+                                if len(neg_proj_indices) > 0:
+                                    print(f"        DEBUG: Projected component {idx+1} has negative covariance diagonals (EXPECTED for L≠L1)")
+                                    print(f"               Negative diagonal count: {len(neg_proj_indices)}")
+                                    print(f"               Diagonal range: [{np.min(proj_diag_vals):.2e}, {np.max(proj_diag_vals):.2e}]")
+                                else:
+                                    print(f"        DEBUG: Projected component {idx+1} covariance diagonal - min: {np.min(proj_diag_vals):.2e}, max: {np.max(proj_diag_vals):.2e}")
+                        
+                        # Check total matrix diagonal before and after adding this component
+                        if debug:
+                            total_diag_before = np.diag(total_cov_matrix).copy()
+                            min_before = np.min(total_diag_before)
+                            max_before = np.max(total_diag_before)
+                        
                         # 5. Add to total covariance matrix
                         total_cov_matrix += projected_component
+                        
+                        # Check total matrix diagonal after adding this component
+                        if debug:
+                            total_diag_after = np.diag(total_cov_matrix)
+                            min_after = np.min(total_diag_after)
+                            max_after = np.max(total_diag_after)
+                            
+                            print(f"        DEBUG: Total matrix diagonal after adding component {idx+1}:")
+                            print(f"               Before: min={min_before:.2e}, max={max_before:.2e}")
+                            print(f"               After:  min={min_after:.2e}, max={max_after:.2e}")
+                            
+                            if is_variance_matrix:
+                                # Only check for problematic negatives in variance matrices
+                                neg_total_indices = np.where(total_diag_after < 0)[0]
+                                if len(neg_total_indices) > 0:
+                                    print(f"        DEBUG: *** TOTAL VARIANCE MATRIX NOW HAS {len(neg_total_indices)} NEGATIVE DIAGONALS! ***")
+                                    print(f"               This is PROBLEMATIC for variance matrix (L=L1={l})")
+                                    print(f"               First few negative indices: {neg_total_indices[:10]}")
+                                    print(f"               First few negative values: {total_diag_after[neg_total_indices[:10]]}")
+                                    
+                                    # Check if this component caused new negative diagonals
+                                    newly_negative = np.where((total_diag_before >= 0) & (total_diag_after < 0))[0]
+                                    if len(newly_negative) > 0:
+                                        print(f"        DEBUG: *** COMPONENT {idx+1} CAUSED {len(newly_negative)} NEW NEGATIVE VARIANCE DIAGONALS! ***")
+                                        print(f"               Newly negative indices: {newly_negative[:10]}")
+                                        print(f"               Values before: {total_diag_before[newly_negative[:10]]}")
+                                        print(f"               Values after: {total_diag_after[newly_negative[:10]]}")
+                                        print(f"               Component contribution: {proj_diag_vals[newly_negative[:10]]}")
+                                else:
+                                    print(f"        DEBUG: Total variance matrix diagonal still OK after component {idx+1}")
+                            else:
+                                # For covariance matrices, just report the state without alarm
+                                neg_total_indices = np.where(total_diag_after < 0)[0]
+                                if len(neg_total_indices) > 0:
+                                    print(f"        DEBUG: Total covariance matrix has {len(neg_total_indices)} negative diagonals (EXPECTED for L≠L1)")
+                                else:
+                                    print(f"        DEBUG: Total covariance matrix has no negative diagonals")
+                                
                     except Exception as e:
                          print(f"Error projecting component {idx} in sub-subsection (L={l}, L1={l1}): {e}")
 
                 end_sum = time.time()
                 if debug: print(f"      DEBUG: Projection and summation time: {end_sum - start_sum:.4f}s")
-
 
                 # Sanity Checks
                 # 1. Size
@@ -671,12 +767,33 @@ class MF34MT(MT):
                      print(f"Error: Final matrix shape {total_cov_matrix.shape} != expected ({union_m}, {union_m}) for L={l}, L1={l1}")
                      continue # Skip adding this matrix
 
-                # 2. Diagonal Positivity (allow small tolerance for float errors)
-                if not np.all(np.diag(total_cov_matrix) >= -1e-9):
+                # 2. Diagonal Positivity - only enforce for variance matrices (L=L1)
+                if is_variance_matrix and not np.all(np.diag(total_cov_matrix) >= -1e-9):
                      neg_diags = np.where(np.diag(total_cov_matrix) < -1e-9)[0]
-                     print(f"Warning: Negative diagonal elements found in final matrix for L={l}, L1={l1} at indices {neg_diags}. Clamping to zero.")
+                     print(f"Warning: Negative diagonal elements found in VARIANCE matrix for L=L1={l} at indices {neg_diags}. Clamping to zero.")
+                     
+                     if debug:
+                         final_diag = np.diag(total_cov_matrix)
+                         print(f"        DEBUG: *** FINAL VARIANCE MATRIX NEGATIVE DIAGONAL SUMMARY ***")
+                         print(f"               This is PROBLEMATIC - variance matrix should have non-negative diagonal")
+                         print(f"               Total negative diagonals: {len(neg_diags)}")
+                         print(f"               Most negative value: {np.min(final_diag)}")
+                         print(f"               Negative values range: [{np.min(final_diag[neg_diags]):.2e}, {np.max(final_diag[neg_diags]):.2e}]")
+                         print(f"               Matrix size: {total_cov_matrix.shape}")
+                         print(f"               Sub-subsection: L=L1={l}")
+                         print(f"               Number of components summed: {len(component_matrices)}")
+                     
                      total_cov_matrix[np.diag_indices_from(total_cov_matrix)] = np.maximum(np.diag(total_cov_matrix), 0)
-
+                elif not is_variance_matrix and debug:
+                    # For covariance matrices, just report final state without clamping
+                    final_diag = np.diag(total_cov_matrix)
+                    neg_diags = np.where(final_diag < 0)[0]
+                    if len(neg_diags) > 0:
+                        print(f"        DEBUG: Final covariance matrix (L={l}, L1={l1}) has {len(neg_diags)} negative diagonals (EXPECTED)")
+                        print(f"               Diagonal range: [{np.min(final_diag):.2e}, {np.max(final_diag):.2e}]")
+                    else:
+                        print(f"        DEBUG: Final covariance matrix (L={l}, L1={l1}) has no negative diagonals")
+                        print(f"               Diagonal range: [{np.min(final_diag):.2e}, {np.max(final_diag):.2e}]")
 
                 # Add the final aggregated MxM matrix for this sub-subsection (L, L1)
                 if debug: print(f"    DEBUG: Adding final matrix for L={l}, L1={l1} to MF34CovMat.")

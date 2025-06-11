@@ -2,10 +2,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from typing import Union, Sequence, List, Optional, Tuple
 from mcnpy.cov.covmat import CovMat
-from matplotlib.colors import TwoSlopeNorm, LinearSegmentedColormap
 from mcnpy._plot_settings import setup_plot_style, format_axes, finalize_plot
 from mcnpy._constants import MT_TO_REACTION
 from mcnpy._utils import zaid_to_symbol
+
+
 
 def plot_uncertainties(
     covmat: CovMat,
@@ -19,8 +20,9 @@ def plot_uncertainties(
     dpi: int = 300,
     font_family: str = 'serif',
     legend_loc: str = 'best',
+    show: bool = True,
     **step_kwargs
-) -> plt.Axes:
+) -> plt.Figure:
     """
     Step-plot the 1-sigma uncertainties for one or more (ZAID, MT) pairs
     across all energy groups.
@@ -47,8 +49,15 @@ def plot_uncertainties(
         font family for text elements ('serif', 'sans-serif', etc.)
     legend_loc
         location for the legend placement
+    show : bool
+        Whether to display the figure (default: True)
     step_kwargs
         forwarded to Axes.step (e.g. where="mid", color=...)
+        
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure containing the plot
     """
     # normalize inputs to lists
     zaids = [zaid] if isinstance(zaid, int) else list(zaid)
@@ -198,10 +207,11 @@ def plot_uncertainties(
         y_max=y_max if not np.isinf(y_max) else None
     )
     
-    # Ensure figure is displayed
-    finalize_plot(fig)
+    # Ensure figure is displayed only if requested
+    if show:
+        finalize_plot(fig)
     
-    return ax
+    return fig
 
 def compare_uncertainties(
     covmats: List[CovMat],
@@ -217,8 +227,9 @@ def compare_uncertainties(
     font_family: str = 'serif',
     legend_loc: str = 'best',
     title: Optional[str] = None,
+    show: bool = True,
     **step_kwargs
-) -> plt.Axes:
+) -> plt.Figure:
     """
     Compare uncertainty plots for the same ZAID from multiple CovMat objects.
 
@@ -249,13 +260,15 @@ def compare_uncertainties(
         location for the legend placement
     title
         optional custom title for the plot
+    show : bool
+        Whether to display the figure (default: True)
     step_kwargs
         forwarded to Axes.step (e.g. where="mid", color=...)
 
     Returns
     -------
-    plt.Axes
-        The matplotlib axes containing the plot
+    plt.Figure
+        The matplotlib figure containing the plot
 
     Raises
     ------
@@ -398,10 +411,10 @@ def compare_uncertainties(
                 mt_desc = f" ({MT_TO_REACTION[mts[0]]})"
         except (ImportError, IndexError):
             pass
-        title = f"{el_symbol}, MT={mts[0]}{mt_desc} Uncertainty Comparison"
+        title = f"{el_symbol}, MT={mts[0]}{mt_desc}"
     elif title is None:
         # If different MTs, just use the element symbol
-        title = f"{el_symbol} Uncertainty Comparison"
+        title = f"{el_symbol}"
     
     # Format the axes
     format_axes(
@@ -416,132 +429,306 @@ def compare_uncertainties(
         y_max=y_max if not np.isinf(y_max) else None
     )
     
-    # Ensure figure is displayed
-    finalize_plot(fig)
-    
-    return ax
-
-
-
-def plot_covariance_heatmap(
-    covmat: "CovMat",
-    zaid: int,
-    mt: Union[int, Sequence[int]],
-    *,
-    ax: plt.Axes = None,
-    style: str = "default",
-    figsize: Tuple[float, float] = (6, 6),
-    dpi: int = 300,
-    font_family: str = "serif",
-    show_colorbar: bool = True,
-    cmap=None,
-    vmax: float | None = None,
-    vmin: float | None = None,
-    cbar_label: str = "Covariance",
-    **imshow_kwargs
-) -> plt.Axes:
-    """
-    Heat-map the energy-group covariance for one isotope and one or more
-    reactions (MT list).  Cross-correlation blocks between the reactions
-    are included automatically.
-
-    * Negative values appear red, zero is white, positive values appear green.
-    * If a single MT is supplied the plot is just the G × G block.
-    """
-
-    # ------------------------------------------------------------
-    # 1. normalise MT input and isolate the isotope
-    # ------------------------------------------------------------
-    mts: List[int] = [mt] if isinstance(mt, int) else list(mt)
-    if len(mts) == 0:
-        raise ValueError("The MT list must contain at least one reaction number.")
-
-    iso_cov = covmat.filter_by_isotope(zaid)        # single-isotope view
-    pairs   = iso_cov._get_param_pairs()
-    G       = iso_cov.num_groups
-
-    # confirm every requested MT exists and collect their indices
-    mt_indices = []
-    for m in mts:
-        if (zaid, m) not in pairs:
-            raise ValueError(f"(ZAID, MT)=({zaid}, {m}) not present in CovMat")
-        mt_indices.append(pairs.index((zaid, m)))
-
-    # rows/cols to keep in the combined matrix, preserving user order
-    rows = []
-    for idx in mt_indices:
-        rows.extend(range(idx * G, (idx + 1) * G))
-    M = iso_cov.covariance_matrix[np.ix_(rows, rows)]   # square sub-matrix
-
-    # ------------------------------------------------------------
-    # 2. set up figure / axes
-    # ------------------------------------------------------------
-    imshow_kwargs["_func"] = "imshow"
-    imshow_kwargs["ax"]    = ax
-    if "setup_plot_style" in globals():
-        ps  = setup_plot_style(style=style, figsize=figsize, dpi=dpi,
-                               font_family=font_family, **imshow_kwargs)
-        ax  = ps["ax"]
-        fig = ps["_fig"]
-    else:
-        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-
-    # ------------------------------------------------------------
-    # 3. colour map centred on zero
-    # ------------------------------------------------------------
-    if cmap is None:
-        cmap = LinearSegmentedColormap.from_list(
-            "red_white_green",
-            ["#8b0000", "#ffffff", "#006400"],
-            N=256
-        )
-    if vmax is None or vmin is None:
-        absmax = np.nanmax(np.abs(M))
-        vmax   = absmax if vmax is None else vmax
-        vmin   = -absmax if vmin is None else vmin
-    norm = TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=vmax)
-
-    # ------------------------------------------------------------
-    # 4. draw the matrix
-    # ------------------------------------------------------------
-    im = ax.imshow(
-        M,
-        cmap=cmap,
-        norm=norm,
-        origin="lower",
-        interpolation="nearest",
-        **imshow_kwargs
-    )
-
-    # thin grid lines at every energy-group boundary
-    block_size = G
-    matrix_size = len(mts) * G
-    for g in range(0, matrix_size + 1, block_size):
-        ax.axhline(g - 0.5, color="black", lw=0.2)
-        ax.axvline(g - 0.5, color="black", lw=0.2)
-
-    # optional colour-bar
-    if show_colorbar:
-        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label(cbar_label)
-
-    # ------------------------------------------------------------
-    # 5. tidy labels and layout
-    # ------------------------------------------------------------
-    if style not in {"paper", "publication"}:
-        mt_part = ", ".join(str(m) for m in mts) if len(mts) > 1 else f"{mts[0]}"
-        ax.set_title(f"{zaid_to_symbol(zaid)}   MT: {mt_part}")
-
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-    if "format_axes" in globals():
-        format_axes(ax=ax, style=style, use_log_scale=False,
-                    is_energy_axis=False, y_label="", title=None,
-                    legend_loc="best")
-    if "finalize_plot" in globals():
+    # Ensure figure is displayed only if requested
+    if show:
         finalize_plot(fig)
-    else:
-        fig.tight_layout()
+    
+    return fig
 
-    return ax
+
+def plot_multigroup_xs(
+    covmat: CovMat,
+    zaid: Union[int, Sequence[int]],
+    mt: Union[int, Sequence[int]],
+    ax: plt.Axes = None,
+    *,
+    energy_range: Optional[Tuple[float, float]] = None,
+    show_uncertainties: bool = False,
+    sigma: float = 1.0,
+    style: str = 'default',
+    figsize: Tuple[float, float] = (8, 5),
+    dpi: int = 300,
+    font_family: str = 'serif',
+    legend_loc: str = 'best',
+    show: bool = True,
+    **step_kwargs
+) -> plt.Figure:
+    """
+    Step-plot the multigroup cross sections for one or more (ZAID, MT) pairs
+    across all energy groups, with optional uncertainty shading.
+
+    Parameters
+    ----------
+    covmat : CovMat
+        CovMat instance containing cross section data
+    zaid : int or sequence of int
+        Single ZAID or list of ZAIDs
+    mt : int or sequence of int
+        Single MT or list of MTs
+    ax : plt.Axes, optional
+        Optional matplotlib Axes to draw into
+    energy_range : tuple, optional
+        Optional tuple (min_energy, max_energy) to limit the plot range
+    show_uncertainties : bool
+        If True, show uncertainty bands as shaded areas around the cross sections
+    sigma : float
+        Number of standard deviations for uncertainty bands (default: 1.0)
+    style : str
+        Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
+    figsize : tuple
+        Figure size in inches (width, height)
+    dpi : int
+        Dots per inch for figure resolution
+    font_family : str
+        Font family for text elements ('serif', 'sans-serif', etc.)
+    legend_loc : str
+        Location for the legend placement
+    show : bool
+        Whether to display the figure (default: True)
+    **step_kwargs
+        Additional arguments forwarded to Axes.step (e.g. where="mid", color=...)
+
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure containing the plot
+
+    Raises
+    ------
+    ValueError
+        If requested ZAID/MT combinations are not found in the cross_sections data
+    """
+    # Normalize inputs to lists
+    zaids = [zaid] if isinstance(zaid, int) else list(zaid)
+    mts = [mt] if isinstance(mt, int) else list(mt)
+    
+    # If either list is empty, default to all present in covmat cross sections
+    if not isinstance(zaid, int) and len(zaids) == 0:
+        zaids = sorted(set(iso for (iso, _) in covmat.cross_sections.keys()))
+    if not isinstance(mt, int) and len(mts) == 0:
+        mts = sorted(set(rxn for (_, rxn) in covmat.cross_sections.keys()))
+    
+    # Check if we have any cross section data
+    if not covmat.cross_sections:
+        raise ValueError("No cross section data found in CovMat object")
+    
+    # Configure plot style and get plotting utilities
+    step_kwargs['ax'] = ax
+    step_kwargs['_func'] = 'step'  # Hint for setup_plot_style
+    plot_settings = setup_plot_style(
+        style=style, figsize=figsize, dpi=dpi, font_family=font_family, **step_kwargs
+    )
+    
+    # Extract settings from the returned dict
+    ax = plot_settings['ax']
+    colors = plot_settings.get('_colors', [])
+    linestyles = plot_settings.get('_linestyles', [])
+    fig = plot_settings.get('_fig')
+    
+    # Create dictionaries to map MT to color and ZAID to line style
+    mt_to_color = {m: colors[i % len(colors)] for i, m in enumerate(sorted(set(mts)))}
+    zaid_to_linestyle = {z: linestyles[i % len(linestyles)] for i, z in enumerate(sorted(set(zaids)))}
+    
+    # Track if we've determined the x-axis type and values
+    energy_grid = None
+    xs = None
+    use_log_scale = False
+    use_y_log_scale = False
+    
+    # Store min/max y values for axis scaling
+    y_min, y_max = float('inf'), float('-inf')
+    
+    # Get energy grid setup
+    G = covmat.num_groups
+    if G == 0:
+        raise ValueError("Number of energy groups is zero")
+    
+    # Set up x-axis values - use consistent approach with energy bin centers
+    if covmat.energy_grid is not None and len(covmat.energy_grid) == G + 1:
+        # Use mid-point of energy bins for plotting
+        energy_grid = [(covmat.energy_grid[i] + covmat.energy_grid[i+1]) / 2 for i in range(G)]
+        xs = energy_grid
+        use_log_scale = True
+    else:
+        xs = list(range(1, G+1))  # group indices
+    
+    # Filter by energy range if specified and energy_grid is available
+    energy_mask = slice(None)  # Default: use all points
+    if energy_range is not None and energy_grid is not None:
+        min_e, max_e = energy_range
+        energy_mask = np.where((np.array(energy_grid) >= min_e) & 
+                              (np.array(energy_grid) <= max_e))[0]
+        if len(energy_mask) == 0:
+            raise ValueError(f"No energy points found in range {min_e} to {max_e}")
+    
+    # Store uncertainty data for proper alignment
+    uncertainty_data = {}
+    
+    # Plot for each ZAID/MT combination
+    for Z in zaids:
+        for M in mts:
+            # Check if this combination exists in cross_sections
+            if (Z, M) not in covmat.cross_sections:
+                print(f"Warning: Cross section for ZAID={Z}, MT={M} not found, skipping")
+                continue
+            
+            # Get cross section data
+            xs_data = covmat.cross_sections[(Z, M)]
+            if len(xs_data) != G:
+                print(f"Warning: Cross section data length ({len(xs_data)}) doesn't match num_groups ({G}) for ZAID={Z}, MT={M}")
+                continue
+            
+            # Apply energy filter
+            if isinstance(energy_mask, slice):
+                filtered_xs = xs[energy_mask]
+                filtered_xs_data = xs_data[energy_mask]
+            else:
+                filtered_xs = [xs[i] for i in energy_mask]
+                filtered_xs_data = [xs_data[i] for i in energy_mask]
+            
+            # Convert to numpy arrays for easier manipulation
+            filtered_xs = np.array(filtered_xs)
+            filtered_xs_data = np.array(filtered_xs_data)
+            
+            # Update min/max for y-axis scaling
+            if len(filtered_xs_data) > 0 and np.any(filtered_xs_data > 0):
+                positive_data = filtered_xs_data[filtered_xs_data > 0]
+                y_min = min(y_min, np.min(positive_data))
+                y_max = max(y_max, np.max(positive_data))
+            
+            # Start with original kwargs for this curve
+            curve_kwargs = {k: v for k, v in step_kwargs.items() 
+                           if not k.startswith('_') and k != 'ax'}
+            
+            # Assign color based on MT and line style based on ZAID
+            if 'color' not in step_kwargs:
+                curve_kwargs['color'] = mt_to_color[M]
+            
+            if 'linestyle' not in step_kwargs:
+                curve_kwargs['linestyle'] = zaid_to_linestyle[Z]
+            
+            # Format element symbol and MT (with reaction name if available)
+            el_symbol = zaid_to_symbol(Z)
+            reaction_name = MT_TO_REACTION.get(M, "")
+            
+            # Format labels consistently
+            if style == 'paper' or style == 'publication':
+                label = f"{el_symbol}, MT={M} ({reaction_name})" if reaction_name else f"{el_symbol}, MT={M}"
+            else:
+                label = f"{el_symbol}-{M}"
+                if reaction_name:
+                    label += f" ({reaction_name})"
+            
+            # Add sigma information to label if showing uncertainties
+            if show_uncertainties and sigma != 1.0:
+                label += f" (±{sigma:.1f}σ)"
+            elif show_uncertainties:
+                label += " (±1σ)"
+            
+            # Plot the cross section - force where='mid' for step plots
+            line_color = curve_kwargs.get('color', mt_to_color[M])
+            curve_kwargs['where'] = 'mid'  # Ensure consistent step positioning
+            ax.step(filtered_xs, filtered_xs_data, label=label, **curve_kwargs)
+            
+            # Prepare uncertainty data if requested
+            if show_uncertainties:
+                try:
+                    # Filter the covmat to get uncertainty for this isotope
+                    iso_covmat = covmat.filter_by_isotope(Z)
+                    pairs = iso_covmat._get_param_pairs()
+                    
+                    if (Z, M) in pairs:
+                        # Get the uncertainty data
+                        sigma_index = pairs.index((Z, M))
+                        diag = np.sqrt(np.diag(iso_covmat.covariance_matrix))
+                        rel_sigma = diag[sigma_index*G : (sigma_index+1)*G]
+                        
+                        # Apply energy filter to sigma
+                        if isinstance(energy_mask, slice):
+                            filtered_sigma = rel_sigma[energy_mask]
+                        else:
+                            filtered_sigma = [rel_sigma[i] for i in energy_mask]
+                        
+                        filtered_sigma = np.array(filtered_sigma)
+                        
+                        # Store for later plotting to ensure proper alignment
+                        uncertainty_data[(Z, M)] = {
+                            'xs': filtered_xs.copy(),
+                            'xs_data': filtered_xs_data.copy(),
+                            'sigma': filtered_sigma.copy(),
+                            'color': line_color
+                        }
+                        
+                except Exception as e:
+                    print(f"Warning: Could not prepare uncertainties for ZAID={Z}, MT={M}: {str(e)}")
+    
+    # Now add all uncertainty bands after the main plots for proper layering
+    if show_uncertainties:
+        for (Z, M), unc_data in uncertainty_data.items():
+            try:
+                # Calculate upper and lower bounds (n-sigma)
+                # For cross sections, uncertainty is relative, so sigma represents relative uncertainty
+                upper_bound = unc_data['xs_data'] * (1 + sigma * unc_data['sigma'])
+                lower_bound = unc_data['xs_data'] * (1 - sigma * unc_data['sigma'])
+                
+                # Ensure lower bound doesn't go negative
+                lower_bound = np.maximum(lower_bound, np.zeros_like(lower_bound))
+                
+                # Update y-axis limits to include uncertainty bounds
+                if len(upper_bound) > 0 and np.any(upper_bound > 0):
+                    positive_upper = upper_bound[upper_bound > 0]
+                    y_max = max(y_max, np.max(positive_upper))
+                
+                # Add shaded uncertainty region with consistent step behavior
+                ax.fill_between(unc_data['xs'], lower_bound, upper_bound, 
+                               color=unc_data['color'], alpha=0.2, step='mid',
+                               interpolate=False)  # Disable interpolation for step consistency
+                
+            except Exception as e:
+                print(f"Warning: Could not add uncertainties for ZAID={Z}, MT={M}: {str(e)}")
+    
+    # Set y-axis to log scale if we have positive data spanning multiple orders of magnitude
+    if y_min > 0 and y_max > y_min and (y_max / y_min) > 100:
+        ax.set_yscale('log')
+        use_y_log_scale = True
+    
+    # Generate title if needed for non-paper styles
+    title = None
+    if style != 'paper' and style != 'publication':
+        title_parts = []
+        if len(zaids) == 1:
+            title_parts.append(f"{zaid_to_symbol(zaids[0])}")
+        if len(mts) == 1:
+            mt_val = mts[0]
+            reaction_name = MT_TO_REACTION.get(mt_val, "")
+            mt_part = f"MT={mt_val}"
+            if reaction_name:
+                mt_part += f" ({reaction_name})"
+            title_parts.append(mt_part)
+        if title_parts:
+            title = " ".join(title_parts) + " Cross Sections"
+        else:
+            title = "Multigroup Cross Sections"
+    
+    # Set appropriate y-label
+    y_label = "Cross Section (barns)"
+    
+    # Format the axes
+    format_axes(
+        ax=ax,
+        style=style,
+        use_log_scale=use_log_scale,
+        is_energy_axis=(energy_grid is not None),
+        y_label=y_label,
+        title=title,
+        legend_loc=legend_loc,
+        y_min=y_min if not np.isinf(y_min) else None,
+        y_max=y_max if not np.isinf(y_max) else None,
+        use_y_log_scale=use_y_log_scale
+    )
+    
+    # Ensure figure is displayed only if requested
+    if show:
+        finalize_plot(fig)
+    
+    return fig

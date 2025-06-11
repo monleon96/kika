@@ -453,7 +453,7 @@ def _parse_mf4_mt_mixed(lines: List[str], za: float, awr: float,
     li = line2.get("C3")     # Flag for isotropic (1 = all isotropic)
     lct = line2.get("C4")    # Frame of reference (1=LAB system, 2=CM system)
     # C5 is 0 (unused)
-    nm = line2.get("C6")    # Maximum order of Legendre polynomial
+    nm = line2.get("C6")    # Maximum order of Legendre polynomial required
     
     # ======================================
     # Parsing of Legendre coefficients

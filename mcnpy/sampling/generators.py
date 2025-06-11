@@ -102,9 +102,20 @@ def _diagnostics_samples_linear(
     if not verbose:
         return
 
+    # Try to get logger from ace_perturbation module
+    try:
+        from mcnpy.sampling.ace_perturbation import _get_logger
+        logger = _get_logger()
+    except:
+        logger = None
+
     separator = "-" * 60
-    print(f"\n[SAMPLING] [LINEAR DIAGNOSTICS]")
-    print(f"{separator}")
+    log_msg = f"\n[SAMPLING] [LINEAR DIAGNOSTICS]\n{separator}"
+    
+    if logger:
+        logger.info(log_msg)
+    else:
+        print(log_msg)
 
     warnings = []
     means_f = samples.mean(axis=0)
@@ -161,16 +172,38 @@ def _diagnostics_samples_linear(
     emp_cov = _empirical_cov(samples)
     frob_rel = (np.linalg.norm(emp_cov - cov_lin, ord='fro')
                 / np.linalg.norm(cov_lin, ord='fro')) * 100.0
-    print(f"  Relative linear-cov error (Frobenius): {frob_rel:.2f}%")
+    
+    result_msg = f"  Relative linear-cov error (Frobenius): {frob_rel:.2f}%"
+    
+    if logger:
+        logger.info(result_msg)
+    else:
+        print(result_msg)
 
     # ---final report ------------------------------------------------------
     if warnings:
-        print("\n  Issues detected:")
+        warning_msg = "\n  Issues detected:"
+        if logger:
+            logger.info(warning_msg)
+        else:
+            print(warning_msg)
         for w in warnings:
-            print(w)
+            if logger:
+                logger.info(w)
+            else:
+                print(w)
     else:
-        print("  All sample dimensions within thresholds.")
-    print(f"{separator}")
+        ok_msg = "  All sample dimensions within thresholds."
+        if logger:
+            logger.info(ok_msg)
+        else:
+            print(ok_msg)
+    
+    end_msg = f"{separator}"
+    if logger:
+        logger.info(end_msg)
+    else:
+        print(end_msg)
 
 
 def _diagnostics_samples_log(
@@ -186,9 +219,20 @@ def _diagnostics_samples_log(
     if not verbose:
         return
 
+    # Try to get logger from ace_perturbation module
+    try:
+        from mcnpy.sampling.ace_perturbation import _get_logger
+        logger = _get_logger()
+    except:
+        logger = None
+
     separator = "-" * 60
-    print(f"\n[SAMPLING] [LOG DIAGNOSTICS]")
-    print(f"{separator}")
+    log_msg = f"\n[SAMPLING] [LOG DIAGNOSTICS]\n{separator}"
+    
+    if logger:
+        logger.info(log_msg)
+    else:
+        print(log_msg)
 
     warnings = []
     means_f = samples.mean(axis=0)
@@ -223,15 +267,37 @@ def _diagnostics_samples_log(
     emp_cov = _empirical_cov(np.log(samples))
     frob_rel = (np.linalg.norm(emp_cov - cov_log, ord='fro')
                 / np.linalg.norm(cov_log, ord='fro')) * 100.0
-    print(f"  Relative log-cov error (Frobenius): {frob_rel:.2f}%")
+    
+    result_msg = f"  Relative log-cov error (Frobenius): {frob_rel:.2f}%"
+    
+    if logger:
+        logger.info(result_msg)
+    else:
+        print(result_msg)
 
     if warnings:
-        print("\n  Issues detected:")
+        warning_msg = "\n  Issues detected:"
+        if logger:
+            logger.info(warning_msg)
+        else:
+            print(warning_msg)
         for w in warnings:
-            print(w)
+            if logger:
+                logger.info(w)
+            else:
+                print(w)
     else:
-        print("  All sample dimensions within thresholds.")
-    print(f"{separator}")
+        ok_msg = "  All sample dimensions within thresholds."
+        if logger:
+            logger.info(ok_msg)
+        else:
+            print(ok_msg)
+    
+    end_msg = f"{separator}"
+    if logger:
+        logger.info(end_msg)
+    else:
+        print(end_msg)
 
 
 def _diagnostics_covariance(
@@ -246,9 +312,20 @@ def _diagnostics_covariance(
     if not verbose:
         return
 
+    # Try to get logger from ace_perturbation module
+    try:
+        from mcnpy.sampling.ace_perturbation import _get_logger
+        logger = _get_logger()
+    except:
+        logger = None
+
     separator = "-" * 60
-    print(f"\n[COVARIANCE] [DIAGNOSTICS]")
-    print(f"{separator}")
+    log_msg = f"\n[COVARIANCE] [DIAGNOSTICS]\n{separator}"
+    
+    if logger:
+        logger.info(log_msg)
+    else:
+        print(log_msg)
 
     warnings = []
     diag = np.diag(cov_lin)
@@ -282,17 +359,37 @@ def _diagnostics_covariance(
 
     # ---print outcome -----------------------------------------------------
     if warnings:
-        print("  Issues detected:")
+        warning_msg = "  Issues detected:"
+        if logger:
+            logger.info(warning_msg)
+        else:
+            print(warning_msg)
         for w in warnings:
-            print(w)
+            if logger:
+                logger.info(w)
+            else:
+                print(w)
     else:
-        print("  No covariance issues detected.")
-    print(f"{separator}")
+        ok_msg = "  No covariance issues detected."
+        if logger:
+            logger.info(ok_msg)
+        else:
+            print(ok_msg)
+    
+    end_msg = f"{separator}"
+    if logger:
+        logger.info(end_msg)
+    else:
+        print(end_msg)
 
+class CovarianceFixError(Exception):
+    """Exception raised when covariance matrix cannot be fixed to meet eigenvalue threshold."""
+    pass
 
-# ----------------------------------------------------------------------
-# Unified sampler
-# ----------------------------------------------------------------------
+class SoftAutofixWarning(Exception):
+    """Warning raised when soft autofix doesn't meet threshold but decomposition should still be attempted."""
+    pass
+
 def generate_samples(
     cov,
     n_samples: int,
@@ -305,8 +402,9 @@ def generate_samples(
     energy_grid: Optional[Sequence[float]] = None,
     autofix: Optional[str] = None,    # can be None/"soft"/"medium"/"hard"
     high_val_thresh: float = 5.0,
+    accept_tol: float = -1.0e-4,  
     verbose: bool = True,
-) -> Tuple[np.ndarray, Optional[List[int]]]:
+) -> Tuple[np.ndarray, Optional[List[int]], Optional[Dict[str, Any]]]: 
     """
     Draw multiplicative perturbation factors.
 
@@ -318,7 +416,25 @@ def generate_samples(
                      Cov(factors) = Σ_linear and E[factors] = 1.
     autofix_level : {"soft", "medium", "hard"} or None/False
         If None or False, do not fix covariance. Otherwise, fix with the specified level.
+    accept_tol : float
+        Minimum eigenvalue threshold for accepting the covariance matrix
+        
+    Returns
+    -------
+    factors : np.ndarray
+        Generated perturbation factors
+    mt_numbers : Optional[List[int]]
+        Final list of MT numbers (may be modified by autofix)
+    fix_info : Optional[Dict[str, Any]]
+        Information about covariance fixing, including removed correlations
     """
+    # Try to get logger from ace_perturbation module
+    try:
+        from mcnpy.sampling.ace_perturbation import _get_logger
+        logger = _get_logger()
+    except:
+        logger = None
+    
     space  = space.lower()
     method = decomposition_method.lower()
 
@@ -326,32 +442,87 @@ def generate_samples(
     HIGH_VAR_LOG = 2.0
     Z_LIMIT      = 3.0
     TRUNC_THRESHOLD = 0.999
-    
-    if verbose:
-        print(f"[SAMPLING] [GENERATING] {n_samples} samples in {space} space using {method}/{sampling_method}")
+    fix_info = None  # Initialize fix_info
+    soft_autofix_failed = False  # Track if soft autofix failed to meet threshold
 
     # ------------------------------------------------------------------
     # 1. Fix the *linear* covariance if requested
     if autofix is not None:
         cov_fixed, fix_log = cov.fix_covariance(
-            level=autofix, high_val_thresh=high_val_thresh, verbose=verbose)
+            level=autofix, 
+            high_val_thresh=high_val_thresh, 
+            accept_tol=accept_tol,  
+            verbose=verbose, 
+            logger=logger
+        )
+        
+        fix_info = fix_log  # Store the fix information
+        
+        # Check if covariance fixing was successful
+        if not fix_log.get("converged", False):
+            # For soft level, check if threshold was met
+            if autofix.lower() == "soft" and not fix_log.get("soft_threshold_met", True):
+                # Soft autofix didn't meet threshold, but we'll try decomposition anyway
+                soft_autofix_failed = True
+                min_eigenvalue = fix_log.get("min_eigenvalue", float('nan'))
+                if logger:
+                    logger.info(f"[COVARIANCE] [SOFT AUTOFIX] Threshold not met (λ_min={min_eigenvalue:.4e} < {accept_tol:.4e}), attempting decomposition anyway")
+            else:
+                # For medium/hard levels, this is a real failure
+                min_eigenvalue = fix_log.get("min_eigenvalue", float('nan'))
+                error_msg = (
+                    f"Covariance matrix could not be fixed to meet eigenvalue threshold.\n"
+                    f"  Final minimum eigenvalue: {min_eigenvalue:.4e}\n"
+                    f"  Required threshold: {accept_tol:.4e}\n"
+                    f"  Autofix level used: {autofix}\n"
+                    f"  Suggestion: Try processing separately with a harder autofix level ('medium' or 'hard')"
+                )
+                
+                # Only log to file if logger is available, let ace_perturbation handle console output
+                if logger:
+                    logger.info(f"[COVARIANCE] [ERROR] {error_msg}")
+                else:
+                    print(f"[ERROR] {error_msg}")
+                    
+                raise CovarianceFixError(f"min_eigenvalue={min_eigenvalue:.4e} below threshold={accept_tol:.4e}")
+        
+        # If we reach here and it's not a soft autofix failure, log success message
+        if not soft_autofix_failed:
+            final_eigenvalue = fix_log.get("min_eigenvalue", float('nan'))
+            if verbose and logger:
+                logger.info(f"[COVARIANCE] [SUCCESS] Matrix successfully fixed (final λ_min={final_eigenvalue:.4e})")
+        
         cov_lin   = cov_fixed.covariance_matrix          # (p,p)             
         p         = cov_lin.shape[0]
         param_pairs = cov_fixed._get_param_pairs()
         num_groups  = cov_fixed.num_groups        
 
-        if mt_numbers is not None and fix_log.get("removed_mts"):
-            removed = fix_log["removed_mts"]
-            if verbose:
-                print(f"  [INFO] MTs removed by fix_covariance: {removed}")
+        if mt_numbers is not None and fix_log.get("removed_pairs"):
+            # Extract removed MTs from the fix_log
+            removed_pairs = fix_log.get("removed_pairs", [])
+            removed_mts_from_autofix = set()
+            
+            # For "medium" level: look for removed block pairs and extract diagonal removals
+            if autofix.lower() == "medium":
+                for ra, rb in removed_pairs:
+                    if ra == rb:  # Diagonal block removal means entire reaction removed
+                        removed_mts_from_autofix.add(ra)
+            
+            # For "hard" level: look at removal_log for removed MTs
+            elif autofix.lower() == "hard":
+                removal_log = fix_log.get("removal_log", {})
+                removed_mts_hard = removal_log.get("removed_mts", [])
+                removed_mts_from_autofix.update(removed_mts_hard)
                 
-                # Print more specific information about removals if available
-                if "high_variance_mts" in fix_log:
-                    print(f"  [INFO] MTs removed due to high variance: {fix_log['high_variance_mts']}")
-                if "negative_eigenvalue_mts" in fix_log:
-                    print(f"  [INFO] MTs removed due to negative eigenvalues: {fix_log['negative_eigenvalue_mts']}")
-                    
-            mt_numbers = [mt for mt in mt_numbers if mt not in removed]
+            if removed_mts_from_autofix:
+                info_msg = f"  [INFO] MTs removed by fix_covariance: {sorted(removed_mts_from_autofix)}"
+                if verbose:
+                    if logger:
+                        logger.info(info_msg)
+                    else:
+                        print(info_msg)
+                        
+                mt_numbers = [mt for mt in mt_numbers if mt not in removed_mts_from_autofix]
     else:
         cov_lin = cov.covariance_matrix
         p        = cov_lin.shape[0]
@@ -385,25 +556,35 @@ def generate_samples(
 
     # ------------------------------------------------------------------
     # 4. Impose correlation (any of the four decompositions)
-    if method == "pca":
-        Y = _pca_decomposition_sampling(
-            cov_mat, n_samples, sampling_method, seed,
-            TRUNC_THRESHOLD, verbose
-        )
-    else:
-        if method == "cholesky":
-            L = cov_fixed.cholesky_decomposition(space=space, verbose=verbose)
-        elif method == "eigen":
-            eigvals, eigvecs = cov_fixed.eigen_decomposition(space=space, clip_negatives=True, verbose=verbose)
-            L = eigvecs @ np.diag(np.sqrt(eigvals))
-        elif method == "svd":
-            U, S, _ = cov_fixed.svd_decomposition(space=space, clip_negatives=True, verbose=verbose)
-            L = U @ np.diag(np.sqrt(S))
-        else:
-            raise ValueError(
-                "decomposition_method must be 'pca', 'cholesky', 'eigen' or 'svd'"
+    try:
+        if method == "pca":
+            Y = _pca_decomposition_sampling(
+                cov_mat, n_samples, sampling_method, seed,
+                TRUNC_THRESHOLD, verbose
             )
-        Y = Z @ L.T
+        else:
+            if method == "cholesky":
+                L = cov_fixed.cholesky_decomposition(space=space, verbose=verbose, logger=logger)
+            elif method == "eigen":
+                eigvals, eigvecs = cov_fixed.eigen_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)
+                L = eigvecs @ np.diag(np.sqrt(eigvals))
+            elif method == "svd":
+                U, S, _ = cov_fixed.svd_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)
+                L = U @ np.diag(np.sqrt(S))
+            else:
+                raise ValueError(
+                    "decomposition_method must be 'pca', 'cholesky', 'eigen' or 'svd'"
+                )
+            Y = Z @ L.T
+    except Exception as e:
+        # If decomposition fails and we had a soft autofix failure, raise special exception
+        if soft_autofix_failed:
+            min_eigenvalue = fix_info.get("min_eigenvalue", float('nan'))
+            error_msg = f"Soft autofix failed to meet threshold (λ_min={min_eigenvalue:.4e} < {accept_tol:.4e}) and decomposition failed: {str(e)}"
+            raise SoftAutofixWarning(error_msg)
+        else:
+            # Re-raise original exception for other cases
+            raise e
 
     # ------------------------------------------------------------------
     # 5. Convert to multiplicative factors
@@ -431,5 +612,10 @@ def generate_samples(
             bins,
             Z_LIMIT, verbose
         )
+    
+    # Update fix_info to include soft autofix status
+    if soft_autofix_failed and fix_info:
+        fix_info["soft_autofix_failed"] = True
+        fix_info["decomposition_succeeded"] = True
         
-    return factors, mt_numbers
+    return factors, mt_numbers, fix_info  # Return fix_info as third value

@@ -344,3 +344,50 @@ def replace_section(filepath: str, section: Union['MT', 'MT451', 'MF'], output_f
     except Exception as e:
         print(f"Error replacing section: {e}")
         return False
+
+
+# Interpolation scheme codes and their meanings based on ENDF format specification
+INTERPOLATION_SCHEMES = {
+    1: "constant in x (histogram)",
+    2: "linear-linear",
+    3: "linear-log",
+    4: "log-linear",
+    5: "log-log",
+    6: "special one-dimensional interpolation for charged-particle cross sections",
+    11: "method of corresponding points (interpolation law 1)",
+    12: "method of corresponding points (interpolation law 2)",
+    13: "method of corresponding points (interpolation law 3)",
+    14: "method of corresponding points (interpolation law 4)",
+    15: "method of corresponding points (interpolation law 5)",
+    21: "unit base interpolation (interpolation law 1)",
+    22: "unit base interpolation (interpolation law 2)",
+    23: "unit base interpolation (interpolation law 3)",
+    24: "unit base interpolation (interpolation law 4)",
+    25: "unit base interpolation (interpolation law 5)"
+}
+
+def get_interpolation_scheme_name(scheme_code):
+    """
+    Get the descriptive name of an interpolation scheme based on its code.
+    
+    Parameters:
+        scheme_code (int): The interpolation scheme code (INT in ENDF format)
+        
+    Returns:
+        str: The descriptive name of the interpolation scheme
+    """
+    return INTERPOLATION_SCHEMES.get(scheme_code, f"Unknown scheme ({scheme_code})")
+
+def describe_interpolation_region(nbt, int_code):
+    """
+    Generate a descriptive string for an interpolation region.
+    
+    Parameters:
+        nbt (int): The NBT value indicating the upper bound of points for this interpolation
+        int_code (int): The interpolation scheme code (INT)
+        
+    Returns:
+        str: A descriptive string for this interpolation region
+    """
+    scheme_name = get_interpolation_scheme_name(int_code)
+    return f"Points up to {nbt} use {scheme_name}"

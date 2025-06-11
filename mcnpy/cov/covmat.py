@@ -236,9 +236,15 @@ class CovMat:
         """
         return sorted(set(self.reaction_rows + self.reaction_cols))
 
+    @property
+    def correlation_matrix(self) -> np.ndarray:
+        """ Unclipped: diag forced to 1, undefined→nan, no off-diag correction. """
+        return self._compute_correlation(clip=False, force_diagonal=True)
 
-
-
+    @property
+    def clipped_correlation_matrix(self) -> np.ndarray:
+        """ Clipped into [-1,1], diag forced to 1, undefined→nan. """
+        return self._compute_correlation(clip=True,  force_diagonal=True)
 
 
 
@@ -441,6 +447,7 @@ class CovMat:
         clamp_max_iter: int = 10,
         max_steps: int = 40,
         verbose: bool = True,
+        logger = None,  # Optional logger for file output
     ) -> Tuple["CovMat", Dict[str, Any]]:
         """
         Clean the covariance matrix until it is positive-(semi)definite.
@@ -461,6 +468,8 @@ class CovMat:
             Maximum block-removal iterations (if used).
         verbose
             Forwarded to the removal routine.
+        logger
+            Optional logger instance for file output. If None, uses print().
         """
 
         lvl = level.lower()
@@ -475,13 +484,24 @@ class CovMat:
             accept_tol=accept_tol,
             max_iter=clamp_max_iter,
             verbose=verbose,
+            logger=logger,
         )
 
-        # If clamping was enough, or the user asked for 'soft', stop here
-        if log.get("converged", False) or lvl == "soft":
+        # If clamping was enough, stop here
+        if log.get("converged", False):
             log.update({
                 "strategy": lvl,
                 "used_removal": False,
+                "soft_threshold_met": True,  # Add flag for soft level success
+            })
+            return cm_after_clamp, log
+
+        # For soft level, we don't do removal but we mark that threshold wasn't met
+        if lvl == "soft":
+            log.update({
+                "strategy": lvl,
+                "used_removal": False,
+                "soft_threshold_met": False,  # Add flag for soft level failure
             })
             return cm_after_clamp, log
 
@@ -495,15 +515,17 @@ class CovMat:
             verbose=verbose,
             remove_all=remove_whole_rxn,
             high_val_thresh=high_val_thresh,
+            logger=logger,
         )
 
-        # Merge the two logs for convenience
+        # Merge the two logs for convenience - ensure final eigenvalue is used
         out_log: Dict[str, Any] = {
             **log,
-            **{k: v for k, v in rem_log.items() if k not in log},
+            **{k: v for k, v in rem_log.items() if k not in ["min_eigenvalue"]},  # Don't overwrite final eigenvalue
             "strategy": lvl,
             "used_removal": True,
             "removal_log": rem_log,
+            "min_eigenvalue": rem_log.get("min_eigenvalue", log.get("min_eigenvalue")),  # Use final eigenvalue
         }
         return cm_final, out_log
     
@@ -541,17 +563,19 @@ class CovMat:
         reaction_names = {mt: MT_TO_REACTION.get(mt, f"MT={mt}")
                         for mt in self.reactions}
 
-        # pick the most common isotope
-        isotopes = self.isotope_rows + self.isotope_cols
-        if isotopes:
-            from collections import Counter
-            main_isotope = Counter(isotopes).most_common(1)[0][0]
+        if self.isotope_rows:
+            raw_zaid = self.isotope_rows[0]
+            try:
+                zaid_int = int(raw_zaid)
+            except (TypeError, ValueError):
+                # if it’s not parseable, just pass it through
+                zaid_int = raw_zaid
         else:
-            main_isotope = "Unknown"
+            zaid_int = 0
 
         from mcnpy._utils import zaid_to_symbol
-        isotope_name = zaid_to_symbol(main_isotope)
-
+        isotope_name = zaid_to_symbol(zaid_int)
+        
         # scan each block
         for iso_r, rxn_r, iso_c, rxn_c, M in zip(
             self.isotope_rows,
@@ -595,7 +619,7 @@ class CovMat:
         if total_flagged == 0:
             if return_text:
                 return None
-            print(f"No entries > {threshold:.4e} for {isotope_name} (ZAID:{main_isotope}).")
+            print(f"No entries > {threshold:.4e} for {isotope_name} (ZAID:{zaid_int}).")
             return None
 
         # sort & truncate
@@ -608,7 +632,7 @@ class CovMat:
         # build detailed report
         lines = []
         lines.append("\n" + "="*100)
-        lines.append(f"LARGE VALUES REPORT FOR {isotope_name} (ZAID:{main_isotope}) > {threshold:.4e}")
+        lines.append(f"LARGE VALUES REPORT FOR {isotope_name} (ZAID:{zaid_int}) > {threshold:.4e}")
         lines.append("="*100)
         lines.append("\nSUMMARY:")
         lines.append(f"  Total elements checked:     {total_checked:,}")
@@ -656,7 +680,7 @@ class CovMat:
 
         if return_text:
             summary = {
-                'zaid': main_isotope,
+                'zaid': zaid_int,
                 'name': isotope_name,
                 'count': total_flagged,
                 'max_value': max_value
@@ -802,10 +826,113 @@ class CovMat:
             **step_kwargs,
         )
     
+    def plot_multigroup_xs(
+        self,
+        zaid: Union[int, Sequence[int]],
+        mt: Union[int, Sequence[int]],
+        ax: plt.Axes = None,
+        *,
+        energy_range: Optional[Tuple[float, float]] = None,
+        show_uncertainties: bool = False,
+        sigma: float = 1.0,
+        style: str = 'default',
+        figsize: Tuple[float, float] = (8, 5),
+        dpi: int = 300,
+        font_family: str = 'serif',
+        legend_loc: str = 'best',
+        **step_kwargs
+    ) -> plt.Axes:
+        """Delegate to the standalone plotting function without causing circular imports."""
+        from mcnpy.cov.plotting import plot_multigroup_xs as _plot_multigroup_xs
+
+        return _plot_multigroup_xs(
+            covmat=self,
+            zaid=zaid,
+            mt=mt,
+            ax=ax,
+            energy_range=energy_range,
+            show_uncertainties=show_uncertainties,
+            sigma=sigma,
+            style=style,
+            figsize=figsize,
+            dpi=dpi,
+            font_family=font_family,
+            legend_loc=legend_loc,
+            **step_kwargs,
+        )
+    
+    def plot_covariance_heatmap(
+        self,
+        zaid: int,
+        mt: Union[int, Sequence[int], Tuple[int, int]],
+        ax: plt.Axes = None,
+        *,
+        style: str = "default",
+        figsize: Tuple[float, float] = (6, 6),
+        dpi: int = 300,
+        font_family: str = "serif",
+        vmax: float = None,
+        vmin: float = None,
+        show_uncertainties: bool = True,
+        show_energy_ticks: bool = True,
+        **imshow_kwargs
+    ) -> Union[plt.Axes, Tuple[plt.Axes, List[plt.Axes]]]:
+        """
+        Draw a correlation-matrix heat-map for a specified isotope and MT reaction(s).
+
+        Parameters
+        ----------
+        zaid : int
+            Isotope ID
+        mt : int, sequence of int, or tuple of (row_mt, col_mt)
+            MT reaction number(s). Can be:
+            - Single int: diagonal block for that MT
+            - Sequence of ints: diagonal blocks for those MTs  
+            - Tuple of (row_mt, col_mt): off-diagonal block between row and column MT
+        ax : plt.Axes, optional
+            Matplotlib axes to draw into (only used when show_uncertainties=False)
+        style : str
+            Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
+        figsize : tuple
+            Figure size in inches (width, height)
+        dpi : int
+            Dots per inch for figure resolution
+        font_family : str
+            Font family for text elements
+        vmax, vmin : float, optional
+            Color scale limits
+        show_uncertainties : bool
+            Whether to show uncertainty plots above the heatmap
+        show_energy_ticks : bool
+            Whether to show energy group ticks and labels on the heatmap axes
+        **imshow_kwargs
+            Additional arguments passed to imshow
+
+        Returns
+        -------
+        plt.Axes or tuple
+            If show_uncertainties=False: returns the heatmap axes
+            If show_uncertainties=True: returns (heatmap_axes, uncertainty_axes_list)
+        """
+        from mcnpy.cov.heatmap import plot_covariance_heatmap as _plot_covariance_heatmap
+        
+        return _plot_covariance_heatmap(
+            covmat=self,
+            zaid=zaid,
+            mt=mt,
+            ax=ax,
+            style=style,
+            figsize=figsize,
+            dpi=dpi,
+            font_family=font_family,
+            vmax=vmax,
+            vmin=vmin,
+            show_uncertainties=show_uncertainties,
+            show_energy_ticks=show_energy_ticks,
+            **imshow_kwargs
+        )
     
     
-
-
     # ------------------------------------------------------------------
     # Decomposition methods
     # ------------------------------------------------------------------
@@ -817,16 +944,24 @@ class CovMat:
         jitter_scale: float = 1e-10,
         max_jitter_ratio: float = 1e-3,
         verbose: bool = True,
+        logger = None,  # Add logger parameter
     ) -> np.ndarray:
         """
         Robust Cholesky factor L such that  M ≈ L Lᵀ.
         """
         M = (self.covariance_matrix if space == "linear" else self.log_covariance_matrix)
 
+        def _log_message(msg: str):
+            """Helper to log message to logger or print."""
+            if logger:
+                logger.info(msg)
+            else:
+                print(msg)
+
         try:
             L = np.linalg.cholesky(M)
             if verbose:
-                print("  [INFO] No adjustment was necessary for Cholesky decomposition.")
+                _log_message("  [INFO] No adjustment was necessary for Cholesky decomposition.")
             return L
         except np.linalg.LinAlgError:
             M_psd, _ = self._make_psd(
@@ -834,6 +969,7 @@ class CovMat:
                 jitter_scale=jitter_scale,
                 max_jitter_ratio=max_jitter_ratio,
                 verbose=verbose,
+                logger=logger,  # Pass logger to _make_psd
             )
             return np.linalg.cholesky(M_psd)
 
@@ -843,26 +979,35 @@ class CovMat:
         space: str = "linear",
         clip_negatives: bool = True,
         verbose: bool = True,
+        logger = None,  # Add logger parameter
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Descomposición propia con opción de *clipping* en lugar de jitter.
+        """Eigendecomposition with optional *clipping* instead of jitter.
 
-        Si ``clip_negatives`` es *True*, los autovalores negativos se fijan a
-        cero y se informa al usuario del número de recortes y del valor mínimo
-        original.
+        If ``clip_negatives`` is *True*, negative eigenvalues are set to
+        zero and the user is informed of the number of clips and the minimum
+        original value.
         """
         M = (self.covariance_matrix if space == "linear" else self.log_covariance_matrix)
         eigvals, eigvecs = np.linalg.eigh(M)
+        
+        def _log_message(msg: str):
+            """Helper to log message to logger or print."""
+            if logger:
+                logger.info(msg)
+            else:
+                print(msg)
+                
         if clip_negatives:
             mask = eigvals < 0
             if np.any(mask):
                 if verbose:
-                    print(
+                    _log_message(
                         f"  [INFO] Clipped {mask.sum()} negative eigenvalues (min {eigvals.min():.3e})."
                     )
                 eigvals = np.where(mask, 0.0, eigvals)
             else:
                 if verbose:
-                    print("  [INFO] No negative eigenvalues found; no clipping applied.")
+                    _log_message("  [INFO] No negative eigenvalues found; no clipping applied.")
         return eigvals, eigvecs
 
     def svd_decomposition(
@@ -872,28 +1017,37 @@ class CovMat:
         clip_negatives: bool = True,
         verbose: bool = True,
         full_matrices: bool = False,
+        logger = None,  # Add logger parameter
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """SVD con pre-clipping mediante la descomposición propia.
+        """SVD with pre-clipping using eigendecomposition.
 
-        Para matrices simétricas, SVD y eigen son equivalentes. Si se activa
-        ``clip_negatives`` se realiza un paso previo de autodescomposición,
-        recorte y reconstrucción antes de aplicar la SVD, garantizando valores
-        singulares coherentes con una matriz PSD.
+        For symmetric matrices, SVD and eigen are equivalent. If
+        ``clip_negatives`` is activated, a preliminary eigendecomposition,
+        clipping, and reconstruction step is performed before applying SVD,
+        ensuring singular values consistent with a PSD matrix.
         """
         M = (self.covariance_matrix if space == "linear" else self.log_covariance_matrix)
+        
+        def _log_message(msg: str):
+            """Helper to log message to logger or print."""
+            if logger:
+                logger.info(msg)
+            else:
+                print(msg)
+                
         if clip_negatives:
             eigvals, eigvecs = np.linalg.eigh(M)
             mask = eigvals < 0
             if np.any(mask):
                 if verbose:
-                    print(
+                    _log_message(
                         f"  [INFO] Clipped {mask.sum()} negative eigenvalues before SVD (min {eigvals.min():.3e})."
                     )
                 eigvals = np.where(mask, 0.0, eigvals)
                 M = eigvecs @ np.diag(eigvals) @ eigvecs.T
             else:
                 if verbose:
-                    print("  [INFO] No negative eigenvalues; direct SVD applied.")
+                    _log_message("  [INFO] No negative eigenvalues; applying SVD directly.")
         U, S, Vt = np.linalg.svd(M, full_matrices=full_matrices)
         return U, S, Vt
 
@@ -925,7 +1079,6 @@ class CovMat:
             "This object contains covariance matrix data from nuclear data files (SCALE, NJOY, etc).\n"
             "Each matrix represents the covariance between cross sections for specific\n"
             "isotope-reaction pairs across energy groups.\n\n"
-            f"Covariance type: {self.type}\n\n"
         )
         
         # Create a summary table of data information
@@ -946,10 +1099,10 @@ class CovMat:
             "Number of Covariance Matrices", self.num_matrices, 
             width1=property_col_width, width2=value_col_width)
         info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Number of Unique Isotopes", len(self.unique_isotopes), 
+            "Number of Unique Isotopes", len(self.isotopes), 
             width1=property_col_width, width2=value_col_width)
         info_table += "{:<{width1}} {:<{width2}}\n".format(
-            "Number of Unique Reactions", len(self.unique_reactions), 
+            "Number of Unique Reactions", len(self.reactions), 
             width1=property_col_width, width2=value_col_width)
         
         info_table += "-" * header_width + "\n\n"
@@ -1017,17 +1170,25 @@ class CovMat:
         jitter_scale: float = 1e-10,
         max_jitter_ratio: float = 1e-3,
         verbose: bool = True,
+        logger = None,  # Add logger parameter
     ) -> Tuple[np.ndarray, float]:
         """Devuelve una matriz PSD añadiendo el mínimo jitter admisible.
 
         Si **no** hace falta ajuste, se devuelve la misma matriz y jitter=0.
         Lanza ``LinAlgError`` si el desplazamiento requerido supera el umbral.
         """
+        def _log_message(msg: str):
+            """Helper to log message to logger or print."""
+            if logger:
+                logger.info(msg)
+            else:
+                print(msg)
+                
         eigvals = np.linalg.eigvalsh(M)
         lam_min = eigvals[0]
         if lam_min >= 0:
             if verbose:
-                print("  [INFO] PSD check: no adjustment was necessary.")
+                _log_message("  [INFO] PSD check: no adjustment was necessary.")
             return M, 0.0
 
         avg_diag = float(np.mean(np.diag(M)))
@@ -1036,13 +1197,13 @@ class CovMat:
 
         if jitter / max_diag > max_jitter_ratio:
             if verbose:
-                print(
+                _log_message(
                     f"  [WARNING] PSD check aborted: required jitter {jitter:.3e} exceeds allowed ratio ({max_jitter_ratio})."
                 )
             raise np.linalg.LinAlgError("Matrix is not positive semi‑definite and adjustment deemed too large.")
 
         if verbose:
-            print(
+            _log_message(
                 f"  [INFO] Added jitter {jitter:.3e} to the diagonal to make the matrix positive semi‑definite."
             )
         return M + jitter * np.eye(M.shape[0]), jitter
@@ -1055,6 +1216,7 @@ class CovMat:
         verbose: bool = True,
         remove_all: bool = False,
         high_val_thresh: float = 5.0,
+        logger = None,  # Optional logger for file output
     ) -> Tuple["CovMat", Dict[str, Any]]:
         """
         Iteratively remove block pairs or reactions until the
@@ -1071,21 +1233,30 @@ class CovMat:
         • Boost any (ra, rb) by the *combined* high-value count
             of `ra` and `rb`.  
         • Reaction MT 2 is protected: if MT 2 ties with any
-            other reaction for “worst”, keep MT 2 and drop the
+            other reaction for "worst", keep MT 2 and drop the
             other one.
         """
         if len(self.isotopes) != 1:
             raise ValueError("auto_fix_covariance works only for single-isotope matrices.")
 
+        def _log_message(msg: str):
+            """Helper to log message to logger or print."""
+            if logger:
+                logger.info(msg)
+            else:
+                print(msg)
+
         current: "CovMat" = self
         removed: List[Tuple[int, int]] = []
+        removed_mts: List[int] = []  # Track individual MTs removed in "hard" mode
+        removed_correlations: List[Tuple[int, int]] = []  # Track off-diagonal block removals
         iso = self.isotope_rows[0] if self.isotope_rows else None
         separator = "-" * 60
 
         if verbose:
-            print(f"\n[COVARIANCE] [AUTOFIX]")
-            print(f"  Checking covariance matrix for isotope {iso}")
-            print(f"{separator}")
+            _log_message(f"\n[COVARIANCE] [AUTOFIX]")
+            _log_message(f"  Checking covariance matrix for isotope {iso}")
+            _log_message(f"{separator}")
 
         for step in range(1, max_steps + 1):
             M = current.covariance_matrix
@@ -1113,19 +1284,18 @@ class CovMat:
             eigvals, eigvecs = np.linalg.eigh(M)
             min_ev = float(eigvals.min())
             if verbose:
-                print(f"  [STEP {step:02d}] [INFO] Smallest eigenvalue: {min_ev:.4e}")
+                _log_message(f"  [STEP {step:02d}] [INFO] Smallest eigenvalue: {min_ev:.4e}")
 
             if min_ev >= accept_tol:
-                if verbose:
-                    print(f"  [SUCCESS] Matrix accepted (λ_min ≥ {accept_tol:.4e})")
-                    print(f"{separator}")
-                removed_mts = sorted({r for r, c in removed if r == c})
+                _log_message(f"  [SUCCESS] Matrix accepted (λ_min = {min_ev:.4e} >= {accept_tol:.4e})")
+                _log_message(separator)
                 return current, {
-                    "steps": step - 1,
+                    "iterations": step,
                     "min_eigenvalue": min_ev,
+                    "converged": True,  # Fix: This should be True when eigenvalue is acceptable
                     "removed_pairs": removed,
                     "removed_mts": removed_mts,
-                    "converged": True,
+                    "removed_correlations": removed_correlations,
                 }
 
             # ──────────────────────────────────────────────────────
@@ -1170,42 +1340,50 @@ class CovMat:
                 if r_drop == 2 and r_drop != (ra if ra != 2 else rb):
                     r_drop = rb if r_drop == ra else ra        # keep MT 2
                 if verbose:
-                    print(f"  [STEP {step:02d}] [ACTION] Removing all blocks for reaction MT = {r_drop}")
+                    _log_message(f"  [STEP {step:02d}] [ACTION] Removing all blocks for reaction MT = {r_drop}")
                 current = current.remove_matrix(isotope=iso,
                                                 reaction_pairs=[(r_drop, 0)],
                                                 exceptions=[])
                 removed.append((r_drop, r_drop))
+                removed_mts.append(r_drop)
             else:
                 if verbose:
-                    print(f"  [STEP {step:02d}] [ACTION] Removing block pair = {(ra, rb)}")
+                    _log_message(f"  [STEP {step:02d}] [ACTION] Removing block pair = {(ra, rb)}")
                 current = current.remove_matrix(isotope=iso,
                                                 reaction_pairs=[(ra, rb), (rb, ra)],
                                                 exceptions=[])
                 removed.append((ra, rb))
+                # For medium level, track when diagonal blocks are removed vs off-diagonal
+                if ra == rb:
+                    removed_mts.append(ra)
+                else:
+                    # This is an off-diagonal block removal (correlation removal)
+                    removed_correlations.append((ra, rb))
 
         # ----------------------------------------------------------------------
         # Not converged within max_steps
         # ----------------------------------------------------------------------
         if verbose:
-            print(f"  [ERROR] Reached the limit of {max_steps} steps without convergence")
+            _log_message(f"  [ERROR] Reached the limit of {max_steps} steps without convergence")
         # Directly compute min eigenvalue instead of using analyze_covariance
         min_eigenvalue = float(np.linalg.eigvalsh(current.covariance_matrix).min())
-        removed_mts = sorted({r for r, c in removed if r == c})
 
         logg = {
             "steps": max_steps,
             "min_eigenvalue": min_eigenvalue,
             "removed_pairs": removed,
             "removed_mts": removed_mts,
+            "removed_correlations": removed_correlations,
             "converged": False,
         }
 
         if verbose:
-            print(f"  [SUMMARY]")
-            print(f"    Pairs removed: {logg['removed_pairs']}")
-            print(f"    MTs removed:   {logg['removed_mts']}")
-            print(f"    Final smallest eigenvalue: {logg['min_eigenvalue']:.4e}")
-            print(f"{separator}")
+            _log_message(f"  [SUMMARY]")
+            _log_message(f"    Pairs removed: {logg['removed_pairs']}")
+            _log_message(f"    MTs removed:   {logg['removed_mts']}")
+            _log_message(f"    Correlations removed: {logg['removed_correlations']}")
+            _log_message(f"    Final smallest eigenvalue: {logg['min_eigenvalue']:.4e}")
+            _log_message(f"{separator}")
 
         return current, logg
 
@@ -1216,15 +1394,22 @@ class CovMat:
         accept_tol: float = -1.0e-4,
         max_iter: int = 5,
         verbose: bool = True,
+        logger = None,  # Optional logger for file output
     ) -> Tuple["CovMat", Dict[str, Any]]:
         """
         Cap diagonal variances larger than `high_val_thresh`
         to **+1.0** (always positive) and rescale connected
         covariances so that correlations remain untouched.
-        …
         """
         if self.num_groups == 0:
             raise ValueError("num_groups is zero.")
+
+        def _log_message(msg: str):
+            """Helper to log message to logger or print."""
+            if logger:
+                logger.info(msg)
+            else:
+                print(msg)
 
         current = self.copy()
         G = self.num_groups
@@ -1232,13 +1417,17 @@ class CovMat:
         idx_map = {p: i for i, p in enumerate(param_pairs)}
         separator = "-" * 60
 
-        for it in range(1, max_iter + 1):
+        for iter_num in range(1, max_iter + 1):
             M = current.covariance_matrix
             changed_any = False
+            clamped_count = 0
 
             # ──────────────────────────────────────────────────────────
             # 1 Clamp any |variance| > high_val_thresh → +1.0
             # ──────────────────────────────────────────────────────────
+            
+            _log_message(f"  [ITERATION {iter_num:02d}] Scanning variance values")
+            
             for a, (iso, mt) in enumerate(param_pairs):
                 r0 = a * G
                 for g in range(G):
@@ -1250,8 +1439,9 @@ class CovMat:
                     new_var = 1.0                        # fixed target
                     M[idx, idx] = new_var
                     changed_any = True
+                    clamped_count += 1
 
-                    print(f"  [STEP {it:02d}] [CLAMP] MT={mt:>3} G={g:>2} "
+                    _log_message(f"    [CLAMP #{clamped_count}] MT={mt:>3} G={g:>2} "
                         f"variance {old_var:.6g} → {new_var:.6g}")
 
                     # keep correlations
@@ -1275,9 +1465,9 @@ class CovMat:
                             pp_j = param_pairs[j // G]
                             mt_j = pp_j[1]
                             g_j = j % G
-                            print(
-                                f"    cov(MT={mt:>3}, G={g:>2}; "
-                                f"MT={mt_j:>3}, G={g_j:>2}) "
+                            _log_message(
+                                f"      cov(MT={mt:>3}, G={g:>2}; "
+                                f"MT={mt_j:>3}, G={g_j+1:>2}) "
                                 f"{row_before[j]:12.4e} → {M[idx, j]:12.4e}"
                             )
                         for i in np.where(diff_col)[0]:
@@ -1286,17 +1476,19 @@ class CovMat:
                             pp_i = param_pairs[i // G]
                             mt_i = pp_i[1]
                             g_i = i % G
-                            print(
-                                f"    cov(MT={mt_i:>3}, G={g_i:>2}; "
+                            _log_message(
+                                f"      cov(MT={mt_i:>3}, G={g_i:>2}; "
                                 f"MT={mt:>3}, G={g:>2}) "
                                 f"{col_before[i]:12.4e} → {M[i, idx]:12.4e}"
                             )
 
-                    print(f"    {diff_total} covariances adjusted")
+                    _log_message(f"      {diff_total} covariances adjusted")
 
             if not changed_any:
-                print(f"  [STEP {it:02d}] [CLAMP] no variances above threshold; stopping clamping")
+                _log_message(f"  [ITERATION {iter_num:02d}] No variances above threshold; stopping clamping")
                 break
+            
+            _log_message(f"  [ITERATION {iter_num:02d}] Clamped {clamped_count} variance values")
 
             # push edits back in the block structure  (unchanged)
             for ir, rr, ic, rc, mat_ref in zip(
@@ -1311,85 +1503,74 @@ class CovMat:
                 mat_ref[:, :] = M[i*G:(i+1)*G, j*G:(j+1)*G]
 
             min_ev = float(np.linalg.eigvalsh(M).min())
-            print(f"  [STEP {it:02d}] [INFO] Smallest eigenvalue: {min_ev:.4e}")
+            _log_message(f"  [ITERATION {iter_num:02d}] Smallest eigenvalue: {min_ev:.4e}")
 
             if min_ev >= accept_tol:
-                print(f"  [SUCCESS] Matrix accepted (λ_min ≥ {accept_tol:.4e})")
-                print(separator)
+                _log_message(f"  [SUCCESS] Matrix accepted (λ_min = {min_ev:.4e} >= {accept_tol:.4e})")
+                _log_message(separator)
                 return current, {
-                    "iterations": it,
+                    "iterations": iter_num,
                     "min_eigenvalue": min_ev,
-                    "converged": True,
+                    "converged": True,  # Fix: This should be True when eigenvalue is acceptable
+                    "clamped_values": clamped_count
                 }
         
             # clamping not enough – fall back to removal strategy if autofix is True
-            print(f"  [WARNING] After clamping, smallest eigenvalue ({min_ev:.4e}) is below accept_tol ({accept_tol:.4e})")
+            _log_message(f"  [WARNING] After clamping, smallest eigenvalue ({min_ev:.4e}) still below threshold ({accept_tol:.4e})")
         
-        # Return the clamped matrix and log after clamping
-        min_ev = float(np.linalg.eigvalsh(M).min())
+        # Return the clamped matrix and log after clamping - Fix: Check final eigenvalue here too
+        final_M = current.covariance_matrix
+        min_ev_final = float(np.linalg.eigvalsh(final_M).min())
+        
+        # Check if final result is actually acceptable
+        converged = min_ev_final >= accept_tol
+        
         log = {
-            "iterations": it,
-            "min_eigenvalue": min_ev,
-            "converged": False,
+            "iterations": iter_num,
+            "min_eigenvalue": min_ev_final,
+            "converged": converged,  # Fix: Set based on actual final eigenvalue check
             "used_fallback": False,
-            "clamp_iter": it,
+            "clamp_iter": iter_num,
         }
         return current, log
 
+    def _compute_correlation(
+        self,
+        clip: bool = False,
+        force_diagonal: bool = True
+    ) -> np.ndarray:
+        """
+        Core routine: builds the correlation matrix, optionally clipping
+        into [-1,1] and optionally forcing diagonal==1.
+        Entries where std_i * std_j == 0 become nan by default.
+        """
+        cov = self.covariance_matrix
+        std = np.sqrt(np.diag(cov))
+        denom = np.outer(std, std)
 
+        # pure division, will give inf/nan where denom==0
+        with np.errstate(divide='ignore', invalid='ignore'):
+            corr = cov / denom
 
+        # mask all undefined entries
+        corr[~np.isfinite(corr)] = np.nan
+
+        if force_diagonal:
+            # put ones on the diagonal, even if variance was zero
+            np.fill_diagonal(corr, 1.0)
+
+        if clip:
+            # clip into [-1,1], leaving nan alone
+            corr = np.where(np.isfinite(corr),
+                            np.clip(corr, -1.0, 1.0),
+                            np.nan)
+
+        return corr
 
 
     #------------------------------------------------------------------
     # Methods and properties related to correlation matrix (Unused)
     #------------------------------------------------------------------
-
-    @property
-    def correlation_matrix(self) -> np.ndarray:
-        """Return the dimensionless correlation matrix.
-
-        * If a cross section for a given energy group is exactly zero, the
-          whole corresponding row and column are set to zero (including the
-          diagonal).
-        * Otherwise ρ_ii is forced to 1 to avoid tiny numerical drift.
-        """
-        C = self.covariance_matrix.copy()
-
-        G = self.num_groups
-        param_pairs = self._get_param_pairs()
-        N = len(param_pairs)
-
-        # Build the vector of cross‑section values flattened the same way as C
-        xs_flat = np.concatenate(
-            [self.cross_sections.get(p, np.zeros(G)) for p in param_pairs]
-        )
-
-        # Variances and standard deviations
-        variances = np.diag(C).copy()
-        stddev = np.sqrt(variances, where=variances >= 0, out=np.zeros_like(variances))
-
-        # Zero out everything that comes from a zero cross section
-        zero_mask = xs_flat == 0.0
-        stddev[zero_mask] = 0.0
-
-        # Create the outer product σ_i σ_j
-        outer = np.outer(stddev, stddev)
-
-        # Compute correlation with safe division — any 0/0 → 0
-        with np.errstate(divide="ignore", invalid="ignore"):
-            R = np.divide(C, outer, out=np.zeros_like(C), where=outer != 0.0)
-
-        # Make sure the matrix is perfectly symmetric
-        R = 0.5 * (R + R.T)
-
-        # Enforce the diagonal rule: 1 for non‑zero σ, 0 otherwise
-        for k, sd in enumerate(stddev):
-            if sd == 0.0:
-                R[k, :] = 0.0
-                R[:, k] = 0.0
-            else:
-                R[k, k] = 1.0
-        return R
 
     def verify_correlation(self, atol: float = 1e-12, rtol: float = 1e-4) -> None:
         """Run basic checks on the correlation matrix and print any problems.
@@ -1593,3 +1774,33 @@ class CovMat:
         out = self.copy()
         out._scatter_full_into_blocks(C2)
         return out
+    
+    def _scatter_full_into_blocks(self, full_matrix: np.ndarray) -> None:
+        """
+        Scatter a full covariance matrix back into the individual block matrices.
+        
+        Parameters
+        ----------
+        full_matrix : np.ndarray
+            Full covariance matrix of shape (N·G, N·G) where N is the number of 
+            parameter pairs and G is num_groups.
+        """
+        param_pairs = self._get_param_pairs()
+        idx_map = {p: i for i, p in enumerate(param_pairs)}
+        G = self.num_groups
+
+        # Update each matrix block with the corresponding section from the full matrix
+        for i, (ir, rr, ic, rc, mat_ref) in enumerate(zip(
+            self.isotope_rows,
+            self.reaction_rows,
+            self.isotope_cols,
+            self.reaction_cols,
+            self.matrices,
+        )):
+            row_idx = idx_map[(ir, rr)]
+            col_idx = idx_map[(ic, rc)]
+            r0, r1 = row_idx * G, (row_idx + 1) * G
+            c0, c1 = col_idx * G, (col_idx + 1) * G
+            
+            # Update the matrix in place
+            mat_ref[:, :] = full_matrix[r0:r1, c0:c1]

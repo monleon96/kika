@@ -191,42 +191,67 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                     ne = list_header.get("C6")  # Number of energy entries
                     list_record.ne = ne
                     
+                    print(f"DEBUG LB=5 - NE={ne}")
+                    
                     # Calculate number of matrix elements based on LS and NE for LB=5
+                    # Matrix is (NE-1) x (NE-1) for intervals
+                    m = ne - 1  # Number of intervals = matrix dimension
                     if ls == 0:  # Asymmetric matrix
-                        num_matrix_elements = (ne - 1) ** 2
-                    elif ls == 1:  # Symmetric matrix
-                        num_matrix_elements = (ne * (ne - 1)) // 2
+                        num_matrix_elements = m * m  # (NE-1)²
+                        print(f"DEBUG LB=5 - Asymmetric matrix: {m}x{m} = {num_matrix_elements} elements")
+                    elif ls == 1:  # Symmetric matrix - upper triangle including diagonal
+                        num_matrix_elements = m * (m + 1) // 2  # (NE-1)(NE-1+1)/2
+                        print(f"DEBUG LB=5 - Symmetric matrix: {m}x{m}, upper triangle = {num_matrix_elements} elements")
                     else:
                         raise ValueError(f"Unknown LS value: {ls}. Should be 0 or 1")
                     
-                    # Number of values to read (energies + matrix elements)
+                    # Total values to read: energy grid + matrix elements
                     values_to_read = ne + num_matrix_elements
+                    print(f"DEBUG LB=5 - Total values to read: {ne} (energies) + {num_matrix_elements} (matrix) = {values_to_read}")
                     
-                    # Read energy grid and matrix values
-                    energies = []
-                    matrix_values = []
-                    values_read = 0
+                    # Check NT field
+                    print(f"DEBUG LB=5 - NT field says: {nt} values")
+                    if nt != values_to_read:
+                        print(f"WARNING LB=5 - NT mismatch! Expected {values_to_read}, got {nt}")
                     
-                    while values_read < values_to_read and current_line < len(lines):
-                        value_line = parse_line(lines[current_line])
+                    # Read all the data values following the LIST header
+                    all_values = []
+                    remaining_values = nt
+                    print(f"DEBUG LB=5 - Starting to read {remaining_values} values from data lines...")
+                    
+                    while remaining_values > 0 and current_line < len(lines):
+                        data_line = parse_line(lines[current_line])
                         current_line += 1
                         
-                        # Read up to 6 values per line
-                        for i in range(1, 7):
-                            if values_read < values_to_read:
-                                value = value_line.get(f"C{i}")
-                                if value is not None:
-                                    if values_read < ne:
-                                        energies.append(value)
-                                    else:
-                                        matrix_values.append(value)
-                                    values_read += 1
+                        # Extract all 6 values from this line
+                        line_values = [
+                            data_line.get("C1"), data_line.get("C2"), data_line.get("C3"),
+                            data_line.get("C4"), data_line.get("C5"), data_line.get("C6")
+                        ]
+                        
+                        # Only take the values we actually need
+                        values_from_this_line = min(6, remaining_values)
+                        all_values.extend(line_values[:values_from_this_line])
+                        remaining_values -= values_from_this_line
+                        
+                        print(f"DEBUG LB=5 - Read line {current_line-1}: {line_values[:values_from_this_line]} (remaining: {remaining_values})")
                     
-                    # Store the parsed energy grid and matrix values
+                    print(f"DEBUG LB=5 - Total values read: {len(all_values)}")
+                    
+                    # Split into energies and matrix values
+                    energies = all_values[:ne]
+                    matrix_values = all_values[ne:]
+                    
+                    print(f"DEBUG LB=5 - Energy grid: {len(energies)} values")
+                    print(f"DEBUG LB=5 - Matrix values: {len(matrix_values)} values")
+                    print(f"DEBUG LB=5 - First few energies: {energies[:5]}")
+                    print(f"DEBUG LB=5 - First few matrix values: {matrix_values[:10]}")
+                    
+                    # Store in record
                     list_record.energies = energies
                     list_record.matrix = matrix_values
                     
-                    print(f"DEBUG - Parsed LB=5 record with LS={ls}, NE={ne}")
+                    print(f"DEBUG LB=5 - Stored {len(list_record.energies)} energies and {len(list_record.matrix)} matrix values")
                 elif lb == 6:
                     # rectangular matrix: NT=1+NER*NEC
                     ner = ne_field
