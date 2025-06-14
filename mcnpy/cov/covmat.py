@@ -1216,7 +1216,7 @@ class CovMat:
         verbose: bool = True,
         remove_all: bool = False,
         high_val_thresh: float = 5.0,
-        logger = None,  # Optional logger for file output
+        logger = None, 
     ) -> Tuple["CovMat", Dict[str, Any]]:
         """
         Iteratively remove block pairs or reactions until the

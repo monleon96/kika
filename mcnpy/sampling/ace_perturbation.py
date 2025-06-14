@@ -302,6 +302,32 @@ def perturb_ACE_files(
         # Console: Basic progress
         print(f"\n[INFO] Processing isotope {i+1}/{len(ace_files)}: {os.path.basename(ace_file)}")
 
+        # Check if ACE file exists
+        if not os.path.exists(ace_file):
+            _logger.error(f"[ACE] [ERROR] ACE file not found: {ace_file}")
+            zaid = f"unknown_{i+1}"
+            summary_data[zaid] = {
+                "ace_file": os.path.basename(ace_file),
+                "cov_file": os.path.basename(cov_file),
+                "mt_in_ace": [],
+                "mt_in_cov": [],
+                "mt_perturbed": [],
+                "removed_mts": {},
+                "autofix_info": {
+                    "level": autofix,
+                    "removed_pairs": [],
+                    "removed_mts": [],
+                    "removed_correlations": [],
+                    "converged": False,
+                    "soft_threshold_warning": False
+                },
+                "warnings": [f"ACE file not found: {os.path.basename(ace_file)}"]
+            }
+            skipped_isotopes[zaid] = "ACE file not found"
+            _logger.info(f"\n{separator}\n")
+            print(f"[ERROR] ACE file not found for {os.path.basename(ace_file)}")
+            continue
+
         # Read ACE file first to get ZAID
         ace = read_ace(ace_file)
         zaid = ace.zaid
@@ -823,7 +849,7 @@ def _write_sample_summary(
     tag = f"{sample_index + 1:04d}"
     sdir = os.path.join(iso_dir, tag)
     os.makedirs(sdir, exist_ok=True)
-    path = os.path.join(sdir, f"{base}_{tag}_summary.txt")
+    path = os.path.join(sdir, f"{base}_{tag}_pert_factors.txt")
 
     with open(path, "w") as f:
         for mt_idx, mt in enumerate(mt_numbers):
