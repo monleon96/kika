@@ -305,7 +305,7 @@ def perturb_ACE_files(
         # Check if ACE file exists
         if not os.path.exists(ace_file):
             _logger.error(f"[ACE] [ERROR] ACE file not found: {ace_file}")
-            zaid = f"unknown_{i+1}"
+            zaid = os.path.splitext(os.path.basename(ace_file))[0]  # Use filename without extension as ZAID
             summary_data[zaid] = {
                 "ace_file": os.path.basename(ace_file),
                 "cov_file": os.path.basename(cov_file),
@@ -659,26 +659,44 @@ def perturb_ACE_files(
     _logger.info(f"[ACE] [SUMMARY] Processing Results")
     _logger.info(f"{separator}")
     
-    if not summary_data and not skipped_isotopes:
+    if not summary_data:
         _logger.info("  No isotopes were processed.")
     else:
-        # First report isotopes that were successfully processed
-        processed_isotopes = {zaid: data for zaid, data in sorted(summary_data.items()) 
-                             if zaid not in skipped_isotopes}
+        # Custom sorting function: numeric ZAIDs first (ascending), then string ZAIDs (alphabetically)
+        def sort_key(item):
+            zaid = item[0]
+            try:
+                # Try to convert to int - if successful, return (0, numeric_value) for primary sort
+                return (0, int(zaid))
+            except (ValueError, TypeError):
+                # If not numeric, return (1, string) to sort after numeric ones
+                return (1, str(zaid))
         
-        if processed_isotopes:
+        # Report isotopes that were successfully processed (had some MTs perturbed)
+        successfully_processed = {zaid: data for zaid, data in sorted(summary_data.items(), key=sort_key) 
+                                if zaid not in skipped_isotopes and data['mt_perturbed']}
+        
+        # Report isotopes that were processed but had no MTs perturbed
+        processed_no_perturbation = {zaid: data for zaid, data in sorted(summary_data.items(), key=sort_key) 
+                                   if zaid not in skipped_isotopes and not data['mt_perturbed']}
+        
+        if successfully_processed:
             _logger.info("\n  SUCCESSFULLY PROCESSED ISOTOPES:")
             _logger.info(f"  {'-' * 50}")
             
-            for zaid, data in processed_isotopes.items():
-                _logger.info(f"\n  Isotope: {zaid} ({data['ace_file']})")
+            for zaid, data in successfully_processed.items():
+                # Only show filename in parentheses if ZAID is not numeric (i.e., it's a filename)
+                try:
+                    int(zaid)  # Test if ZAID is numeric
+                    isotope_display = f"{zaid}"
+                except (ValueError, TypeError):
+                    isotope_display = f"{zaid} ({data['ace_file']})"
+                
+                _logger.info(f"\n  Isotope: {isotope_display}")
                 _logger.info(f"  {'-' * 50}")
                 
                 # MT numbers that were perturbed
-                if data['mt_perturbed']:
-                    _logger.info(f"  ► Perturbed MT numbers: {', '.join(map(str, data['mt_perturbed']))}")
-                else:
-                    _logger.info(f"  ► No MT numbers were perturbed")
+                _logger.info(f"  ► Perturbed MT numbers: {', '.join(map(str, data['mt_perturbed']))}")
                 
                 # Autofix information (for medium/hard levels)
                 autofix_info = data.get('autofix_info', {})
@@ -711,26 +729,37 @@ def perturb_ACE_files(
                     for warning in data['warnings']:
                         _logger.info(f"    • {warning}")
 
-        # Then report isotopes that were skipped completely
-        if skipped_isotopes or any(not data['mt_perturbed'] for data in summary_data.values()):
+        # Report isotopes that were processed but had no perturbation
+        if processed_no_perturbation or skipped_isotopes:
             _logger.info("\n  ISOTOPES WITH NO PERTURBATION:")
             _logger.info(f"  {'-' * 50}")
             
-            # First report explicitly skipped isotopes
-            for zaid, reason in sorted(skipped_isotopes.items()):
+            # First report explicitly skipped isotopes - use same sorting and display logic
+            for zaid, reason in sorted(skipped_isotopes.items(), key=lambda x: sort_key((x[0], None))):
                 if zaid in summary_data:
-                    _logger.info(f"  Isotope: {zaid} ({summary_data[zaid]['ace_file']})")
+                    try:
+                        int(zaid)  # Test if ZAID is numeric
+                        isotope_display = f"{zaid}"
+                    except (ValueError, TypeError):
+                        isotope_display = f"{zaid} ({summary_data[zaid]['ace_file']})"
+                    
+                    _logger.info(f"  Isotope: {isotope_display}")
                     _logger.info(f"    • Reason: {reason}")
             
             # Then report isotopes that were processed but had no MTs perturbed
-            for zaid, data in sorted(summary_data.items()):
-                if zaid not in skipped_isotopes and not data['mt_perturbed']:
-                    _logger.info(f"  Isotope: {zaid} ({data['ace_file']})")
-                    if data['warnings']:
-                        for warning in data['warnings']:
-                            _logger.info(f"    • Reason: {warning}")
-                    else:
-                        _logger.info(f"    • Reason: No eligible MT numbers to perturb")
+            for zaid, data in processed_no_perturbation.items():
+                try:
+                    int(zaid)  # Test if ZAID is numeric
+                    isotope_display = f"{zaid}"
+                except (ValueError, TypeError):
+                    isotope_display = f"{zaid} ({data['ace_file']})"
+                
+                _logger.info(f"  Isotope: {isotope_display}")
+                if data['warnings']:
+                    for warning in data['warnings']:
+                        _logger.info(f"    • Reason: {warning}")
+                else:
+                    _logger.info(f"    • Reason: No eligible MT numbers to perturb")
 
     _logger.info(f"\n{separator}")
     
