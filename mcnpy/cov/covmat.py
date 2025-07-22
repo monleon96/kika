@@ -1324,8 +1324,32 @@ class CovMat:
                 boosted_scores[(ra, rb)] = base * (1.0 + boost)
 
             if not boosted_scores:
-                # fall back to plain pair_scores – unlikely but safe
-                boosted_scores = pair_scores
+                if verbose:
+                    _log_message(f"  [WARNING] No negative contributions found below threshold {accept_tol:.4e}")
+                    _log_message(f"  [ACTION] Using fallback strategy: remove block with largest absolute eigenvalue contribution")
+                
+                # Fallback: find the block with the largest absolute contribution to ANY negative eigenvalue
+                fallback_scores: Dict[Tuple[int, int], float] = defaultdict(float)
+                for idx in neg_idxs:
+                    v = eigvecs[:, idx]
+                    for a, (_, ra) in enumerate(param_pairs):
+                        v_a = v[a*G:(a+1)*G]
+                        for b, (_, rb) in enumerate(param_pairs):
+                            block = M[a*G:(a+1)*G, b*G:(b+1)*G]
+                            contrib = float(v_a @ block @ v[b*G:(b+1)*G])
+                            fallback_scores[(ra, rb)] += abs(contrib)  # Use absolute value
+                
+                if fallback_scores:
+                    boosted_scores = fallback_scores
+                else:
+                    # Ultimate fallback: remove largest diagonal variance
+                    if verbose:
+                        _log_message(f"  [WARNING] No eigenvalue contributions found. Using diagonal variance fallback.")
+                    diag_scores = {}
+                    for a, (_, ra) in enumerate(param_pairs):
+                        block = M[a*G:(a+1)*G, a*G:(a+1)*G]
+                        diag_scores[(ra, ra)] = float(np.sum(np.abs(np.diag(block))))
+                    boosted_scores = diag_scores if diag_scores else {(param_pairs[0][1], param_pairs[0][1]): 1.0}
 
             worst_pair = max(boosted_scores, key=boosted_scores.get)
             ra, rb = worst_pair
@@ -1566,6 +1590,7 @@ class CovMat:
                             np.nan)
 
         return corr
+
 
 
     #------------------------------------------------------------------

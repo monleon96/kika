@@ -395,77 +395,9 @@ class MF34CovMat:
         font_family: str = "serif",
         vmax: Optional[float] = None,
         vmin: Optional[float] = None,
-        show_energy_ticks: bool = True,
-        **imshow_kwargs,
-    ) -> 'plt.Axes':
-        """
-        Draw a correlation-matrix heat-map for MF34 angular distribution data.
-
-        Parameters
-        ----------
-        isotope : int
-            Isotope ID
-        mt : int
-            Reaction MT number
-        legendre_coeffs : int, list of int, or tuple of (row_l, col_l)
-            Legendre coefficient(s). Can be:
-            - Single int: diagonal block for that L
-            - List of ints: diagonal blocks for those L values
-            - Tuple of (row_l, col_l): off-diagonal block between row and column L
-        ax : plt.Axes, optional
-            Matplotlib axes to draw into
-        style : str
-            Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
-        figsize : tuple
-            Figure size in inches (width, height)
-        dpi : int
-            Dots per inch for figure resolution
-        font_family : str
-            Font family for text elements
-        vmax, vmin : float, optional
-            Color scale limits
-        show_energy_ticks : bool
-            Whether to show energy group ticks and labels on the heatmap axes
-        **imshow_kwargs
-            Additional arguments passed to imshow
-
-        Returns
-        -------
-        plt.Axes
-            The heatmap axes
-        """
-        from mcnpy.cov.mf34cov_heatmap import plot_mf34_covariance_heatmap
-        
-        return plot_mf34_covariance_heatmap(
-            mf34_covmat=self,
-            isotope=isotope,
-            mt=mt,
-            legendre_coeffs=legendre_coeffs,
-            ax=ax,
-            style=style,
-            figsize=figsize,
-            dpi=dpi,
-            font_family=font_family,
-            vmax=vmax,
-            vmin=vmin,
-            show_energy_ticks=show_energy_ticks,
-            **imshow_kwargs
-        )
-
-    def plot_covariance_heatmap(
-        self,
-        isotope: int,
-        mt: int,
-        legendre_coeffs: Union[int, List[int], Tuple[int, int]],
-        ax: Optional['plt.Axes'] = None,
-        *,
-        style: str = "default",
-        figsize: Tuple[float, float] = (6, 6),
-        dpi: int = 300,
-        font_family: str = "serif",
-        vmax: Optional[float] = None,
-        vmin: Optional[float] = None,
+        show_energy_ticks: bool = False,
         show_uncertainties: bool = True,
+        cmap: Optional[any] = None,
         **imshow_kwargs,
     ) -> Union['plt.Axes', Tuple['plt.Axes', List['plt.Axes']]]:
         """
@@ -494,6 +426,8 @@ class MF34CovMat:
             Font family for text elements
         vmax, vmin : float, optional
             Color scale limits
+        show_energy_ticks : bool
+            Whether to show subtle energy group tick marks at the heatmap borders
         show_uncertainties : bool
             Whether to show uncertainty plots above the heatmap
         **imshow_kwargs
@@ -506,7 +440,7 @@ class MF34CovMat:
             If show_uncertainties=True: returns (heatmap_axes, uncertainty_axes_list)
         """
         from mcnpy.cov.mf34cov_heatmap import plot_mf34_covariance_heatmap
-        
+
         return plot_mf34_covariance_heatmap(
             mf34_covmat=self,
             isotope=isotope,
@@ -519,6 +453,10 @@ class MF34CovMat:
             font_family=font_family,
             vmax=vmax,
             vmin=vmin,
+            show_energy_ticks=show_energy_ticks,
             show_uncertainties=show_uncertainties,
+            cmap=cmap,
             **imshow_kwargs
         )
+
+

@@ -1,4 +1,5 @@
 import os
+import re
 from .parse_input import read_mcnp
 from .parse_materials import read_material
 from mcnpy._constants import MCNPY_HEADER, MCNPY_FOOTER, ATOMIC_MASS, N_AVOGADRO
@@ -267,7 +268,7 @@ def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=N
     
     return
 
-def generate_PERTcards(inputfile, cell, density, reactions, energies, material, order=2, errors=False, in_place=True):
+def generate_PERTcards(inputfile, cell, density, reactions, material, energies=None, order=2, errors=False, in_place=True):
     """Generates PERT cards for MCNP input files.
 
     Generates PERT cards based on the provided parameters. Can generate both first and
@@ -275,35 +276,104 @@ def generate_PERTcards(inputfile, cell, density, reactions, energies, material, 
     Note that exact uncertainties are usually negligible, so verify their necessity
     before running long calculations.
     
+    Can handle multiple materials by providing lists for cell, density, and material parameters.
+    When lists are provided, all list parameters must have the same length as the materials list.
+    The reactions and energies parameters are applied to all materials uniformly.
+    
     :param inputfile: Path to the MCNP input file
     :type inputfile: str
-    :param cell: Cell number(s) for PERT card application
-    :type cell: int or str or list[int]
-    :param density: Density value for the perturbation
-    :type density: float
-    :param reactions: List of reaction identifiers
+    :param cell: Cell number(s) for PERT card application. Can be int, str, list[int], or list of these for multiple materials
+    :type cell: int or str or list[int] or list[int or str or list[int]]
+    :param density: Density value(s) for the perturbation. Can be single value or list for multiple materials
+    :type density: float or list[float]
+    :param reactions: Reaction identifier(s) applied to all materials. Can be single list
     :type reactions: list[str]
-    :param energies: Energy values in eV units. Must be in ascending order. Used in consecutive pairs for energy bins
-    :type energies: list[float]
-    :param material: Material identifier for perturbation
-    :type material: str or int
-    :param order: Order of PERT card method (1 or 2), defaults to 2
-    :type order: int, optional
+    :param material: Material identifier(s) for perturbation. Can be single value or list
+    :type material: str or int or list[str or int]
+    :param energies: Energy values in eV units. Must be in ascending order. Used in consecutive pairs for energy bins.
+                     If None, ERG is omitted from the PERT cards. Applied to all materials
+    :type energies: list[float] or None
+    :param order: Order(s) of PERT card method (1 or 2). Can be single value or list for multiple materials
+    :type order: int or list[int], optional
     :param errors: Whether to include error methods (-2, -3, 1), defaults to False
     :type errors: bool, optional
     :param in_place: Whether to append PERT cards to original input file, defaults to True
     :type in_place: bool, optional
     
     :returns: None
-    :raises ValueError: If energies are not in ascending order
+    :raises ValueError: If energies are not in ascending order, if list parameters have inconsistent lengths,
+                       or if list-of-lists is provided for reactions/energies
     
     :note: Writes PERT cards with MCNPY header and footer to either the original file or a new file
     """
-    # Validate that energies are in ascending order
-    for i in range(len(energies)-1):
-        if energies[i] >= energies[i+1]:
-            raise ValueError(f"Energy values must be in ascending order. Found {energies[i]} >= {energies[i+1]} at positions {i} and {i+1}")
     
+    # Validate that reactions and energies are not list-of-lists
+    if isinstance(reactions, list) and len(reactions) > 0 and isinstance(reactions[0], list):
+        raise ValueError("Reactions parameter cannot be a list of lists. Use a single list that applies to all materials.")
+    
+    if isinstance(energies, list) and len(energies) > 0 and isinstance(energies[0], list):
+        raise ValueError("Energies parameter cannot be a list of lists. Use a single list that applies to all materials.")
+    
+    # Validate energies if provided
+    if energies is not None:
+        for i in range(len(energies) - 1):
+            if energies[i] >= energies[i + 1]:
+                raise ValueError(f"Energy values must be in ascending order. Found {energies[i]} >= {energies[i + 1]} at positions {i} and {i + 1}")
+    
+    # Convert material to list to determine number of materials
+    if isinstance(material, list):
+        material_list = material
+        num_materials = len(material_list)
+    else:
+        material_list = [material]
+        num_materials = 1
+    
+    # Validate and prepare cell parameter
+    if isinstance(cell, list):
+        if num_materials == 1:
+            # Single material case: cell should be a simple list of cell numbers
+            if any(isinstance(c, list) for c in cell):
+                raise ValueError("List of lists for cell parameter is only allowed when multiple materials are provided.")
+            cell_list = [cell]
+        else:
+            # Multiple materials case: check length consistency
+            if len(cell) != num_materials:
+                raise ValueError(f"Cell list length ({len(cell)}) must match number of materials ({num_materials})")
+            cell_list = cell
+    else:
+        # Single value: replicate for all materials
+        cell_list = [cell] * num_materials
+    
+    # Validate and prepare density parameter
+    if isinstance(density, list):
+        if num_materials == 1:
+            raise ValueError("List of densities is only allowed when multiple materials are provided.")
+        if len(density) != num_materials:
+            raise ValueError(f"Density list length ({len(density)}) must match number of materials ({num_materials})")
+        density_list = density
+    else:
+        # Single value: replicate for all materials
+        density_list = [density] * num_materials
+    
+    # Validate and prepare order parameter
+    if isinstance(order, list):
+        if num_materials == 1:
+            raise ValueError("List of orders is only allowed when multiple materials are provided.")
+        if len(order) != num_materials:
+            raise ValueError(f"Order list length ({len(order)}) must match number of materials ({num_materials})")
+        order_list = order
+    else:
+        # Single value: replicate for all materials
+        order_list = [order] * num_materials
+
+    # --- Use the parser to get the highest existing PERT card number ---
+    input_data = read_mcnp(inputfile)
+    if hasattr(input_data, "perturbation") and hasattr(input_data.perturbation, "pert"):
+        existing_pert_ids = list(input_data.perturbation.pert.keys())
+        max_pert_num = max(existing_pert_ids) if existing_pert_ids else 0
+    else:
+        max_pert_num = 0
+
     # Determine output file path
     if in_place:
         # Read the original file content to ensure we start on a new line
@@ -332,55 +402,92 @@ def generate_PERTcards(inputfile, cell, density, reactions, energies, material, 
     # First add a newline if needed
     if needs_newline:
         content_to_write.append("\n")
-    
-    # Format cell parameter to string
-    if isinstance(cell, list):
-        cell_str = ','.join(map(str, cell))
-    else:
-        cell_str = str(cell)
 
     # Initialize the perturbation counter
-    pert_counter = 1
+    pert_counter = max_pert_num + 1
     
     # Write header - always include it
     content_to_write.append(MCNPY_HEADER)
     content_to_write.append("c \n")
     
-    # Loop over each combination of cell, density, and reaction
-    for reaction in reactions:
-        # Go through the energy list and use consecutive pairs
-        for i in range(len(energies) - 1):
-            E1 = energies[i]
-            E2 = energies[i + 1]
-
-            # Create properly formatted METHOD=2 PERT card
-            pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material} RHO={density:.6e} METHOD=2 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
-            content_to_write.append(_format_mcnp_line(pert_card) + "\n")
-            pert_counter += 1
-
-            if order == 2:
-                # Create properly formatted METHOD=3 PERT card
-                pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material} RHO={density:.6e} METHOD=3 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
-                content_to_write.append(_format_mcnp_line(pert_card) + "\n")
-                pert_counter += 1
+    # Loop over each material
+    for mat_idx in range(num_materials):
+        cell_iter = cell_list[mat_idx]
+        density_iter = density_list[mat_idx]
+        material_iter = material_list[mat_idx]
+        order_iter = order_list[mat_idx]
         
-            if errors:
-                # Create properly formatted METHOD=-2 PERT card
-                pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material} RHO={density:.6e} METHOD=-2 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
+        # Format cell parameter to string
+        if isinstance(cell_iter, list):
+            cell_str = ','.join(map(str, cell_iter))
+        else:
+            cell_str = str(cell_iter)
+        
+        # Loop over each reaction for this material
+        for reaction in reactions:
+            if energies is not None:
+                # Go through the energy list and use consecutive pairs
+                for i in range(len(energies) - 1):
+                    E1 = energies[i]
+                    E2 = energies[i + 1]
+
+                    # Create properly formatted METHOD=2 PERT card
+                    pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=2 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
+                    content_to_write.append(_format_mcnp_line(pert_card) + "\n")
+                    pert_counter += 1
+
+                    if order_iter == 2:
+                        # Create properly formatted METHOD=3 PERT card
+                        pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=3 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
+                        content_to_write.append(_format_mcnp_line(pert_card) + "\n")
+                        pert_counter += 1
+            
+                    if errors:
+                        # Create properly formatted METHOD=-2 PERT card
+                        pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=-2 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
+                        content_to_write.append(_format_mcnp_line(pert_card) + "\n")
+                        pert_counter += 1
+
+                        if order_iter == 2:
+                            # Create properly formatted METHOD=-3 PERT card
+                            pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=-3 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
+                            content_to_write.append(_format_mcnp_line(pert_card) + "\n")
+                            pert_counter += 1
+
+                            # Create properly formatted METHOD=1 PERT card
+                            pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=1 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
+                            content_to_write.append(_format_mcnp_line(pert_card) + "\n")
+                            pert_counter += 1
+            else:
+                # No energies provided, omit ERG part
+                # Create properly formatted METHOD=2 PERT card
+                pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=2 RXN={reaction}"
                 content_to_write.append(_format_mcnp_line(pert_card) + "\n")
                 pert_counter += 1
 
-                if order == 2:
-                    # Create properly formatted METHOD=-3 PERT card
-                    pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material} RHO={density:.6e} METHOD=-3 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
+                if order_iter == 2:
+                    # Create properly formatted METHOD=3 PERT card
+                    pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=3 RXN={reaction}"
                     content_to_write.append(_format_mcnp_line(pert_card) + "\n")
                     pert_counter += 1
 
-                    # Create properly formatted METHOD=1 PERT card
-                    pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material} RHO={density:.6e} METHOD=1 RXN={reaction} ERG={E1:.6e} {E2:.6e}"
+                if errors:
+                    # Create properly formatted METHOD=-2 PERT card
+                    pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=-2 RXN={reaction}"
                     content_to_write.append(_format_mcnp_line(pert_card) + "\n")
                     pert_counter += 1
-    
+
+                    if order_iter == 2:
+                        # Create properly formatted METHOD=-3 PERT card
+                        pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=-3 RXN={reaction}"
+                        content_to_write.append(_format_mcnp_line(pert_card) + "\n")
+                        pert_counter += 1
+
+                        # Create properly formatted METHOD=1 PERT card
+                        pert_card = f"PERT{pert_counter}:n CELL={cell_str} MAT={material_iter} RHO={density_iter:.6e} METHOD=1 RXN={reaction}"
+                        content_to_write.append(_format_mcnp_line(pert_card) + "\n")
+                        pert_counter += 1
+
     # Write footer - always include it
     content_to_write.append("c \n")
     content_to_write.append(MCNPY_FOOTER)

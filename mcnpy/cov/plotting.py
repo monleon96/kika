@@ -165,11 +165,11 @@ def plot_uncertainties(
                 
                 # Format labels consistently
                 if style == 'paper' or style == 'publication':
-                    label = f"{el_symbol}, MT={M} ({reaction_name})" if reaction_name else f"{el_symbol}, MT={M}"
+                    label = f"{el_symbol}, MT={M} {reaction_name}" if reaction_name else f"{el_symbol}, MT={M}"
                 else:
                     label = f"{el_symbol}-{M}"
                     if reaction_name:
-                        label += f" ({reaction_name})"
+                        label += f" {reaction_name}"
                 
                 # Add the plot
                 ax.step(filtered_xs, y, label=label, **curve_kwargs)

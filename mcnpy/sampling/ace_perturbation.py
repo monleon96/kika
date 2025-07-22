@@ -2,6 +2,8 @@ import numpy as np
 import os
 import shutil
 import logging
+import pandas as pd
+import json
 from typing import List, Union, Optional, Dict, Tuple
 from multiprocessing import Pool
 from datetime import datetime
@@ -10,7 +12,7 @@ from mcnpy.sampling.generators import generate_samples
 from mcnpy.ace.parsers import read_ace
 from mcnpy.ace.writers.write_ace import write_ace
 from mcnpy.cov.parse_covmat import read_scale_covmat, read_njoy_covmat
-
+from mcnpy._utils import zaid_to_symbol
 
 class DualLogger:
     """Logger that writes detailed info to file and basic info to console."""
@@ -157,8 +159,11 @@ def _process_sample(
 
     # — write this sample's small summary file —
     n_groups    = len(energy_grid) - 1
-    boundaries  = np.asarray(energy_grid)
+    boundaries  = np.asarray(energy_grid, dtype=np.float32)  # Convert energy boundaries to float32
     summary_tmp = os.path.join(sample_dir, f"{base}_{sample_str}_summary.txt")
+
+    # Convert sample to float32 for consistency
+    sample = sample.astype(np.float32)
 
     with open(summary_tmp, 'w') as sf:
 
@@ -170,9 +175,26 @@ def _process_sample(
             for grp in range(n_groups):
                 low, high = boundaries[grp], boundaries[grp+1]
                 fac       = grp_facs[grp]
-                sf.write(f"{mt:<3}\t{low:.12e}\t{high:.12e}\t{fac:.12e}\n")
+                # Use 6 decimal places for float32 precision for all values
+                sf.write(f"{mt:<3}\t{low:.6e}\t{high:.6e}\t{fac:.6e}\n")
 
         sf.write("\n")
+
+#def load_covariance(path):
+#    if not os.path.exists(path):
+#        return None
+#    
+#    for reader in (read_njoy_covmat, read_scale_covmat):
+#        try:
+#            cov = reader(path)
+#            return cov
+#        except Exception as e:
+#            print(f"Reader {reader.__name__} failed with: {type(e).__name__}: {e}")
+#            # Add more detailed traceback for debugging
+#            import traceback
+#            print(f"Full traceback:\n{traceback.format_exc()}")
+#            continue
+#    return None
 
 
 def load_covariance(path):
@@ -182,9 +204,9 @@ def load_covariance(path):
     for reader in (read_njoy_covmat, read_scale_covmat):
         try:
             cov = reader(path)
-        except ValueError:
+            return cov
+        except (ValueError, FileNotFoundError, IOError, KeyError, IndexError, TypeError) as e:
             continue
-        return cov
     return None
 
 
@@ -288,8 +310,16 @@ def perturb_ACE_files(
     # Track skipped isotopes due to missing or invalid covariance
     skipped_isotopes = {}
 
+    # Initialize dictionary to collect all perturbation factors for matrix generation
+    all_factors_data = {}
+
+    # Initialize master perturbation matrix directory for incremental updates
+    matrix_dir = _initialize_master_perturbation_matrix(output_dir, timestamp, num_samples)
+    _logger.info(f"[MATRIX] [INIT] Initialized matrix directory: {os.path.basename(matrix_dir)}")
+
     # Console: Show progress
     print(f"[INFO] Processing {len(ace_files)} isotope(s)")
+    print(f"[INFO] Matrix directory: {os.path.basename(matrix_dir)}")
 
     for i, (ace_file, cov_file) in enumerate(zip(ace_files, cov_files)):
 
@@ -592,6 +622,19 @@ def perturb_ACE_files(
         # Store final perturbed MTs
         summary_data[zaid]["mt_perturbed"] = mt_perturb_final if mt_perturb_final else []
 
+        # Store factors data for master matrix generation
+        if mt_perturb_final and factors is not None:
+            all_factors_data[zaid] = {
+                'factors': factors.astype(np.float32),  # Convert to float32 for consistency
+                'mt_numbers': mt_perturb_final,
+                'energy_grid': energy_grid
+            }
+            
+            # Update master perturbation matrix incrementally
+            _update_master_perturbation_matrix(
+                matrix_dir, zaid, factors, mt_perturb_final, energy_grid, verbose
+            )
+
         # -- prepare output dirs ----------------------------------------------
         iso_dir = os.path.join(output_dir, str(zaid))
         os.makedirs(iso_dir, exist_ok=True)
@@ -763,6 +806,11 @@ def perturb_ACE_files(
 
     _logger.info(f"\n{separator}")
     
+    # Convert individual files to master parquet and clean up
+    final_parquet_path = _finalize_master_perturbation_matrix(matrix_dir, verbose)
+    _logger.info(f"[MATRIX] [COMPLETE] Master perturbation matrix finalized")
+    _logger.info(f"  Final matrix file: {os.path.basename(final_parquet_path)}")
+    
     # Console: Final summary
     processed_count = len([zaid for zaid in summary_data.keys() if zaid not in skipped_isotopes])
     skipped_count = len(skipped_isotopes)
@@ -771,11 +819,15 @@ def perturb_ACE_files(
     print(f"[INFO] Processed: {processed_count} isotope(s)")
     print(f"[INFO] Skipped: {skipped_count} isotope(s)")
     print(f"[INFO] Detailed log saved to: {log_file}")
+    print(f"[INFO] Master matrix file: {os.path.basename(final_parquet_path)}")
 
 
 def apply_perturbation_factor_to_ace(ace, sample, sample_index, energy_grid, mt_numbers, verbose=True):
     """Apply per-group perturbation factors to ACE, and list which MTs were actually perturbed."""
     logger = _get_logger()
+    
+    # Convert sample to float32
+    sample = sample.astype(np.float32)
     
     n_groups = len(energy_grid) - 1
     if sample.shape[0] != len(mt_numbers) * n_groups:
@@ -847,6 +899,10 @@ def _apply_factors_to_mt(ace, mt, factors, boundaries, verbose=True):
     """
     logger = _get_logger()
     
+    # Convert factors to float32 if not already
+    if factors.dtype != np.float32:
+        factors = factors.astype(np.float32)
+    
     if (factors <= 0).any():
         bad = ", ".join(f"{f:+.3e}" for f in factors if f <= 0)
         if verbose and logger:
@@ -861,7 +917,231 @@ def _apply_factors_to_mt(ace, mt, factors, boundaries, verbose=True):
     for i, entry in enumerate(xs_entries):
         grp = bin_idx[i]
         if 0 <= grp < len(factors):
-            entry.value *= factors[grp]
+            entry.value *= float(factors[grp])  # Convert to float for multiplication
+
+
+def _initialize_master_perturbation_matrix(output_dir: str, timestamp: str, num_samples: int) -> str:
+    """
+    Create a directory structure for storing individual isotope matrices.
+    
+    Parameters
+    ----------
+    output_dir : str
+        Output directory
+    timestamp : str
+        Timestamp for unique filename
+    num_samples : int
+        Number of samples to initialize
+    
+    Returns
+    -------
+    str
+        Path to the matrix directory
+    """
+    matrix_dir = os.path.join(output_dir, f"perturbation_matrix_{timestamp}")
+    os.makedirs(matrix_dir, exist_ok=True)
+    
+    # Create a metadata file with basic info
+    metadata = {
+        'timestamp': timestamp,
+        'num_samples': num_samples,
+        'isotopes_processed': [],
+        'status': 'in_progress'
+    }
+    
+    metadata_path = os.path.join(matrix_dir, 'metadata.json')
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    return matrix_dir
+
+
+def _update_master_perturbation_matrix(
+    matrix_dir: str,
+    zaid: int,
+    factors: np.ndarray,
+    mt_numbers: List[int],
+    energy_grid: List[float],
+    verbose: bool = True
+) -> None:
+    """
+    Save data for a single isotope as an individual parquet file.
+    
+    Parameters
+    ----------
+    matrix_dir : str
+        Path to the matrix directory
+    zaid : int
+        ZAID of the isotope
+    factors : np.ndarray
+        Perturbation factors array (num_samples, num_features)
+    mt_numbers : List[int]
+        List of MT numbers for this isotope
+    energy_grid : List[float]
+        Energy grid boundaries
+    verbose : bool
+        Whether to log progress
+    """
+    # Try to get logger from ace_perturbation module
+    try:
+        logger = _get_logger()
+    except:
+        logger = None
+    
+    if verbose and logger:
+        logger.info(f"[MATRIX] [UPDATE] Saving data for ZAID {zaid} to individual file")
+    
+    # Convert factors to float32 for consistency
+    factors = factors.astype(np.float32)
+    
+    # Get element symbol from ZAID
+    symbol = zaid_to_symbol(zaid)
+    
+    # Create columns data for this isotope
+    n_groups = len(energy_grid) - 1
+    columns_data = {'Sample_ID': np.arange(1, factors.shape[0] + 1, dtype='int32')}
+    
+    for mt_idx, mt in enumerate(mt_numbers):
+        for grp in range(n_groups):
+            # Format: H1_MT2_E0-E1 (energy group indices)
+            col_name = f"{symbol}_MT{mt}_E{grp}-E{grp+1}"
+            
+            # Extract the data for this parameter across all samples
+            start_idx = mt_idx * n_groups + grp
+            column_data = factors[:, start_idx]
+            columns_data[col_name] = column_data
+    
+    if len(columns_data) == 1:  # Only Sample_ID
+        if verbose and logger:
+            logger.warning(f"[MATRIX] [WARNING] No parameter columns to save for ZAID {zaid}")
+        return
+    
+    # Create DataFrame
+    df = pd.DataFrame(columns_data)
+    
+    # Save as individual parquet file
+    isotope_file = os.path.join(matrix_dir, f"isotope_{zaid}.parquet")
+    df.to_parquet(isotope_file, index=False, compression='zstd', compression_level=3)
+    
+    # Update metadata
+    metadata_path = os.path.join(matrix_dir, 'metadata.json')
+    try:
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        
+        if zaid not in metadata['isotopes_processed']:
+            metadata['isotopes_processed'].append(zaid)
+        
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+    except Exception as e:
+        if verbose and logger:
+            logger.warning(f"[MATRIX] [WARNING] Failed to update metadata: {e}")
+    
+    if verbose and logger:
+        logger.info(f"  Saved {len(columns_data)-1} parameter columns for ZAID {zaid}")
+        logger.info(f"  File: {os.path.basename(isotope_file)}")
+
+
+def _finalize_master_perturbation_matrix(matrix_dir: str, verbose: bool = True) -> str:
+    """
+    Combine all individual isotope parquet files into a single master file.
+    
+    Parameters
+    ----------
+    matrix_dir : str
+        Path to the matrix directory containing individual files
+    verbose : bool
+        Whether to log progress
+        
+    Returns
+    -------
+    str
+        Path to the final master parquet file
+    """
+    # Try to get logger from ace_perturbation module
+    try:
+        logger = _get_logger()
+    except:
+        logger = None
+    
+    if verbose and logger:
+        logger.info(f"[MATRIX] [FINALIZE] Combining individual isotope files into master matrix")
+    
+    # Find all isotope parquet files
+    isotope_files = []
+    for filename in os.listdir(matrix_dir):
+        if filename.startswith('isotope_') and filename.endswith('.parquet'):
+            isotope_files.append(os.path.join(matrix_dir, filename))
+    
+    if not isotope_files:
+        if verbose and logger:
+            logger.warning(f"[MATRIX] [WARNING] No isotope files found in {matrix_dir}")
+        return matrix_dir
+    
+    if verbose and logger:
+        logger.info(f"  Found {len(isotope_files)} isotope files to combine")
+    
+    try:
+        # Read all isotope files
+        dataframes = []
+        for file_path in sorted(isotope_files):  # Sort for consistent ordering
+            df = pd.read_parquet(file_path)
+            if len(dataframes) == 0:
+                # First file - keep Sample_ID column
+                dataframes.append(df)
+            else:
+                # Subsequent files - drop Sample_ID column (already exists)
+                df_no_id = df.drop(columns=['Sample_ID'])
+                dataframes.append(df_no_id)
+        
+        # Combine all dataframes horizontally
+        if len(dataframes) == 1:
+            master_df = dataframes[0]
+        else:
+            master_df = pd.concat(dataframes, axis=1)
+        
+        # Generate final filename based on matrix directory name
+        matrix_dir_name = os.path.basename(matrix_dir)
+        output_dir = os.path.dirname(matrix_dir)
+        final_parquet_path = os.path.join(output_dir, f"{matrix_dir_name}_master.parquet")
+        
+        # Save master file
+        master_df.to_parquet(final_parquet_path, index=False, compression='zstd', compression_level=3)
+        
+        # Update metadata to mark as completed
+        metadata_path = os.path.join(matrix_dir, 'metadata.json')
+        try:
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            metadata['status'] = 'completed'
+            metadata['master_file'] = os.path.basename(final_parquet_path)
+            metadata['total_columns'] = len(master_df.columns)
+            metadata['total_samples'] = len(master_df)
+            
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+        except Exception as e:
+            if verbose and logger:
+                logger.warning(f"[MATRIX] [WARNING] Failed to update final metadata: {e}")
+        
+        if verbose and logger:
+            logger.info(f"  Successfully created master matrix")
+            logger.info(f"  Master matrix shape: {master_df.shape[0]} rows × {master_df.shape[1]} columns")
+            logger.info(f"  Master file: {os.path.basename(final_parquet_path)}")
+        
+        # Optionally clean up individual files (uncomment if desired)
+        import shutil
+        shutil.rmtree(matrix_dir)
+        if verbose and logger:
+            logger.info(f"  Cleaned up temporary matrix directory")
+        
+        return final_parquet_path
+        
+    except Exception as e:
+        if verbose and logger:
+            logger.error(f"[MATRIX] [ERROR] Failed to combine isotope files: {e}")
+        return matrix_dir
 
 
 def _write_sample_summary(
@@ -874,11 +1154,14 @@ def _write_sample_summary(
 ):
     """Serialise a single sample's perturbation factors."""
     n_groups = len(energy_grid) - 1
-    boundaries = np.asarray(energy_grid)
+    boundaries = np.asarray(energy_grid, dtype=np.float32) 
     tag = f"{sample_index + 1:04d}"
     sdir = os.path.join(iso_dir, tag)
     os.makedirs(sdir, exist_ok=True)
     path = os.path.join(sdir, f"{base}_{tag}_pert_factors.txt")
+
+    # Convert sample to float32
+    sample = sample.astype(np.float32)
 
     with open(path, "w") as f:
         for mt_idx, mt in enumerate(mt_numbers):
@@ -888,6 +1171,6 @@ def _write_sample_summary(
             for grp in range(n_groups):
                 lo, hi = boundaries[grp], boundaries[grp + 1]
                 fac = slice_[grp]
-                f.write(f"{mt:<3}\t{lo:.12e}\t{hi:.12e}\t{fac:.12e}\n")
+                # Use 6 decimal places for float32 precision for all values
+                f.write(f"{mt:<3}\t{lo:.6e}\t{hi:.6e}\t{fac:.6e}\n")
         f.write("\n")
-

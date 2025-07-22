@@ -22,6 +22,8 @@ def plot_mf34_covariance_heatmap(
     vmax: float | None = None,
     vmin: float | None = None,
     show_uncertainties: bool = True,
+    show_energy_ticks: bool = False,
+    cmap: any = None,
     **imshow_kwargs,
 ) -> Union[plt.Axes, Tuple[plt.Axes, List[plt.Axes]]]:
     """
@@ -54,6 +56,8 @@ def plot_mf34_covariance_heatmap(
         Color scale limits
     show_uncertainties : bool
         Whether to show uncertainty plots above the heatmap
+    show_energy_ticks : bool
+        Whether to show subtle energy group tick marks at the heatmap borders
     **imshow_kwargs
         Additional arguments passed to imshow
 
@@ -181,7 +185,7 @@ def plot_mf34_covariance_heatmap(
         
         gs = GridSpec(2, num_reactions, figure=fig,
                      height_ratios=[uncertainty_height_ratio, 1],
-                     hspace=0.02, wspace=0.01)
+                     hspace=0.05, wspace=0.01)
         
         uncertainty_axes = []
         for i in range(num_reactions):
@@ -206,7 +210,14 @@ def plot_mf34_covariance_heatmap(
         axis_obj.grid(False)
 
     # Color normalization
-    cmap = plt.get_cmap("RdYlGn").copy()
+
+    if cmap is None:
+        cmap = plt.get_cmap("RdYlGn").copy()
+    else:
+        if isinstance(cmap, str):
+            cmap = plt.get_cmap(cmap).copy()
+        else:
+            cmap = cmap
     cmap.set_bad(color=background_color)
 
     if vmax is None or vmin is None:
@@ -256,28 +267,69 @@ def plot_mf34_covariance_heatmap(
         ax_heatmap.axvline(-0.5, color="black", lw=0.2)
         ax_heatmap.axvline(G - 0.5, color="black", lw=0.2)
 
-    # Setup ticks and labels (removed "L=" prefix)
-    if is_diagonal:
-        centres = [i * G + (G - 1) / 2 for i in range(len(legendre_sorted))]
-        l_labels = [str(l_val) for l_val in legendre_sorted]
+    # Setup ticks and labels
+    if show_energy_ticks:
+        # Add subtle energy group tick marks at borders only
+        if is_diagonal:
+            # For diagonal blocks, add minor ticks for energy groups within each Legendre block
+            energy_ticks_minor = []
+            for l_idx in range(len(legendre_sorted)):
+                for g_idx in range(G):
+                    energy_ticks_minor.append(l_idx * G + g_idx)
+            
+            # Set minor ticks for energy groups (subtle marks)
+            ax_heatmap.set_xticks(energy_ticks_minor, minor=True)
+            ax_heatmap.set_yticks(energy_ticks_minor, minor=True)
+            ax_heatmap.tick_params(axis="both", which="minor", length=2, width=0.5, 
+                                 color='gray', alpha=0.6, direction='out')
+            
+            # Keep main ticks for Legendre coefficients
+            centres = [i * G + (G - 1) / 2 for i in range(len(legendre_sorted))]
+            l_labels = [str(l_val) for l_val in legendre_sorted]
+            
+            ax_heatmap.set_xticks(centres)
+            ax_heatmap.set_yticks(centres)
+            ax_heatmap.set_xticklabels(l_labels, rotation=0, ha="center")
+            ax_heatmap.set_yticklabels(l_labels)
+        else:
+            # For off-diagonal blocks, add minor ticks for energy groups
+            energy_ticks_minor = list(range(G))
+            ax_heatmap.set_xticks(energy_ticks_minor, minor=True)
+            ax_heatmap.set_yticks(energy_ticks_minor, minor=True)
+            ax_heatmap.tick_params(axis="both", which="minor", length=2, width=0.5, 
+                                 color='gray', alpha=0.6, direction='out')
+            
+            # Keep main ticks for Legendre coefficients
+            center = (G - 1) / 2
+            ax_heatmap.set_xticks([center])
+            ax_heatmap.set_yticks([center])
+            ax_heatmap.set_xticklabels([str(col_l)], rotation=0, ha="center")
+            ax_heatmap.set_yticklabels([str(row_l)])
         
-        ax_heatmap.set_xticks(centres)
-        ax_heatmap.set_yticks(centres)
-        ax_heatmap.set_xticklabels(l_labels, rotation=0, ha="center")
-        ax_heatmap.set_yticklabels(l_labels)
+        ax_heatmap.tick_params(axis="both", which="major", length=0, pad=5)
+        ax_heatmap.set_xlabel("Legendre coefficient")
+        ax_heatmap.set_ylabel("Legendre coefficient")
     else:
-        # For off-diagonal blocks
-        center = (G - 1) / 2
-        ax_heatmap.set_xticks([center])
-        ax_heatmap.set_yticks([center])
-        ax_heatmap.set_xticklabels([str(col_l)], rotation=0, ha="center")
-        ax_heatmap.set_yticklabels([str(row_l)])
-    
-    # Standard padding since we removed energy ticks
-    ax_heatmap.tick_params(axis="both", which="major", length=0, pad=5)
-
-    ax_heatmap.set_xlabel("Legendre coefficient")
-    ax_heatmap.set_ylabel("Legendre coefficient")
+        # Show only Legendre coefficient labels (current behavior)
+        if is_diagonal:
+            centres = [i * G + (G - 1) / 2 for i in range(len(legendre_sorted))]
+            l_labels = [str(l_val) for l_val in legendre_sorted]
+            
+            ax_heatmap.set_xticks(centres)
+            ax_heatmap.set_yticks(centres)
+            ax_heatmap.set_xticklabels(l_labels, rotation=0, ha="center")
+            ax_heatmap.set_yticklabels(l_labels)
+        else:
+            # For off-diagonal blocks
+            center = (G - 1) / 2
+            ax_heatmap.set_xticks([center])
+            ax_heatmap.set_yticks([center])
+            ax_heatmap.set_xticklabels([str(col_l)], rotation=0, ha="center")
+            ax_heatmap.set_yticklabels([str(row_l)])
+        
+        ax_heatmap.tick_params(axis="both", which="major", length=0, pad=5)
+        ax_heatmap.set_xlabel("Legendre coefficient")
+        ax_heatmap.set_ylabel("Legendre coefficient")
 
     # Set title
     if style not in {"paper", "publication"}:
@@ -304,7 +356,7 @@ def plot_mf34_covariance_heatmap(
             xs = list(range(1, G+1))
             use_log_scale = False
         
-        line_props = {'color': 'black', 'linewidth': 0.2}
+        line_props = {'color': 'lightgray', 'linewidth': 0.1, 'alpha': 0.5}
 
         if is_diagonal:
             # Process each Legendre coefficient independently for diagonal case
@@ -359,7 +411,8 @@ def plot_mf34_covariance_heatmap(
                 ax_uncert.set_yticks(yticks)
                 ax_uncert.set_yticklabels([])
                 ax_uncert.tick_params(axis='y', which='major', direction='in', length=0, color='none')
-                
+                ax_uncert.tick_params(axis='x', which='minor', bottom=False, top=False)
+
                 if i == 0:
                     ax_uncert.set_ylabel('% Unc.', fontsize='small')
                 
@@ -448,8 +501,8 @@ def plot_mf34_covariance_heatmap(
                 if i == 0:
                     ax_uncert.set_ylabel('% Unc.', fontsize='small')
                 
-                # Add title to identify which L this uncertainty belongs to
-                ax_uncert.set_title(f'L {l_label}', fontsize='small', pad=2)
+                # Remove individual titles that might cause visual artifacts
+                # Instead, we'll rely on the main figure title and positioning
                 
                 # Spine setup for two uncertainty plots
                 ax_uncert.spines['bottom'].set_visible(False)
@@ -477,6 +530,16 @@ def plot_mf34_covariance_heatmap(
                             va='center',
                             alpha=0.7
                         )
+                
+                # Add subtle label for L coefficient in corner
+                if not is_diagonal:
+                    ax_uncert.text(
+                        0.02, 0.85, f'L {l_label}', 
+                        transform=ax_uncert.transAxes,
+                        fontsize='x-small', 
+                        fontweight='bold',
+                        bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8, edgecolor='none')
+                    )
 
     # Layout and colorbar
     num_legendre = 2 if not is_diagonal else len(legendre_sorted)

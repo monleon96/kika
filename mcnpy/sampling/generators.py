@@ -594,6 +594,9 @@ def generate_samples(
     else:  # log (moment-matched)
         m = -0.5 * np.diag(cov_mat)        # shift so mean → 1
         factors = np.exp(Y + m)            # strictly positive
+    
+    # Convert perturbation factors to float32 for memory efficiency
+    factors = factors.astype(np.float32)
 
     # ------------------------------------------------------------------
     # 6. Diagnostics of the *samples* (same code you had, now renamed)
