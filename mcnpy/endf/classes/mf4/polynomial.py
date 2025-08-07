@@ -35,8 +35,8 @@ class MF4MTLegendre(MF4MT):
         return self._interpolation
     
     @property
-    def energies(self) -> List[float]:
-        """Energy grid for angular distribution data"""
+    def legendre_energies(self) -> List[float]:
+        """Energy grid for Legendre coefficients (alias for energies for compatibility)"""
         return self._energies
     
     @property

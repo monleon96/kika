@@ -17,6 +17,10 @@ from ..classes.mf4.polynomial import MF4MTLegendre
 from ..classes.mf4.tabulated import MF4MTTabulated
 from ..classes.mf4.mixed import MF4MTMixed
 from ..utils import parse_line, parse_endf_id, group_lines_by_mt_with_positions
+from ...utils import get_endf_logger
+
+# Initialize logger for this module
+logger = get_endf_logger(__name__)
 
 
 def parse_mf4(lines: List[str]) -> MF:
@@ -29,6 +33,7 @@ def parse_mf4(lines: List[str]) -> MF:
     Returns:
         MF object with parsed MF4 data
     """
+    logger.debug(f"Parsing MF4 with {len(lines)} lines")
     mf = MF(number=4)
     
     # Record number of lines
@@ -36,24 +41,28 @@ def parse_mf4(lines: List[str]) -> MF:
     
     # Group lines by MT sections with line counting
     mt_groups, line_counts = group_lines_by_mt_with_positions(lines)
+    logger.debug(f"Found MT sections: {list(mt_groups.keys())}")
     
     # Parse each MT section
     for mt, mt_lines in mt_groups.items():
         # Skip MT=0 since these are section end markers, not actual data
         if mt == 0:
-            print(f"DEBUG - Ignoring MT=0 marker lines (end of section indicators)")
+            logger.debug("Ignoring MT=0 marker lines (end of section indicators)")
             continue
         
         try:
+            logger.debug(f"Parsing MT{mt} with {len(mt_lines)} lines")
             mt_section = parse_mf4_mt(mt_lines, mt)
             mf.add_section(mt_section)
             
             # Add line count information if available
             if mt in line_counts:
                 mt_section.num_lines = line_counts[mt]
+            logger.debug(f"Successfully parsed MT{mt}")
         except Exception as e:
-            print(f"WARNING - Error parsing MT{mt} in MF4: {e}")
+            logger.warning(f"Error parsing MT{mt} in MF4: {e}")
     
+    logger.debug("Finished parsing MF4")
     return mf
 
 def parse_mf4_mt(lines: List[str], mt: int) -> MF4MT:
@@ -67,6 +76,8 @@ def parse_mf4_mt(lines: List[str], mt: int) -> MF4MT:
     Returns:
         MF4MT object of the appropriate type based on LTT
     """
+    logger.debug(f"Parsing MF4 MT{mt} with {len(lines)} lines")
+    
     # Need at least one line for the header
     if not lines:
         raise ValueError(f"No data provided for MT{mt} section in MF4")
@@ -79,17 +90,23 @@ def parse_mf4_mt(lines: List[str], mt: int) -> MF4MT:
     ltt = header.get("C4")
     # C5 and C6 are zero (unused)
     
+    logger.debug(f"MT{mt} header: ZA={za}, AWR={awr}, LTT={ltt}")
+    
     # Get material number
     mat, mf, mt = parse_endf_id(lines[0])
     
     # Check which format we're dealing with and parse accordingly
     if ltt == 0:
+        logger.debug(f"MT{mt} using isotropic format (LTT=0)")
         return _parse_mf4_mt_isotropic(lines, za, awr, mt, mat)
     elif ltt == 1:
+        logger.debug(f"MT{mt} using Legendre expansion format (LTT=1)")
         return _parse_mf4_mt_legendre(lines, za, awr, mt, mat)
     elif ltt == 2:
+        logger.debug(f"MT{mt} using tabulated format (LTT=2)")
         return _parse_mf4_mt_tabulated(lines, za, awr, mt, mat)
     elif ltt == 3:
+        logger.debug(f"MT{mt} using mixed format (LTT=3)")
         return _parse_mf4_mt_mixed(lines, za, awr, mt, mat)
     else:
         raise ValueError(f"Unknown LTT value: {ltt} in MT{mt}")

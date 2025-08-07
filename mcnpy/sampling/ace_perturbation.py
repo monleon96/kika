@@ -201,12 +201,32 @@ def load_covariance(path):
     if not os.path.exists(path):
         return None
     
+    # Try to get logger from ace_perturbation module
+    try:
+        logger = _get_logger()
+    except:
+        logger = None
+    
+    # Map readers to format names for logging
+    reader_formats = {
+        read_njoy_covmat: "NJOY",
+        read_scale_covmat: "SCALE"
+    }
+    
     for reader in (read_njoy_covmat, read_scale_covmat):
         try:
             cov = reader(path)
+            format_name = reader_formats[reader]
+            if logger:
+                logger.info(f"[COV] [FORMAT] Successfully read covariance matrix in {format_name} format")
             return cov
         except (ValueError, FileNotFoundError, IOError, KeyError, IndexError, TypeError) as e:
             continue
+    
+    # If we get here, no reader succeeded
+    if logger:
+        logger.info(f"[COV] [FORMAT] Failed to read covariance matrix - tried NJOY and SCALE formats")
+    
     return None
 
 
@@ -215,7 +235,7 @@ def perturb_ACE_files(
     cov_files: Union[str, List[str]],
     mt_list: List[int],
     num_samples: int,
-    space: str = "linear",
+    space: str = "log",
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
     output_dir: str = '.',
@@ -223,12 +243,67 @@ def perturb_ACE_files(
     seed: Optional[int] = None,
     nprocs: int = 1,
     dry_run: bool = False,
-    autofix: Optional[str] = 'soft', 
+    autofix: Optional[str] = None, 
     high_val_thresh: float = 1.0,
     accept_tol: float = -1.0e-4,
     remove_blocks: Optional[Dict[int, Union[Tuple[int, int], List[Tuple[int, int]]]]] = None,  # Add remove_blocks parameter
     verbose: bool = True,
 ):
+    """
+    Perturb ACE nuclear data files using covariance matrices.
+    
+    This function generates perturbed ACE files by sampling perturbation factors
+    from multivariate normal distributions derived from covariance matrices.
+    
+    Parameters
+    ----------
+    ace_files : Union[str, List[str]]
+        Path(s) to ACE file(s) to be perturbed
+    cov_files : Union[str, List[str]]
+        Path(s) to covariance matrix file(s) (SCALE or NJOY format).
+        Can be a single file (used for all ACE files) or one file per ACE file.
+    mt_list : List[int]
+        List of MT reaction numbers to perturb. Empty list means all available MTs
+    num_samples : int
+        Number of perturbed ACE files to generate
+    space : str, default "log"
+        Sampling space: "linear" (factors = 1 + X) or "log" (factors = exp(Y))
+    decomposition_method : str, default "svd"
+        Matrix decomposition method: "svd", "cholesky", "eigen", or "pca"
+    sampling_method : str, default "sobol"
+        Sampling method: "sobol", "lhs", or "random"
+    output_dir : str, default "."
+        Output directory for perturbed files
+    xsdir_file : Optional[str], default None
+        Path to master XSDIR file to be modified for each sample
+    seed : Optional[int], default None
+        Random seed for reproducible sampling
+    nprocs : int, default 1
+        Number of parallel processes (currently unused)
+    dry_run : bool, default False
+        If True, only generate perturbation factors without creating ACE files
+    autofix : Optional[str], default None
+        Covariance matrix fixing level:
+        - None: No autofix - use covariance matrix as-is
+        - "soft": Clamp diagonal variances only
+        - "medium": Clamp variances then remove worst block pairs
+        - "hard": Clamp variances then remove worst reactions entirely
+    high_val_thresh : float, default 1.0
+        Threshold for identifying problematic covariance values during autofix
+    accept_tol : float, default -1.0e-4
+        Minimum eigenvalue threshold for accepting the covariance matrix
+    remove_blocks : Optional[Dict[int, Union[Tuple[int, int], List[Tuple[int, int]]]]], default None
+        Manual specification of covariance blocks to remove by isotope
+    verbose : bool, default True
+        Enable verbose logging output
+        
+    Notes
+    -----
+    When autofix=None, the covariance matrix is used exactly as read from the file,
+    without any modifications. This may result in decomposition failures if the
+    matrix is not positive semi-definite, but preserves the original uncertainties
+    and correlations exactly as specified in the nuclear data evaluation.
+    """
     global _logger
     
     # Create output directory if it doesn't exist
@@ -288,7 +363,7 @@ def perturb_ACE_files(
     _logger.info(f"  Random seed:           {seed if seed is not None else 'Random'}")
     _logger.info(f"  Parallel processes:    {nprocs}")
     _logger.info(f"  Mode:                  {'Dry run (factors only)' if dry_run else 'Full ACE generation'}")
-    _logger.info(f"  Autofix covariance:    {autofix}")
+    _logger.info(f"  Autofix covariance:    {autofix if autofix is not None else 'None (no autofix)'}")
     _logger.info(f"  High value threshold:  {high_val_thresh}")
     _logger.info(f"  Accept tolerance:      {accept_tol}")
     _logger.info(f"  Remove blocks:         {remove_blocks if remove_blocks else 'None'}")
@@ -303,6 +378,13 @@ def perturb_ACE_files(
         ace_files = [ace_files]
     if isinstance(cov_files, str):
         cov_files = [cov_files]
+
+    # Validate input compatibility
+    if len(cov_files) != 1 and len(cov_files) != len(ace_files):
+        raise ValueError(
+            f"Number of covariance files ({len(cov_files)}) must be either 1 "
+            f"(to be used for all ACE files) or equal to the number of ACE files ({len(ace_files)})"
+        )
 
     # Initialize a dictionary to collect summary information for each isotope
     summary_data = {}
@@ -320,6 +402,12 @@ def perturb_ACE_files(
     # Console: Show progress
     print(f"[INFO] Processing {len(ace_files)} isotope(s)")
     print(f"[INFO] Matrix directory: {os.path.basename(matrix_dir)}")
+
+    # Handle case where there's only one covariance file for multiple ACE files
+    if len(cov_files) == 1 and len(ace_files) > 1:
+        # Use the same covariance file for all ACE files
+        cov_files = cov_files * len(ace_files)
+        _logger.info(f"[ACE] [COV] Using single covariance file for all {len(ace_files)} isotopes: {os.path.basename(cov_files[0])}")
 
     for i, (ace_file, cov_file) in enumerate(zip(ace_files, cov_files)):
 
@@ -444,7 +532,7 @@ def perturb_ACE_files(
                     _logger.info(f"  No reactions were removed (blocks may not have existed)")
                     
             except Exception as e:
-                _logger.error(f"  [ERROR] Failed to remove blocks {blocks_to_remove}: {str(e)}")
+                _logger.error(f"[ACE] [ERROR] Failed to remove blocks {blocks_to_remove}: {str(e)}")
                 summary_data[zaid]["warnings"].append(f"Failed to remove user-specified blocks: {str(e)}")
             
             _logger.info(f"\n{subseparator}")
@@ -906,7 +994,7 @@ def _apply_factors_to_mt(ace, mt, factors, boundaries, verbose=True):
     if (factors <= 0).any():
         bad = ", ".join(f"{f:+.3e}" for f in factors if f <= 0)
         if verbose and logger:
-            logger.warning(f"  [WARNING] MT={mt}: negative or zero factors detected ({bad}). Reaction not perturbed.")
+            logger.warning(f"[ACE] [WARNING] MT={mt}: negative or zero factors detected ({bad}). Reaction not perturbed.")
         return  # leave this reaction unperturbed
 
     reac       = ace.cross_section.reaction[mt]

@@ -8,6 +8,14 @@ from typing import List
 from ..classes.mf import MF
 from ..classes.mf34.mf34 import MF34MT, Subsection, SubSubsection, SubSubsectionRecord
 from ..utils import parse_line, parse_endf_id, group_lines_by_mt_with_positions
+from ...utils import get_endf_logger
+
+# Initialize logger for this module
+logger = get_endf_logger(__name__)
+from ...utils import get_endf_logger
+
+# Initialize logger for this module
+logger = get_endf_logger(__name__)
 
 
 def parse_mf34(lines: List[str]) -> MF:
@@ -20,6 +28,7 @@ def parse_mf34(lines: List[str]) -> MF:
     Returns:
         MF object with parsed MF34 data
     """
+    logger.debug(f"Parsing MF34 with {len(lines)} lines")
     mf = MF(number=34)
     
     # Record number of lines
@@ -27,24 +36,28 @@ def parse_mf34(lines: List[str]) -> MF:
     
     # Group lines by MT sections with line counting
     mt_groups, line_counts = group_lines_by_mt_with_positions(lines)
+    logger.debug(f"Found MT sections: {list(mt_groups.keys())}")
     
     # Parse each MT section
     for mt, mt_lines in mt_groups.items():
         # Skip MT=0 since these are section end markers, not actual data
         if mt == 0:
-            print(f"DEBUG - Ignoring MT=0 marker lines (end of section indicators)")
+            logger.debug("Ignoring MT=0 marker lines (end of section indicators)")
             continue
         
         try:
+            logger.debug(f"Parsing MT{mt} with {len(mt_lines)} lines")
             mt_section = parse_mf34_mt(mt_lines, mt)
             mf.add_section(mt_section)
             
             # Add line count information if available
             if mt in line_counts:
                 mt_section.num_lines = line_counts[mt]
+            logger.debug(f"Successfully parsed MT{mt}")
         except Exception as e:
-            print(f"WARNING - Error parsing MT{mt} in MF34: {e}")
+            logger.warning(f"Error parsing MT{mt} in MF34: {e}")
     
+    logger.debug("Finished parsing MF34")
     return mf
 
 
@@ -73,7 +86,7 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
     nmt1 = header.get("C6")  # Number of subsections
     
 
-    print(f"DEBUG - Parsing MF34 MT{mt} with ZA={za}, AWR={awr}, LTT={ltt}, NMT1={nmt1}")
+    logger.debug(f"Parsing MF34 MT{mt} with ZA={za}, AWR={awr}, LTT={ltt}, NMT1={nmt1}")
 
 
     # Get material number
@@ -92,7 +105,7 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
     # Parse each subsection
     current_line = 1  # Start with the first subsection header
     
-    for _ in range(nmt1 if nmt1 else 0):
+    for subsection_idx in range(nmt1 if nmt1 else 0):
         if current_line >= len(lines):
             break
             
@@ -106,7 +119,7 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
         nl = subsec_line.get("C5")
         nl1 = subsec_line.get("C6")
         
-        print(f"DEBUG - Parsing subsection with MAT1={mat1}, MT1={mt1}, NL={nl}, NL1={nl1}")
+        logger.debug(f"Parsing subsection {subsection_idx+1}/{nmt1} with MAT1={mat1}, MT1={mt1}, NL={nl}, NL1={nl1}")
 
         # Create subsection
         subsection = Subsection(
@@ -123,8 +136,10 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
         else:
             nss = nl * nl1
         
+        logger.debug(f"Processing {nss} sub-subsections for this subsection")
+        
         # Parse sub-subsections
-        for _ in range(nss):
+        for sub_idx in range(nss):
             if current_line >= len(lines):
                 break
                 
@@ -138,7 +153,7 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
             lct = sub_header.get("C5")
             ni = sub_header.get("C6")  # Number of LIST records
             
-            print(f"DEBUG - Parsing sub-subsection with L={l}, L1={l1}, LCT={lct}, NI={ni}")
+            logger.debug(f"Parsing sub-subsection {sub_idx+1}/{nss} with L={l}, L1={l1}, LCT={lct}, NI={ni}")
 
             # Create sub-subsection
             sub_subsection = SubSubsection(
@@ -149,7 +164,7 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
             )
             
             # Parse LIST records
-            for _ in range(ni):
+            for list_idx in range(ni):
                 if current_line >= len(lines):
                     break
                     
@@ -162,6 +177,8 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                 lb = list_header.get("C4")
                 nt = list_header.get("C5")
                 ne_field = list_header.get("C6")
+
+                logger.debug(f"Parsing LIST record {list_idx+1}/{ni} with LS={ls}, LB={lb}, NT={nt}, NE={ne_field}")
 
                 # Create LIST record
                 list_record = SubSubsectionRecord(ls=ls, lb=lb, nt=nt)
@@ -184,40 +201,38 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                     for i in range(list_record.ne):
                         list_record.e_table_k.append(all_values[2*i])
                         list_record.f_table_k.append(all_values[2*i+1])
-                    print(f"DEBUG - Parsed LB={lb} one-table record NE={list_record.ne}")
+                    logger.debug(f"Parsed LB={lb} one-table record with NE={list_record.ne}")
 
                 elif lb == 5:
                     # For LB=5 (original implementation)
                     ne = list_header.get("C6")  # Number of energy entries
                     list_record.ne = ne
                     
-                    print(f"DEBUG LB=5 - NE={ne}")
+                    logger.debug(f"LB=5 processing: NE={ne}")
                     
                     # Calculate number of matrix elements based on LS and NE for LB=5
                     # Matrix is (NE-1) x (NE-1) for intervals
                     m = ne - 1  # Number of intervals = matrix dimension
                     if ls == 0:  # Asymmetric matrix
                         num_matrix_elements = m * m  # (NE-1)²
-                        print(f"DEBUG LB=5 - Asymmetric matrix: {m}x{m} = {num_matrix_elements} elements")
+                        logger.debug(f"LB=5 asymmetric matrix: {m}x{m} = {num_matrix_elements} elements")
                     elif ls == 1:  # Symmetric matrix - upper triangle including diagonal
                         num_matrix_elements = m * (m + 1) // 2  # (NE-1)(NE-1+1)/2
-                        print(f"DEBUG LB=5 - Symmetric matrix: {m}x{m}, upper triangle = {num_matrix_elements} elements")
+                        logger.debug(f"LB=5 symmetric matrix: {m}x{m}, upper triangle = {num_matrix_elements} elements")
                     else:
                         raise ValueError(f"Unknown LS value: {ls}. Should be 0 or 1")
                     
                     # Total values to read: energy grid + matrix elements
                     values_to_read = ne + num_matrix_elements
-                    print(f"DEBUG LB=5 - Total values to read: {ne} (energies) + {num_matrix_elements} (matrix) = {values_to_read}")
+                    logger.debug(f"LB=5 total values to read: {ne} (energies) + {num_matrix_elements} (matrix) = {values_to_read}")
                     
                     # Check NT field
-                    print(f"DEBUG LB=5 - NT field says: {nt} values")
                     if nt != values_to_read:
-                        print(f"WARNING LB=5 - NT mismatch! Expected {values_to_read}, got {nt}")
+                        logger.warning(f"LB=5 NT mismatch! Expected {values_to_read}, got {nt}")
                     
                     # Read all the data values following the LIST header
                     all_values = []
                     remaining_values = nt
-                    print(f"DEBUG LB=5 - Starting to read {remaining_values} values from data lines...")
                     
                     while remaining_values > 0 and current_line < len(lines):
                         data_line = parse_line(lines[current_line])
@@ -233,25 +248,20 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                         values_from_this_line = min(6, remaining_values)
                         all_values.extend(line_values[:values_from_this_line])
                         remaining_values -= values_from_this_line
-                        
-                        print(f"DEBUG LB=5 - Read line {current_line-1}: {line_values[:values_from_this_line]} (remaining: {remaining_values})")
                     
-                    print(f"DEBUG LB=5 - Total values read: {len(all_values)}")
+                    logger.debug(f"LB=5 read {len(all_values)} total values")
                     
                     # Split into energies and matrix values
                     energies = all_values[:ne]
                     matrix_values = all_values[ne:]
                     
-                    print(f"DEBUG LB=5 - Energy grid: {len(energies)} values")
-                    print(f"DEBUG LB=5 - Matrix values: {len(matrix_values)} values")
-                    print(f"DEBUG LB=5 - First few energies: {energies[:5]}")
-                    print(f"DEBUG LB=5 - First few matrix values: {matrix_values[:10]}")
+                    logger.debug(f"LB=5 split into {len(energies)} energies and {len(matrix_values)} matrix values")
                     
                     # Store in record
                     list_record.energies = energies
                     list_record.matrix = matrix_values
                     
-                    print(f"DEBUG LB=5 - Stored {len(list_record.energies)} energies and {len(list_record.matrix)} matrix values")
+                    logger.debug(f"LB=5 stored {len(list_record.energies)} energies and {len(list_record.matrix)} matrix values")
                 elif lb == 6:
                     # rectangular matrix: NT=1+NER*NEC
                     ner = ne_field
@@ -270,7 +280,7 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                     list_record.row_energies = all_values[:ner]
                     list_record.col_energies = all_values[ner:ner+nec]
                     list_record.rect_matrix   = all_values[ner+nec:]
-                    print(f"DEBUG - Parsed LB=6 record NER={ner}, NEC={nec}")
+                    logger.debug(f"Parsed LB=6 record with NER={ner}, NEC={nec}")
 
                 else:
                     raise ValueError(f"Unsupported LB value: {lb}")
@@ -284,4 +294,5 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
         # Add the subsection to the MT section
         mt_section.add_subsection(subsection)
     
+    logger.debug(f"Finished parsing MF34 MT{mt}")
     return mt_section

@@ -7,6 +7,8 @@ from typing import List, Sequence, Optional, Tuple, Dict, Any
 
 from mcnpy.cov.covmat import CovMat
 
+
+
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
@@ -40,6 +42,9 @@ def _uncorrelated(
         return stats.norm.ppf(U)
 
     raise ValueError("method must be 'random', 'lhs' or 'sobol'")
+
+
+
 
 # ----------------------------------------------------------------------
 # PCA decomposition (shared by linear & log spaces)
@@ -85,6 +90,8 @@ def _pca_decomposition_sampling(
     Z       = _uncorrelated(k, n_samples, sampling_method, seed)
 
     return Z @ L.T                      # shape (n_samples, p)
+
+
 
 # ----------------------------------------------------------------------
 #  Linear-space sample diagnostics
@@ -390,11 +397,16 @@ class SoftAutofixWarning(Exception):
     """Warning raised when soft autofix doesn't meet threshold but decomposition should still be attempted."""
     pass
 
+
+# ----------------------------------------------------------------------
+#  Main function
+# ----------------------------------------------------------------------
+
 def generate_samples(
     cov,
     n_samples: int,
     *,
-    space: str = "linear",          # "linear" or "log"
+    space: str = "log",          # "log" (default) or "linear"
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
     seed: Optional[int] = None,

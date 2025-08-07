@@ -239,12 +239,14 @@ class CovMat:
     @property
     def correlation_matrix(self) -> np.ndarray:
         """ Unclipped: diag forced to 1, undefined→nan, no off-diag correction. """
-        return self._compute_correlation(clip=False, force_diagonal=True)
+        from mcnpy.cov.decomposition import compute_correlation
+        return compute_correlation(self, clip=False, force_diagonal=True)
 
     @property
     def clipped_correlation_matrix(self) -> np.ndarray:
         """ Clipped into [-1,1], diag forced to 1, undefined→nan. """
-        return self._compute_correlation(clip=True,  force_diagonal=True)
+        from mcnpy.cov.decomposition import compute_correlation
+        return compute_correlation(self, clip=True, force_diagonal=True)
 
 
 
@@ -528,167 +530,6 @@ class CovMat:
             "min_eigenvalue": rem_log.get("min_eigenvalue", log.get("min_eigenvalue")),  # Use final eigenvalue
         }
         return cm_final, out_log
-    
-    def report_large_values(
-        self,
-        threshold: float = 1.0,
-        top_n: int = 30,
-        return_text: bool = False
-        ) -> Optional[Tuple[str, dict]]:
-        """
-        Scan each block of the relative covariance matrices and generate a detailed report
-        of entries that exceed the specified threshold.
-
-        If return_text is True, returns a tuple:
-        (report_text, summary_dict)
-        where summary_dict contains:
-        - zaid: the main isotope ZAID
-        - name: human-readable symbol
-        - count: number of entries > threshold
-        - max_value: largest flagged value
-        """
-        G = self.num_groups
-        if G == 0:
-            if return_text:
-                return None
-            print("No energy groups available. Cannot generate report.")
-            return None
-
-        total_checked = 0
-        total_flagged = 0
-        max_value = 0.0
-        large_values = []
-
-        # map MT to reaction names
-        reaction_names = {mt: MT_TO_REACTION.get(mt, f"MT={mt}")
-                        for mt in self.reactions}
-
-        if self.isotope_rows:
-            raw_zaid = self.isotope_rows[0]
-            try:
-                zaid_int = int(raw_zaid)
-            except (TypeError, ValueError):
-                # if it’s not parseable, just pass it through
-                zaid_int = raw_zaid
-        else:
-            zaid_int = 0
-
-        from mcnpy._utils import zaid_to_symbol
-        isotope_name = zaid_to_symbol(zaid_int)
-        
-        # scan each block
-        for iso_r, rxn_r, iso_c, rxn_c, M in zip(
-            self.isotope_rows,
-            self.reaction_rows,
-            self.isotope_cols,
-            self.reaction_cols,
-            self.matrices
-        ):
-            for ig in range(G):
-                for jg in range(G):
-                    total_checked += 1
-                    val = M[ig, jg]
-                    if val > threshold:
-                        total_flagged += 1
-                        if val > max_value:
-                            max_value = val
-
-                        entry = {
-                            'value': val,
-                            'iso_row': iso_r,
-                            'rxn_row': rxn_r,
-                            'rxn_name_row': reaction_names[rxn_r],
-                            'iso_col': iso_c,
-                            'rxn_col': rxn_c,
-                            'rxn_name_col': reaction_names[rxn_c],
-                            'row_idx': ig,
-                            'col_idx': jg
-                        }
-                        # add energy ranges if available
-                        if (self.energy_grid is not None
-                            and len(self.energy_grid) >= G+1):
-                            entry.update({
-                                'e_row_low':  self.energy_grid[ig],
-                                'e_row_high': self.energy_grid[ig+1],
-                                'e_col_low':  self.energy_grid[jg],
-                                'e_col_high': self.energy_grid[jg+1]
-                            })
-                        large_values.append(entry)
-
-        # nothing found?
-        if total_flagged == 0:
-            if return_text:
-                return None
-            print(f"No entries > {threshold:.4e} for {isotope_name} (ZAID:{zaid_int}).")
-            return None
-
-        # sort & truncate
-        large_values.sort(key=lambda x: x['value'], reverse=True)
-        truncated = False
-        if top_n is not None and len(large_values) > top_n:
-            large_values = large_values[:top_n]
-            truncated = True
-
-        # build detailed report
-        lines = []
-        lines.append("\n" + "="*100)
-        lines.append(f"LARGE VALUES REPORT FOR {isotope_name} (ZAID:{zaid_int}) > {threshold:.4e}")
-        lines.append("="*100)
-        lines.append("\nSUMMARY:")
-        lines.append(f"  Total elements checked:     {total_checked:,}")
-        lines.append(f"  Elements exceeding threshold:{total_flagged:,} "
-                    f"({total_flagged/total_checked*100:.2f}%)")
-        lines.append(f"  Maximum value found:        {max_value:.4e}")
-        lines.append("\nDETAILED REPORT:")
-        if truncated:
-            lines.append(f"  (Showing top {top_n} entries)")
-
-        # table header
-        header = (
-            f"{'#':>4} | {'Value':>10} | "
-            f"{'Row Block':^20} | {'Col Block':^20} | "
-            f"{'R#':>3} | {'C#':>3} | "
-            f"{'Energy Row':^17} | {'Energy Col':^17}"
-        )
-        lines.append("\n" + "-"*len(header))
-        lines.append(header)
-        lines.append("-"*len(header))
-
-        for i, e in enumerate(large_values, start=1):
-            row_blk = f"{e['iso_row']},{e['rxn_row']}({e['rxn_name_row'][:6]})"
-            col_blk = f"{e['iso_col']},{e['rxn_col']}({e['rxn_name_col'][:6]})"
-            val_str = f"{e['value']:.4e}"
-            energy_row = energy_col = ""
-            if 'e_row_low' in e:
-                energy_row = f"{e['e_row_low']:.4e}-{e['e_row_high']:.4e}"
-                energy_col = f"{e['e_col_low']:.4e}-{e['e_col_high']:.4e}"
-            line = (
-                f"{i:>4} | {val_str:>10} | "
-                f"{row_blk:<20} | {col_blk:<20} | "
-                f"{e['row_idx']:>3} | {e['col_idx']:>3} | "
-                f"{energy_row:<17} | {energy_col:<17}"
-            )
-            lines.append(line)
-
-        lines.append("-"*len(header))
-        if truncated:
-            extra = total_flagged - top_n
-            lines.append(f"Note: {extra:,} more entries not shown.")
-        lines.append("\n" + "="*100)
-
-        report_text = "\n".join(lines)
-
-        if return_text:
-            summary = {
-                'zaid': zaid_int,
-                'name': isotope_name,
-                'count': total_flagged,
-                'max_value': max_value
-            }
-            return report_text, summary
-        else:
-            print(report_text)
-            return None
 
     def eigen_block_contributions(
         self,
@@ -940,7 +781,7 @@ class CovMat:
     def cholesky_decomposition(
         self,
         *,
-        space: str = "linear",        # "linear" (default) or "log"
+        space: str = "log",        # "log" (default) or "linear"
         jitter_scale: float = 1e-10,
         max_jitter_ratio: float = 1e-3,
         verbose: bool = True,
@@ -949,34 +790,20 @@ class CovMat:
         """
         Robust Cholesky factor L such that  M ≈ L Lᵀ.
         """
-        M = (self.covariance_matrix if space == "linear" else self.log_covariance_matrix)
-
-        def _log_message(msg: str):
-            """Helper to log message to logger or print."""
-            if logger:
-                logger.info(msg)
-            else:
-                print(msg)
-
-        try:
-            L = np.linalg.cholesky(M)
-            if verbose:
-                _log_message("  [INFO] No adjustment was necessary for Cholesky decomposition.")
-            return L
-        except np.linalg.LinAlgError:
-            M_psd, _ = self._make_psd(
-                M,
-                jitter_scale=jitter_scale,
-                max_jitter_ratio=max_jitter_ratio,
-                verbose=verbose,
-                logger=logger,  # Pass logger to _make_psd
-            )
-            return np.linalg.cholesky(M_psd)
+        from mcnpy.cov.decomposition import cholesky_decomposition
+        return cholesky_decomposition(
+            self,
+            space=space,
+            jitter_scale=jitter_scale,
+            max_jitter_ratio=max_jitter_ratio,
+            verbose=verbose,
+            logger=logger
+        )
 
     def eigen_decomposition(
         self,
         *,
-        space: str = "linear",
+        space: str = "log",
         clip_negatives: bool = True,
         verbose: bool = True,
         logger = None,  # Add logger parameter
@@ -987,33 +814,19 @@ class CovMat:
         zero and the user is informed of the number of clips and the minimum
         original value.
         """
-        M = (self.covariance_matrix if space == "linear" else self.log_covariance_matrix)
-        eigvals, eigvecs = np.linalg.eigh(M)
-        
-        def _log_message(msg: str):
-            """Helper to log message to logger or print."""
-            if logger:
-                logger.info(msg)
-            else:
-                print(msg)
-                
-        if clip_negatives:
-            mask = eigvals < 0
-            if np.any(mask):
-                if verbose:
-                    _log_message(
-                        f"  [INFO] Clipped {mask.sum()} negative eigenvalues (min {eigvals.min():.3e})."
-                    )
-                eigvals = np.where(mask, 0.0, eigvals)
-            else:
-                if verbose:
-                    _log_message("  [INFO] No negative eigenvalues found; no clipping applied.")
-        return eigvals, eigvecs
+        from mcnpy.cov.decomposition import eigen_decomposition
+        return eigen_decomposition(
+            self,
+            space=space,
+            clip_negatives=clip_negatives,
+            verbose=verbose,
+            logger=logger
+        )
 
     def svd_decomposition(
         self,
         *,
-        space: str = "linear",
+        space: str = "log",
         clip_negatives: bool = True,
         verbose: bool = True,
         full_matrices: bool = False,
@@ -1026,30 +839,15 @@ class CovMat:
         clipping, and reconstruction step is performed before applying SVD,
         ensuring singular values consistent with a PSD matrix.
         """
-        M = (self.covariance_matrix if space == "linear" else self.log_covariance_matrix)
-        
-        def _log_message(msg: str):
-            """Helper to log message to logger or print."""
-            if logger:
-                logger.info(msg)
-            else:
-                print(msg)
-                
-        if clip_negatives:
-            eigvals, eigvecs = np.linalg.eigh(M)
-            mask = eigvals < 0
-            if np.any(mask):
-                if verbose:
-                    _log_message(
-                        f"  [INFO] Clipped {mask.sum()} negative eigenvalues before SVD (min {eigvals.min():.3e})."
-                    )
-                eigvals = np.where(mask, 0.0, eigvals)
-                M = eigvecs @ np.diag(eigvals) @ eigvecs.T
-            else:
-                if verbose:
-                    _log_message("  [INFO] No negative eigenvalues; applying SVD directly.")
-        U, S, Vt = np.linalg.svd(M, full_matrices=full_matrices)
-        return U, S, Vt
+        from mcnpy.cov.decomposition import svd_decomposition
+        return svd_decomposition(
+            self,
+            space=space,
+            clip_negatives=clip_negatives,
+            verbose=verbose,
+            full_matrices=full_matrices,
+            logger=logger
+        )
 
     
 
@@ -1163,51 +961,6 @@ class CovMat:
         # explicit sort by isotope then reaction
         return sorted(pairs, key=lambda p: (p[0], p[1]))
 
-    def _make_psd(
-        self,
-        M: np.ndarray,
-        *,
-        jitter_scale: float = 1e-10,
-        max_jitter_ratio: float = 1e-3,
-        verbose: bool = True,
-        logger = None,  # Add logger parameter
-    ) -> Tuple[np.ndarray, float]:
-        """Devuelve una matriz PSD añadiendo el mínimo jitter admisible.
-
-        Si **no** hace falta ajuste, se devuelve la misma matriz y jitter=0.
-        Lanza ``LinAlgError`` si el desplazamiento requerido supera el umbral.
-        """
-        def _log_message(msg: str):
-            """Helper to log message to logger or print."""
-            if logger:
-                logger.info(msg)
-            else:
-                print(msg)
-                
-        eigvals = np.linalg.eigvalsh(M)
-        lam_min = eigvals[0]
-        if lam_min >= 0:
-            if verbose:
-                _log_message("  [INFO] PSD check: no adjustment was necessary.")
-            return M, 0.0
-
-        avg_diag = float(np.mean(np.diag(M)))
-        jitter = -lam_min + jitter_scale * avg_diag
-        max_diag = float(np.max(np.diag(M)))
-
-        if jitter / max_diag > max_jitter_ratio:
-            if verbose:
-                _log_message(
-                    f"  [WARNING] PSD check aborted: required jitter {jitter:.3e} exceeds allowed ratio ({max_jitter_ratio})."
-                )
-            raise np.linalg.LinAlgError("Matrix is not positive semi‑definite and adjustment deemed too large.")
-
-        if verbose:
-            _log_message(
-                f"  [INFO] Added jitter {jitter:.3e} to the diagonal to make the matrix positive semi‑definite."
-            )
-        return M + jitter * np.eye(M.shape[0]), jitter
-
     def _autofix_covariance(
         self,
         *,
@@ -1254,7 +1007,7 @@ class CovMat:
         separator = "-" * 60
 
         if verbose:
-            _log_message(f"\n[COVARIANCE] [AUTOFIX]")
+            _log_message(f"\n[COV] [AUTOFIX]")
             _log_message(f"  Checking covariance matrix for isotope {iso}")
             _log_message(f"{separator}")
 
@@ -1284,10 +1037,10 @@ class CovMat:
             eigvals, eigvecs = np.linalg.eigh(M)
             min_ev = float(eigvals.min())
             if verbose:
-                _log_message(f"  [STEP {step:02d}] [INFO] Smallest eigenvalue: {min_ev:.4e}")
+                _log_message(f"[COV] [AUTOFIX] [STEP {step:02d}] Smallest eigenvalue: {min_ev:.4e}")
 
             if min_ev >= accept_tol:
-                _log_message(f"  [SUCCESS] Matrix accepted (λ_min = {min_ev:.4e} >= {accept_tol:.4e})")
+                _log_message(f"[COV] [AUTOFIX] [SUCCESS] Matrix accepted (λ_min={min_ev:.4e} >= {accept_tol:.4e})")
                 _log_message(separator)
                 return current, {
                     "iterations": step,
@@ -1325,8 +1078,8 @@ class CovMat:
 
             if not boosted_scores:
                 if verbose:
-                    _log_message(f"  [WARNING] No negative contributions found below threshold {accept_tol:.4e}")
-                    _log_message(f"  [ACTION] Using fallback strategy: remove block with largest absolute eigenvalue contribution")
+                    _log_message(f"[COV] [AUTOFIX] [WARNING] No negative contributions found below threshold {accept_tol:.4e}")
+                    _log_message(f"[COV] [AUTOFIX] [ACTION] Using fallback: remove block with largest absolute eigenvalue contribution")
                 
                 # Fallback: find the block with the largest absolute contribution to ANY negative eigenvalue
                 fallback_scores: Dict[Tuple[int, int], float] = defaultdict(float)
@@ -1344,7 +1097,7 @@ class CovMat:
                 else:
                     # Ultimate fallback: remove largest diagonal variance
                     if verbose:
-                        _log_message(f"  [WARNING] No eigenvalue contributions found. Using diagonal variance fallback.")
+                        _log_message(f"[COV] [AUTOFIX] [WARNING] No eigenvalue contributions found - using diagonal variance fallback")
                     diag_scores = {}
                     for a, (_, ra) in enumerate(param_pairs):
                         block = M[a*G:(a+1)*G, a*G:(a+1)*G]
@@ -1388,7 +1141,7 @@ class CovMat:
         # Not converged within max_steps
         # ----------------------------------------------------------------------
         if verbose:
-            _log_message(f"  [ERROR] Reached the limit of {max_steps} steps without convergence")
+            _log_message(f"[COV] [AUTOFIX] [ERROR] Reached limit of {max_steps} steps without convergence")
         # Directly compute min eigenvalue instead of using analyze_covariance
         min_eigenvalue = float(np.linalg.eigvalsh(current.covariance_matrix).min())
 
@@ -1540,7 +1293,7 @@ class CovMat:
                 }
         
             # clamping not enough – fall back to removal strategy if autofix is True
-            _log_message(f"  [WARNING] After clamping, smallest eigenvalue ({min_ev:.4e}) still below threshold ({accept_tol:.4e})")
+            _log_message(f"[COV] [CLAMP] [WARNING] After clamping, smallest eigenvalue ({min_ev:.4e}) still below threshold ({accept_tol:.4e})")
         
         # Return the clamped matrix and log after clamping - Fix: Check final eigenvalue here too
         final_M = current.covariance_matrix
@@ -1558,44 +1311,171 @@ class CovMat:
         }
         return current, log
 
-    def _compute_correlation(
-        self,
-        clip: bool = False,
-        force_diagonal: bool = True
-    ) -> np.ndarray:
-        """
-        Core routine: builds the correlation matrix, optionally clipping
-        into [-1,1] and optionally forcing diagonal==1.
-        Entries where std_i * std_j == 0 become nan by default.
-        """
-        cov = self.covariance_matrix
-        std = np.sqrt(np.diag(cov))
-        denom = np.outer(std, std)
-
-        # pure division, will give inf/nan where denom==0
-        with np.errstate(divide='ignore', invalid='ignore'):
-            corr = cov / denom
-
-        # mask all undefined entries
-        corr[~np.isfinite(corr)] = np.nan
-
-        if force_diagonal:
-            # put ones on the diagonal, even if variance was zero
-            np.fill_diagonal(corr, 1.0)
-
-        if clip:
-            # clip into [-1,1], leaving nan alone
-            corr = np.where(np.isfinite(corr),
-                            np.clip(corr, -1.0, 1.0),
-                            np.nan)
-
-        return corr
-
-
 
     #------------------------------------------------------------------
     # Methods and properties related to correlation matrix (Unused)
     #------------------------------------------------------------------
+
+    def report_large_values(
+        self,
+        threshold: float = 1.0,
+        top_n: int = 30,
+        return_text: bool = False
+        ) -> Optional[Tuple[str, dict]]:
+        """
+        Scan each block of the relative covariance matrices and generate a detailed report
+        of entries that exceed the specified threshold.
+
+        If return_text is True, returns a tuple:
+        (report_text, summary_dict)
+        where summary_dict contains:
+        - zaid: the main isotope ZAID
+        - name: human-readable symbol
+        - count: number of entries > threshold
+        - max_value: largest flagged value
+        """
+        G = self.num_groups
+        if G == 0:
+            if return_text:
+                return None
+            print("No energy groups available. Cannot generate report.")
+            return None
+
+        total_checked = 0
+        total_flagged = 0
+        max_value = 0.0
+        large_values = []
+
+        # map MT to reaction names
+        reaction_names = {mt: MT_TO_REACTION.get(mt, f"MT={mt}")
+                        for mt in self.reactions}
+
+        if self.isotope_rows:
+            raw_zaid = self.isotope_rows[0]
+            try:
+                zaid_int = int(raw_zaid)
+            except (TypeError, ValueError):
+                # if it’s not parseable, just pass it through
+                zaid_int = raw_zaid
+        else:
+            zaid_int = 0
+
+        from mcnpy._utils import zaid_to_symbol
+        isotope_name = zaid_to_symbol(zaid_int)
+        
+        # scan each block
+        for iso_r, rxn_r, iso_c, rxn_c, M in zip(
+            self.isotope_rows,
+            self.reaction_rows,
+            self.isotope_cols,
+            self.reaction_cols,
+            self.matrices
+        ):
+            for ig in range(G):
+                for jg in range(G):
+                    total_checked += 1
+                    val = M[ig, jg]
+                    if val > threshold:
+                        total_flagged += 1
+                        if val > max_value:
+                            max_value = val
+
+                        entry = {
+                            'value': val,
+                            'iso_row': iso_r,
+                            'rxn_row': rxn_r,
+                            'rxn_name_row': reaction_names[rxn_r],
+                            'iso_col': iso_c,
+                            'rxn_col': rxn_c,
+                            'rxn_name_col': reaction_names[rxn_c],
+                            'row_idx': ig,
+                            'col_idx': jg
+                        }
+                        # add energy ranges if available
+                        if (self.energy_grid is not None
+                            and len(self.energy_grid) >= G+1):
+                            entry.update({
+                                'e_row_low':  self.energy_grid[ig],
+                                'e_row_high': self.energy_grid[ig+1],
+                                'e_col_low':  self.energy_grid[jg],
+                                'e_col_high': self.energy_grid[jg+1]
+                            })
+                        large_values.append(entry)
+
+        # nothing found?
+        if total_flagged == 0:
+            if return_text:
+                return None
+            print(f"No entries > {threshold:.4e} for {isotope_name} (ZAID:{zaid_int}).")
+            return None
+
+        # sort & truncate
+        large_values.sort(key=lambda x: x['value'], reverse=True)
+        truncated = False
+        if top_n is not None and len(large_values) > top_n:
+            large_values = large_values[:top_n]
+            truncated = True
+
+        # build detailed report
+        lines = []
+        lines.append("\n" + "="*100)
+        lines.append(f"LARGE VALUES REPORT FOR {isotope_name} (ZAID:{zaid_int}) > {threshold:.4e}")
+        lines.append("="*100)
+        lines.append("\nSUMMARY:")
+        lines.append(f"  Total elements checked:     {total_checked:,}")
+        lines.append(f"  Elements exceeding threshold:{total_flagged:,} "
+                    f"({total_flagged/total_checked*100:.2f}%)")
+        lines.append(f"  Maximum value found:        {max_value:.4e}")
+        lines.append("\nDETAILED REPORT:")
+        if truncated:
+            lines.append(f"  (Showing top {top_n} entries)")
+
+        # table header
+        header = (
+            f"{'#':>4} | {'Value':>10} | "
+            f"{'Row Block':^20} | {'Col Block':^20} | "
+            f"{'R#':>3} | {'C#':>3} | "
+            f"{'Energy Row':^17} | {'Energy Col':^17}"
+        )
+        lines.append("\n" + "-"*len(header))
+        lines.append(header)
+        lines.append("-"*len(header))
+
+        for i, e in enumerate(large_values, start=1):
+            row_blk = f"{e['iso_row']},{e['rxn_row']}({e['rxn_name_row'][:6]})"
+            col_blk = f"{e['iso_col']},{e['rxn_col']}({e['rxn_name_col'][:6]})"
+            val_str = f"{e['value']:.4e}"
+            energy_row = energy_col = ""
+            if 'e_row_low' in e:
+                energy_row = f"{e['e_row_low']:.4e}-{e['e_row_high']:.4e}"
+                energy_col = f"{e['e_col_low']:.4e}-{e['e_col_high']:.4e}"
+            line = (
+                f"{i:>4} | {val_str:>10} | "
+                f"{row_blk:<20} | {col_blk:<20} | "
+                f"{e['row_idx']:>3} | {e['col_idx']:>3} | "
+                f"{energy_row:<17} | {energy_col:<17}"
+            )
+            lines.append(line)
+
+        lines.append("-"*len(header))
+        if truncated:
+            extra = total_flagged - top_n
+            lines.append(f"Note: {extra:,} more entries not shown.")
+        lines.append("\n" + "="*100)
+
+        report_text = "\n".join(lines)
+
+        if return_text:
+            summary = {
+                'zaid': zaid_int,
+                'name': isotope_name,
+                'count': total_flagged,
+                'max_value': max_value
+            }
+            return report_text, summary
+        else:
+            print(report_text)
+            return None
 
     def verify_correlation(self, atol: float = 1e-12, rtol: float = 1e-4) -> None:
         """Run basic checks on the correlation matrix and print any problems.
@@ -1727,21 +1607,18 @@ class CovMat:
         total_hits= int(too_big.sum())
 
         if verbose:
-            print("\n[ sanitize_by_correlation ]")
+            print("[COV] [CORRELATION] Starting correlation-based sanitization")
             if off_pairs.size:
-                print(f"  hard-zeroed {len(off_pairs)} off-diagonal pairs"
-                    f" (total {total_hits} entries including symmetry):")
+                print(f"[COV] [CORRELATION] Hard-zeroed {len(off_pairs)} off-diagonal pairs (total {total_hits} entries including symmetry):")
                 for i, j in off_pairs:
                     bi, gi = divmod(i, G)
                     bj, gj = divmod(j, G)
                     iso_i, rxn_i = pairs[bi]
                     iso_j, rxn_j = pairs[bj]
                     old = R[i, j]
-                    print(f"    ({iso_i},{rxn_i})-g{gi+1:02d}"
-                        f" ↔ ({iso_j},{rxn_j})-g{gj+1:02d}"
-                        f"   {old:+.3e} → +0.000e+00")
+                    print(f"  ({iso_i},{rxn_i})-g{gi+1:02d} ↔ ({iso_j},{rxn_j})-g{gj+1:02d}   {old:+.3e} → +0.000e+00")
             else:
-                print("  no entries exceeded zero_threshold")
+                print("[COV] [CORRELATION] No entries exceeded zero_threshold")
 
         # --- apply the zeroing ---
         R_clipped = R.copy()
@@ -1752,7 +1629,7 @@ class CovMat:
         clip_pairs = np.argwhere(to_clip & tri_mask)
 
         if verbose and clip_pairs.size:
-            print(f"  clipped {len(clip_pairs)} off-diagonal pairs to ±{max_abs_corr}:")
+            print(f"[COV] [CORRELATION] Clipped {len(clip_pairs)} off-diagonal pairs to ±{max_abs_corr}:")
             for i, j in clip_pairs:
                 bi, gi = divmod(i, G)
                 bj, gj = divmod(j, G)
@@ -1761,9 +1638,7 @@ class CovMat:
                 old = R_clipped[i, j]
                 new = np.sign(old) * max_abs_corr
                 if abs(old - new) > report_tol:
-                    print(f"    ({iso_i},{rxn_i})-g{gi+1:02d}"
-                        f" ↔ ({iso_j},{rxn_j})-g{gj+1:02d}"
-                        f"   {old:+.3e} → {new:+.3e}")
+                    print(f"  ({iso_i},{rxn_i})-g{gi+1:02d} ↔ ({iso_j},{rxn_j})-g{gj+1:02d}   {old:+.3e} → {new:+.3e}")
         R_clipped[to_clip] = np.sign(R_clipped[to_clip]) * max_abs_corr
 
         # --- enforce exact 1’s on diagonal (or 0 if var==0) ---
@@ -1778,20 +1653,18 @@ class CovMat:
         # --- eigen before PSD ---
         w1, V1 = np.linalg.eigh(C1)
         if verbose:
-            print("  smallest 5 eigenvalues AFTER clip :",
-                " ".join(f"{x:+.3e}" for x in w1[:5]))
+            print("[COV] [CORRELATION] Smallest 5 eigenvalues AFTER clip:", " ".join(f"{x:+.3e}" for x in w1[:5]))
 
         # --- optional PSD projection ---
         if project_psd:
             neg_count = int((w1 < 0).sum())
             if neg_count and verbose:
-                print(f"  PSD-proj: {neg_count} eigenvalues < 0, floored to {eigen_floor:.1e}")
+                print(f"[COV] [CORRELATION] PSD-proj: {neg_count} eigenvalues < 0, floored to {eigen_floor:.1e}")
             w2 = np.maximum(w1, eigen_floor)
             C2 = V1 @ np.diag(w2) @ V1.T
             C2 = (C2 + C2.T) * 0.5
             if verbose:
-                print("  smallest 5 eigenvalues AFTER PSD  :",
-                    " ".join(f"{x:+.3e}" for x in w2[:5]))
+                print("[COV] [CORRELATION] Smallest 5 eigenvalues AFTER PSD:", " ".join(f"{x:+.3e}" for x in w2[:5]))
         else:
             C2 = C1
 

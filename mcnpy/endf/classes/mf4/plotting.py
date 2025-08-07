@@ -1,9 +1,315 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Optional, Union, Tuple, Dict, Any
+import numpy as np
+import matplotlib.pyplot as plt
 from ...._plot_settings import setup_plot_style, format_axes
 
 
+def plot_legendre_coefficients_from_endf(
+    endf,
+    mt: int,
+    orders: Optional[Union[int, List[int]]] = None,
+    energy_range: Optional[Tuple[float, float]] = None,
+    style: str = 'default',
+    figsize: Tuple[float, float] = (8, 5),
+    legend_loc: str = 'best',
+    include_uncertainties: bool = False,
+    **kwargs
+) -> plt.Figure:
+    """
+    Plot specific Legendre coefficients as a function of energy from an ENDF object.
+    
+    This function automatically accesses the MF4 file and specified MT from the ENDF object,
+    and optionally includes uncertainties from MF34 if available.
+    
+    Parameters
+    ----------
+    endf : ENDF
+        ENDF data object containing MF4 (and optionally MF34) files
+    mt : int
+        MT reaction number to plot (e.g., 2 for elastic scattering)
+    orders : int or list of int, optional
+        Polynomial orders to plot. If None, plots all available orders
+    energy_range : tuple of float, optional
+        Energy range (min, max) for x-axis. Values are automatically
+        clamped to the available data range.
+    style : str
+        Plot style from _plot_settings
+    figsize : tuple
+        Figure size
+    legend_loc : str
+        Legend location
+    include_uncertainties : bool
+        Whether to include uncertainty bands from MF34 data if available
+    **kwargs
+        Additional plotting arguments
+    
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure containing the plot
+        
+    Raises
+    ------
+    ValueError
+        If the ENDF object doesn't contain MF4 data or the specified MT
+    
+    Examples
+    --------
+    Plot elastic scattering Legendre coefficients with uncertainties:
+    
+    >>> from mcnpy.endf.read_endf import read_endf
+    >>> endf = read_endf('path/to/endf_file.txt')
+    >>> fig = plot_legendre_coefficients_from_endf(
+    ...     endf, mt=2, orders=[1, 2, 3], 
+    ...     include_uncertainties=True
+    ... )
+    >>> fig.show()
+    """
+    # Check if ENDF object has MF4 data
+    if 4 not in endf.mf:
+        raise ValueError(f"ENDF object does not contain MF4 (angular distribution) data")
+    
+    mf4 = endf.mf[4]
+    
+    # Check if the specified MT exists in MF4
+    if mt not in mf4.mt:
+        available_mts = list(mf4.mt.keys())
+        raise ValueError(f"MT{mt} not found in MF4. Available MTs: {available_mts}")
+    
+    mf4_data = mf4.mt[mt]
+    
+    # Setup plot style
+    plot_kwargs = setup_plot_style(style=style, figsize=figsize, **kwargs)
+    fig = plot_kwargs['_fig']
+    ax = plot_kwargs['ax']
+    colors = plot_kwargs['_colors']
+    
+    # Check if the object has Legendre coefficients
+    if not hasattr(mf4_data, 'legendre_energies') or not hasattr(mf4_data, 'legendre_coefficients'):
+        # Provide helpful error message for unsupported types
+        obj_class_name = type(mf4_data).__name__
+        if hasattr(mf4_data, 'distribution_type'):
+            dist_type = mf4_data.distribution_type
+            error_msg = f"Cannot plot Legendre coefficients for {obj_class_name} object.\n" \
+                       f"This object contains {dist_type} angular distributions,\n" \
+                       f"which do not have Legendre coefficients.\n\n" \
+                       f"Supported object types: MF4MTMixed, MF4MTLegendre"
+        else:
+            error_msg = f"Cannot plot Legendre coefficients for {obj_class_name} object.\n" \
+                       f"This object does not contain Legendre coefficients.\n\n" \
+                       f"Supported object types: MF4MTMixed, MF4MTLegendre"
+        
+        ax.text(0.5, 0.5, error_msg, ha='center', va='center', 
+               transform=ax.transAxes, fontsize=10, bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral"))
+        ax.set_title("Unsupported Data Type")
+        return fig
+    
+    # Get data
+    energies = mf4_data.legendre_energies
+    coeffs_list = mf4_data.legendre_coefficients
+    
+    if not energies or not coeffs_list:
+        ax.text(0.5, 0.5, 'No Legendre coefficient data available', 
+                ha='center', va='center', transform=ax.transAxes)
+        return fig
+    
+    # Determine which orders to plot
+    if orders is None:
+        # Plot all available orders
+        max_available = max(len(coeffs) for coeffs in coeffs_list)
+        orders = list(range(max_available))
+    elif isinstance(orders, int):
+        orders = [orders]
+    elif not isinstance(orders, list):
+        orders = list(orders)  # Convert other iterables to list
+    
+    # Get uncertainties if requested and MF34 data is available
+    uncertainties = {}
+    if include_uncertainties and 34 in endf.mf:
+        try:
+            mf34 = endf.mf[34]
+            # Check if MT exists in MF34 before proceeding
+            if mt in mf34.mt:
+                # Use the existing to_ang_covmat method to convert MF34MT to MF34CovMat
+                mf34_mt = mf34.mt[mt]
+                mf34_covmat = mf34_mt.to_ang_covmat()
+                
+                # Get the isotope ID from mf4_data
+                isotope_id = int(mf4_data.zaid) if hasattr(mf4_data, 'zaid') else 0
+                
+                # Extract uncertainties for each requested Legendre order
+                uncertainties_data = mf34_covmat.get_uncertainties_for_legendre_coefficient(
+                    isotope=isotope_id, 
+                    mt=mt, 
+                    l_coefficient=orders
+                )
+                
+                # Convert to the format expected by the plotting code
+                if isinstance(uncertainties_data, dict):
+                    # Handle both single coefficient (dict) and multiple coefficients (dict of dicts)
+                    if 'energies' in uncertainties_data:  # Single coefficient result
+                        # This shouldn't happen when passing a list, but handle it just in case
+                        uncertainties[orders[0]] = uncertainties_data
+                    else:  # Multiple coefficients result
+                        for l_order, unc_data in uncertainties_data.items():
+                            if unc_data is not None:
+                                uncertainties[l_order] = unc_data
+            else:
+                print(f"Warning: MT{mt} not found in MF34 data. No uncertainties will be plotted.")
+                        
+        except Exception as e:
+            print(f"Warning: Could not extract uncertainties from MF34: {e}")
+            uncertainties = {}
+    
+    # Plot each order
+    for i, order in enumerate(orders):
+        color = colors[i % len(colors)]
+        
+        # Extract coefficient values for this order across all energies
+        coeff_values = []
+        energy_values = []
+        
+        for j, coeffs in enumerate(coeffs_list):
+            # Note: coeffs[0] = a_1, coeffs[1] = a_2, etc.
+            # So order 0 means a_0 (always 1), order 1 means a_1 (coeffs[0]), etc.
+            if order == 0:
+                # a_0 is always 1 (implicit in ENDF format)
+                coeff_values.append(1.0)
+                energy_values.append(energies[j])
+            elif order - 1 < len(coeffs):  # order 1 -> coeffs[0], order 2 -> coeffs[1], etc.
+                coeff_values.append(coeffs[order - 1])
+                energy_values.append(energies[j])
+        
+        if energy_values:
+            # Create label based on whether uncertainties are included
+            if include_uncertainties and order in uncertainties:
+                label = f"$a_{{{order}}} \\pm 1\\sigma$"
+            else:
+                label = f"$a_{{{order}}}$"
+            
+            # Plot the main line
+            ax.plot(energy_values, coeff_values, '-', color=color,
+                    label=label, linewidth=2)
+            
+            # Add uncertainty bands if available and requested
+            if include_uncertainties and order in uncertainties:
+                unc_data = uncertainties[order]
+                unc_energies = unc_data['energies']
+                unc_values = unc_data['uncertainties']
+                
+                # Ensure arrays have the same length and are valid for interpolation
+                if (len(unc_energies) > 1 and len(unc_values) > 1 and 
+                    len(unc_energies) == len(unc_values)):
+                    
+                    # Create arrays for the energy range where we have both coefficient and uncertainty data
+                    # Find the intersection of energy ranges
+                    min_energy = max(min(energy_values), min(unc_energies))
+                    max_energy = min(max(energy_values), max(unc_energies))
+                    
+                    if min_energy < max_energy:
+                        # Since covariance data represents energy bins, uncertainties should be constant within bins
+                        # Create step-wise uncertainty bands rather than smooth interpolation
+                        
+                        # For each uncertainty energy bin, find all coefficient points within that bin
+                        bin_energies = []
+                        bin_coeffs = []
+                        bin_uncertainties = []
+                        
+                        # Process each uncertainty bin
+                        for i in range(len(unc_energies)):
+                            # Find coefficient points that fall within this uncertainty bin
+                            # For bins, we need to determine the bin boundaries
+                            if i == 0:
+                                # First bin: from minimum energy to midpoint between first and second bin centers
+                                if len(unc_energies) > 1:
+                                    bin_max = (unc_energies[i] + unc_energies[i+1]) / 2
+                                else:
+                                    bin_max = max_energy
+                                bin_min = min_energy
+                            elif i == len(unc_energies) - 1:
+                                # Last bin: from midpoint to maximum energy
+                                bin_min = (unc_energies[i-1] + unc_energies[i]) / 2
+                                bin_max = max_energy
+                            else:
+                                # Middle bins: from midpoint to midpoint
+                                bin_min = (unc_energies[i-1] + unc_energies[i]) / 2
+                                bin_max = (unc_energies[i] + unc_energies[i+1]) / 2
+                            
+                            # Find coefficient points in this bin
+                            bin_coeff_indices = [j for j, e in enumerate(energy_values) 
+                                               if bin_min <= e <= bin_max]
+                            
+                            if bin_coeff_indices:
+                                for idx in bin_coeff_indices:
+                                    bin_energies.append(energy_values[idx])
+                                    bin_coeffs.append(coeff_values[idx])
+                                    bin_uncertainties.append(unc_values[i])  # Same uncertainty for the whole bin
+                        
+                        if bin_energies:
+                            # Convert to numpy arrays
+                            bin_energies = np.array(bin_energies)
+                            bin_coeffs = np.array(bin_coeffs)
+                            bin_uncertainties = np.array(bin_uncertainties)
+                            
+                            # Convert relative uncertainties to absolute uncertainties
+                            # MF34 covariance data is typically stored as relative covariances
+                            absolute_unc = bin_uncertainties * np.abs(bin_coeffs)
+                            
+                            # Create uncertainty bounds
+                            upper_bound = bin_coeffs + absolute_unc
+                            lower_bound = bin_coeffs - absolute_unc
+                            
+                            # Plot uncertainty bands as shaded area with same color as line
+                            ax.fill_between(bin_energies, lower_bound, upper_bound, 
+                                          color=color, alpha=0.2, linewidth=0)
+                    else:
+                        print(f"Warning: No overlapping energy range between coefficients and uncertainties for order {order}")
+                else:
+                    print(f"Warning: Uncertainty data for order {order} has inconsistent array lengths or insufficient data")
+    
+    # Create an improved title with isotope and reaction information
+    title_parts = []
+    
+    # Add isotope information if available
+    isotope_symbol = endf.get_isotope_symbol()
+    if isotope_symbol:
+        title_parts.append(f"{isotope_symbol}")
+    
+    # Add reaction information
+    from mcnpy._constants import MT_TO_REACTION
+    if mt in MT_TO_REACTION:
+        reaction_name = MT_TO_REACTION[mt]
+        title_parts.append(f"MT={mt} {reaction_name}")
+    else:
+        title_parts.append(f"MT={mt}")
+    
+    # Add "Legendre Coefficients" at the end
+    title_parts.append("Legendre Coefficients")
+    
+    title = " - ".join(title_parts)
+    
+    # Format axes
+    ax = format_axes(
+        ax, style=style, use_log_scale=True, is_energy_axis=True,
+        x_label="Energy (eV)",
+        y_label="Coefficient value",
+        title=title,
+        legend_loc=legend_loc
+    )
+    
+    # Apply energy range limits if specified
+    if energy_range is not None:
+        data_min, data_max = min(energies), max(energies)
+        e_min = max(energy_range[0], data_min)
+        e_max = min(energy_range[1], data_max)
+        ax.set_xlim(e_min, e_max)
+
+    return fig
+
+
+# NOTE: Im not sure about the use of this function.
 def plot_angular_distribution(
     mf4_mixed,
     energies: Optional[Union[float, Tuple[float, float], List[float]]] = None,
@@ -45,11 +351,6 @@ def plot_angular_distribution(
         Figure size
     **kwargs
         Additional plotting arguments
-        
-    Returns
-    -------
-    plt.Figure
-        The created figure
     """
     # Setup plot style
     plot_kwargs = setup_plot_style(style=style, figsize=figsize, **kwargs)
@@ -91,256 +392,8 @@ def plot_angular_distribution(
     )
     
     ax.set_xlim(cosine_range)
-    
-    return fig
 
 
-def plot_legendre_coefficients(
-    mf4_mixed,
-    energies: Optional[Union[float, Tuple[float, float], List[float]]] = None,
-    energy_indices: Optional[Union[int, Tuple[int, int], List[int]]] = None,
-    max_order: Optional[int] = None,
-    style: str = 'default',
-    figsize: Tuple[float, float] = (8, 5),  # Reduced from (12, 8)
-    legend_loc: str = 'best',
-    **kwargs
-) -> plt.Figure:
-    """
-    Plot Legendre coefficients as a function of polynomial order.
-    
-    Parameters
-    ----------
-    mf4_mixed : MF4MTMixed
-        Mixed angular distribution data object
-    energies : float, tuple of float, or list of float, optional
-        - float: Find energy bin containing this value
-        - tuple: Plot all energy bins in range [tuple[0], tuple[1]]
-        - list: Specific energy values (legacy support)
-    energy_indices : int, tuple of int, or list of int, optional
-        - int: Plot specific energy bin index
-        - tuple: Plot energy bins from index tuple[0] to tuple[1] (inclusive)
-        - list: Specific energy indices (legacy support)
-    max_order : int, optional
-        Maximum polynomial order to display
-    style : str
-        Plot style from _plot_settings
-    figsize : tuple
-        Figure size
-    **kwargs
-        Additional plotting arguments
-        
-    Returns
-    -------
-    plt.Figure
-        The created figure
-    """
-    # Setup plot style
-    plot_kwargs = setup_plot_style(style=style, figsize=figsize, **kwargs)
-    fig = plot_kwargs['_fig']
-    ax = plot_kwargs['ax']
-    colors = plot_kwargs['_colors']
-    
-    # Get Legendre energies and coefficients
-    legendre_energies = mf4_mixed.legendre_energies
-    legendre_coeffs = mf4_mixed.legendre_coefficients
-    
-    if not legendre_energies:
-        ax.text(0.5, 0.5, 'No Legendre coefficient data available', 
-                ha='center', va='center', transform=ax.transAxes)
-        return fig
-    
-    # Determine which energies to plot - only consider Legendre energies
-    plot_indices = _determine_legendre_plot_indices(legendre_energies, energies, energy_indices)
-    
-    # Plot coefficients for each energy
-    for i, energy_idx in enumerate(plot_indices):
-        if energy_idx >= len(legendre_coeffs):
-            continue
-            
-        coeffs = legendre_coeffs[energy_idx]
-        energy = legendre_energies[energy_idx]
-        
-        if max_order is not None:
-            coeffs = coeffs[:max_order+1]
-        
-        orders = range(len(coeffs))
-        color = colors[i % len(colors)]
-        
-        ax.plot(orders, coeffs, 'o-', color=color, 
-                label=f"E={energy:.3e} eV", linewidth=2, markersize=6)
-    
-    # Format axes
-    ax = format_axes(
-        ax, style=style,
-        x_label="Legendre polynomial order (l)",
-        y_label="Coefficient a_l",
-        title=f"Legendre Coefficients - MT{mf4_mixed.number}",
-        legend_loc=legend_loc
-    )
-    
-    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-    
-    return fig
-
-
-def plot_energy_dependent_coefficients(
-    mf4_mixed,
-    orders: Optional[Union[int, List[int]]] = None,
-    style: str = 'default',
-    figsize: Tuple[float, float] = (8, 5),  # Reduced from (10, 6)
-    legend_loc: str = 'best',
-    **kwargs
-) -> plt.Figure:
-    """
-    Plot specific Legendre coefficients as a function of energy.
-    
-    Parameters
-    ----------
-    mf4_mixed : MF4MTMixed
-        Mixed angular distribution data object
-    orders : int or list of int, optional
-        Polynomial orders to plot. If None, plots first few orders
-    style : str
-        Plot style from _plot_settings
-    figsize : tuple
-        Figure size
-    **kwargs
-        Additional plotting arguments
-        
-    Returns
-    -------
-    plt.Figure
-        The created figure
-    """
-    # Setup plot style
-    plot_kwargs = setup_plot_style(style=style, figsize=figsize, **kwargs)
-    fig = plot_kwargs['_fig']
-    ax = plot_kwargs['ax']
-    colors = plot_kwargs['_colors']
-    
-    # Get data
-    energies = mf4_mixed.legendre_energies
-    coeffs_list = mf4_mixed.legendre_coefficients
-    
-    if not energies or not coeffs_list:
-        ax.text(0.5, 0.5, 'No Legendre coefficient data available', 
-                ha='center', va='center', transform=ax.transAxes)
-        return fig
-    
-    # Determine which orders to plot
-    if orders is None:
-        max_available = max(len(coeffs) for coeffs in coeffs_list)
-        orders = list(range(min(4, max_available)))  # Plot first 4 orders by default
-    elif not isinstance(orders, list):
-        orders = [orders]
-    
-    # Plot each order
-    for i, order in enumerate(orders):
-        color = colors[i % len(colors)]
-        
-        # Extract coefficient values for this order across all energies
-        coeff_values = []
-        energy_values = []
-        
-        for j, coeffs in enumerate(coeffs_list):
-            if order < len(coeffs):
-                coeff_values.append(coeffs[order])
-                energy_values.append(energies[j])
-        
-        if energy_values:
-            ax.plot(energy_values, coeff_values, 'o-', color=color,
-                    label=f"a_{order}", linewidth=2, markersize=4)
-    
-    # Format axes
-    ax = format_axes(
-        ax, style=style, use_log_scale=True, is_energy_axis=True,
-        x_label="Energy (eV)",
-        y_label="Coefficient value",
-        title=f"Energy-dependent Legendre Coefficients - MT{mf4_mixed.number}",
-        legend_loc=legend_loc
-    )
-    
-    return fig
-
-
-def compare_angular_representations(
-    mf4_mixed,
-    energy: float,
-    cosine_range: Tuple[float, float] = (-1.0, 1.0),
-    n_points: int = 181,
-    style: str = 'default',
-    figsize: Tuple[float, float] = (8, 5),  # Reduced from (10, 6)
-    legend_loc: str = 'best',
-    **kwargs
-) -> plt.Figure:
-    """
-    Compare Legendre and tabulated representations at a specific energy.
-    
-    Parameters
-    ----------
-    mf4_mixed : MF4MTMixed
-        Mixed angular distribution data object
-    energy : float
-        Energy value to find appropriate bin for comparison
-    cosine_range : tuple
-        Range of cosine values
-    n_points : int
-        Number of points for evaluation
-    style : str
-        Plot style from _plot_settings
-    figsize : tuple
-        Figure size
-    **kwargs
-        Additional plotting arguments
-        
-    Returns
-    -------
-    plt.Figure
-        The created figure
-    """
-    # Setup plot style
-    plot_kwargs = setup_plot_style(style=style, figsize=figsize, **kwargs)
-    fig = plot_kwargs['_fig']
-    ax = plot_kwargs['ax']
-    colors = plot_kwargs['_colors']
-    
-    # Find appropriate energy bins for the given energy
-    legendre_energy = _find_energy_bin(mf4_mixed.legendre_energies, energy)
-    tabulated_energy = _find_energy_bin(mf4_mixed.tabulated_energies, energy)
-    
-    has_legendre = legendre_energy is not None
-    has_tabulated = tabulated_energy is not None
-    
-    if not (has_legendre or has_tabulated):
-        ax.text(0.5, 0.5, f'Energy {energy:.3e} eV not found in any data', 
-                ha='center', va='center', transform=ax.transAxes)
-        return fig
-    
-    # Plot Legendre representation
-    if has_legendre:
-        _plot_legendre_distribution(
-            ax, mf4_mixed, legendre_energy, cosine_range, n_points, 
-            colors[0], f"E={legendre_energy:.3e} eV"
-        )
-    
-    # Plot tabulated representation
-    if has_tabulated:
-        _plot_tabulated_distribution(
-            ax, mf4_mixed, tabulated_energy, colors[1], f"E={tabulated_energy:.3e} eV (Tab)"
-        )
-    
-    # Format axes
-    ax = format_axes(
-        ax, style=style,
-        x_label="Cosine of scattering angle (μ)",
-        y_label="Probability density f(μ,E)",
-        title=f"Angular Distribution Comparison for E={energy:.3e} eV - MT{mf4_mixed.number}",
-        legend_loc=legend_loc
-    )
-    
-    ax.set_xlim(cosine_range)
-    
-    return fig
 
 
 def _find_energy_bin(energy_grid: List[float], target_energy: float) -> Optional[float]:
@@ -379,63 +432,6 @@ def _find_energy_bin(energy_grid: List[float], target_energy: float) -> Optional
         return energy_grid[-2]
     
     return None
-
-
-def _determine_legendre_plot_indices(
-    legendre_energies: List[float], 
-    energies: Optional[Union[float, Tuple[float, float], List[float]]], 
-    energy_indices: Optional[Union[int, Tuple[int, int], List[int]]]
-) -> List[int]:
-    """
-    Determine which Legendre energy indices to plot.
-    
-    Returns list of indices into the legendre_energies list.
-    """
-    if energies is not None:
-        if isinstance(energies, tuple) and len(energies) == 2:
-            # Plot all energies in range [energies[0], energies[1]]
-            e_min, e_max = energies
-            indices = []
-            for i, energy in enumerate(legendre_energies):
-                if e_min <= energy <= e_max:
-                    indices.append(i)
-            return indices
-        elif isinstance(energies, (int, float)):
-            # Find energy bin containing this value
-            target_energy = _find_energy_bin(legendre_energies, float(energies))
-            if target_energy is not None:
-                try:
-                    return [legendre_energies.index(target_energy)]
-                except ValueError:
-                    return []
-            return []
-        elif isinstance(energies, list):
-            # Legacy support - exact energy matches
-            indices = []
-            for energy in energies:
-                try:
-                    idx = legendre_energies.index(energy)
-                    indices.append(idx)
-                except ValueError:
-                    continue
-            return indices
-    
-    elif energy_indices is not None:
-        if isinstance(energy_indices, tuple) and len(energy_indices) == 2:
-            # Plot energy bins from index tuple[0] to tuple[1] (inclusive)
-            start, end = energy_indices
-            return list(range(start, min(end + 1, len(legendre_energies))))
-        elif isinstance(energy_indices, int):
-            # Plot specific energy bin index
-            if 0 <= energy_indices < len(legendre_energies):
-                return [energy_indices]
-            return []
-        elif isinstance(energy_indices, list):
-            # Legacy support - specific indices
-            return [idx for idx in energy_indices if 0 <= idx < len(legendre_energies)]
-    
-    # Default: plot first 5 energies
-    return list(range(min(5, len(legendre_energies))))
 
 
 def _determine_plot_energies_by_type(mf4_mixed, energies, energy_indices, data_type) -> List[Tuple[float, str, Optional[float]]]:

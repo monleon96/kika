@@ -38,7 +38,13 @@ class MF34CovMat:
     l_cols: List[int] = field(default_factory=list)
     energy_grids: List[List[float]] = field(default_factory=list)
     matrices: List[np.ndarray] = field(default_factory=list)
-    
+
+
+
+    # ------------------------------------------------------------------
+    # Basic methods
+    # ------------------------------------------------------------------
+
     def add_matrix(self, 
                   isotope_row: int, 
                   reaction_row: int,
@@ -80,7 +86,15 @@ class MF34CovMat:
         self.l_cols.append(l_col)
         self.energy_grids.append(energy_grid)
         self.matrices.append(matrix)
-    
+
+
+
+
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
     @property
     def num_matrices(self) -> int:
         """Number of matrices stored."""
@@ -101,167 +115,72 @@ class MF34CovMat:
         """Set of unique Legendre coefficient indices."""
         return sorted(set(self.l_rows + self.l_cols))
     
-    def filter_by_isotope_reaction(self, isotope: int, mt: int) -> "MF34CovMat":
+    @property
+    def covariance_matrix(self) -> np.ndarray:
         """
-        Return a new MF34CovMat containing only matrices for the given isotope and reaction.
-        
-        Parameters
-        ----------
-        isotope : int
-            Isotope ID to filter by
-        mt : int
-            Reaction MT number to filter by
-            
-        Returns
-        -------
-        MF34CovMat
-            New object with filtered matrices
+        Return the full covariance matrix of shape (N·G) × (N·G),
+        where N = number of unique (iso, rxn, l) triplets and G = max number of energy groups.
         """
-        new_mf34 = MF34CovMat()
-        
-        for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c, energy_grid, matrix) in enumerate(zip(
+        param_triplets = self._get_param_triplets()
+        idx_map = {p: i for i, p in enumerate(param_triplets)}
+
+        # Find maximum energy grid size across all matrices
+        max_G = max(matrix.shape[0] for matrix in self.matrices) if self.matrices else 0
+        N = len(param_triplets) * max_G
+        full = np.zeros((N, N), dtype=float)
+
+        for ir, rr, lr, ic, rc, lc, matrix in zip(
             self.isotope_rows, self.reaction_rows, self.l_rows,
             self.isotope_cols, self.reaction_cols, self.l_cols,
-            self.energy_grids, self.matrices
-        )):
-            if iso_r == isotope and iso_c == isotope and mt_r == mt and mt_c == mt:
-                new_mf34.add_matrix(iso_r, mt_r, l_r, iso_c, mt_c, l_c, matrix, energy_grid)
-        
-        return new_mf34
-
-    def _get_legendre_pairs(self, isotope: int, mt: int) -> List[int]:
-        """
-        Get sorted list of unique Legendre coefficients for given isotope and MT.
-        
-        Parameters
-        ----------
-        isotope : int
-            Isotope ID
-        mt : int
-            Reaction MT number
-            
-        Returns
-        -------
-        List[int]
-            Sorted list of unique Legendre coefficients
-        """
-        legendre_set = set()
-        
-        for iso_r, mt_r, l_r, iso_c, mt_c, l_c in zip(
-            self.isotope_rows, self.reaction_rows, self.l_rows,
-            self.isotope_cols, self.reaction_cols, self.l_cols
+            self.matrices
         ):
-            if iso_r == isotope and iso_c == isotope and mt_r == mt and mt_c == mt:
-                legendre_set.add(l_r)
-                legendre_set.add(l_c)
-        
-        return sorted(list(legendre_set))
+            i = idx_map[(ir, rr, lr)]
+            j = idx_map[(ic, rc, lc)]
+            G = matrix.shape[0]  # Current matrix size
+            r0, r1 = i*max_G, i*max_G + G
+            c0, c1 = j*max_G, j*max_G + G
 
-    def get_matrix_for_legendre_pair(self, isotope: int, mt: int, l_row: int, l_col: int) -> Tuple[np.ndarray, List[float]]:
-        """
-        Get the covariance matrix and energy grid for a specific Legendre coefficient pair.
-        
-        Parameters
-        ----------
-        isotope : int
-            Isotope ID
-        mt : int
-            Reaction MT number
-        l_row : int
-            Row Legendre coefficient
-        l_col : int
-            Column Legendre coefficient
-            
-        Returns
-        -------
-        Tuple[np.ndarray, List[float]]
-            Covariance matrix and corresponding energy grid
-        """
-        for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
-            self.isotope_rows, self.reaction_rows, self.l_rows,
-            self.isotope_cols, self.reaction_cols, self.l_cols
-        )):
-            if (iso_r == isotope and iso_c == isotope and 
-                mt_r == mt and mt_c == mt and 
-                l_r == l_row and l_c == l_col):
-                return self.matrices[i], self.energy_grids[i]
-        
-        raise ValueError(f"No matrix found for isotope={isotope}, MT={mt}, L_row={l_row}, L_col={l_col}")
+            full[r0:r1, c0:c1] = matrix
+            if i != j:
+                full[c0:c1, r0:r1] = matrix.T
 
-    def build_full_correlation_matrix(self, isotope: int, mt: int, legendre_coeffs: List[int]) -> Tuple[np.ndarray, List[float]]:
+        return full
+
+    @property 
+    def correlation_matrix(self) -> np.ndarray:
         """
-        Build the full correlation matrix for specified Legendre coefficients.
-        
-        Parameters
-        ----------
-        isotope : int
-            Isotope ID
-        mt : int
-            Reaction MT number
-        legendre_coeffs : List[int]
-            List of Legendre coefficients to include
-            
-        Returns
-        -------
-        Tuple[np.ndarray, List[float]]
-            Full correlation matrix and energy grid
+        Return the correlation matrix computed from the covariance matrix.
+        Diagonal elements are forced to 1.0, undefined entries become NaN.
         """
-        # Get all available diagonal matrices to find the maximum energy grid size
-        diagonal_matrices = {}
-        energy_grids = {}
-        max_G = 0
-        
-        for l_val in legendre_coeffs:
-            try:
-                matrix, energy_grid = self.get_matrix_for_legendre_pair(isotope, mt, l_val, l_val)
-                diagonal_matrices[l_val] = matrix
-                energy_grids[l_val] = energy_grid
-                max_G = max(max_G, matrix.shape[0])
-            except ValueError:
-                # If diagonal doesn't exist, we'll handle this below
-                pass
-        
-        if not diagonal_matrices:
-            raise ValueError(f"No diagonal matrices found for any Legendre coefficients")
-            
-        # Use the energy grid from the first available diagonal matrix
-        first_l = min(diagonal_matrices.keys())
-        reference_energy_grid = energy_grids[first_l]
-        G = diagonal_matrices[first_l].shape[0]
-        
-        # Verify all diagonal matrices have the same size
-        for l_val, matrix in diagonal_matrices.items():
-            if matrix.shape[0] != G:
-                raise ValueError(f"Inconsistent matrix sizes: L={l_val} has {matrix.shape[0]} groups, expected {G}")
-        
-        # Build the full covariance matrix
-        N = len(legendre_coeffs)
-        full_cov = np.zeros((N * G, N * G))
-        
-        for i, l_i in enumerate(legendre_coeffs):
-            for j, l_j in enumerate(legendre_coeffs):
-                try:
-                    matrix, _ = self.get_matrix_for_legendre_pair(isotope, mt, l_i, l_j)
-                    if matrix.shape[0] != G or matrix.shape[1] != G:
-                        print(f"Warning: Matrix for L=({l_i},{l_j}) has shape {matrix.shape}, expected ({G},{G})")
-                        continue
-                    full_cov[i*G:(i+1)*G, j*G:(j+1)*G] = matrix
-                except ValueError:
-                    # If matrix doesn't exist, leave as zeros
-                    pass
-        
-        # Convert to correlation matrix
-        std = np.sqrt(np.diag(full_cov))
-        denom = np.outer(std, std)
-        
-        with np.errstate(divide='ignore', invalid='ignore'):
-            corr = np.divide(full_cov, denom, out=np.zeros_like(full_cov), where=denom>0)
-        
-        # Handle NaN values
-        corr[~np.isfinite(corr)] = 0.0
-        np.fill_diagonal(corr, 1.0)
-        
-        return corr, reference_energy_grid
+        from mcnpy.cov.decomposition import compute_correlation
+        return compute_correlation(self, clip=False, force_diagonal=True)
+
+    @property
+    def clipped_correlation_matrix(self) -> np.ndarray:
+        """
+        Return the correlation matrix clipped to [-1, 1] range.
+        Diagonal elements are forced to 1.0, undefined entries become NaN.
+        """
+        from mcnpy.cov.decomposition import compute_correlation
+        return compute_correlation(self, clip=True, force_diagonal=True)
+
+    @property
+    def log_covariance_matrix(self) -> np.ndarray:
+        """
+        Return the log-space covariance matrix.
+        Converts relative covariance to log-space using log1p transformation.
+        """
+        cov_rel = self.covariance_matrix
+        Sigma_log = np.log1p(cov_rel)
+        return Sigma_log
+
+
+
+
+
+    # ------------------------------------------------------------------
+    # General methods
+    # ------------------------------------------------------------------
 
     def to_dataframe(self) -> pd.DataFrame:
         """
@@ -290,6 +209,319 @@ class MF34CovMat:
         
         return pd.DataFrame(data)
     
+    def plot_covariance_heatmap(
+        self,
+        isotope: int,
+        mt: int,
+        legendre_coeffs: Union[int, List[int], Tuple[int, int]],
+        ax: Optional['plt.Axes'] = None,
+        *,
+        matrix_type: str = "corr",
+        style: str = "default",
+        figsize: Tuple[float, float] = (6, 6),
+        dpi: int = 300,
+        font_family: str = "serif",
+        vmax: Optional[float] = None,
+        vmin: Optional[float] = None,
+        show_uncertainties: bool = False,
+        cmap: Optional[any] = None,
+        **imshow_kwargs,
+    ) -> 'plt.Figure':
+        """
+        Draw a covariance or correlation matrix heat-map for MF34 angular distribution data.
+
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID
+        mt : int
+            Reaction MT number
+        legendre_coeffs : int, list of int, or tuple of (row_l, col_l)
+            Legendre coefficient(s). Can be:
+            - Single int: diagonal block for that L
+            - List of ints: diagonal blocks for those L values
+            - Tuple of (row_l, col_l): off-diagonal block between row and column L
+        ax : plt.Axes, optional
+            Matplotlib axes to draw into (only used when show_uncertainties=False)
+        matrix_type : str
+            Type of matrix to plot: "cov" for covariance (uses linear scale) or "corr" for correlation
+        style : str
+            Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
+        figsize : tuple
+            Figure size in inches (width, height)
+        dpi : int
+            Dots per inch for figure resolution
+        font_family : str
+            Font family for text elements
+        vmax, vmin : float, optional
+            Color scale limits
+        show_uncertainties : bool
+            Whether to show uncertainty plots above the heatmap
+        cmap : str or matplotlib.colors.Colormap, optional
+            Colormap to use for the heatmap. Can be a string name of any matplotlib 
+            colormap (e.g., 'viridis', 'plasma', 'RdYlBu', 'coolwarm') or a matplotlib 
+            Colormap object. If None, defaults to 'RdYlGn' for correlation matrices 
+            and 'viridis' for covariance matrices.
+        **imshow_kwargs
+            Additional arguments passed to imshow
+
+        Returns
+        -------
+        plt.Figure
+            The matplotlib figure containing the heatmap and optional uncertainty plots
+        """
+        from mcnpy.cov.mf34cov_heatmap import plot_mf34_covariance_heatmap
+
+        return plot_mf34_covariance_heatmap(
+            mf34_covmat=self,
+            isotope=isotope,
+            mt=mt,
+            legendre_coeffs=legendre_coeffs,
+            ax=ax,
+            matrix_type=matrix_type,
+            style=style,
+            figsize=figsize,
+            dpi=dpi,
+            font_family=font_family,
+            vmax=vmax,
+            vmin=vmin,
+            show_uncertainties=show_uncertainties,
+            cmap=cmap,
+            **imshow_kwargs
+        )
+
+    def get_uncertainties_for_legendre_coefficient(
+        self, 
+        isotope: int, 
+        mt: int, 
+        l_coefficient: Union[int, List[int]],
+    ) -> Union[Optional[Dict[str, np.ndarray]], Dict[int, Optional[Dict[str, np.ndarray]]]]:
+        """
+        Extract standard uncertainties (square root of diagonal variance) for Legendre coefficient(s).
+        
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID
+        mt : int
+            Reaction MT number
+        l_coefficient : int or list of int
+            Legendre coefficient index (L value) or list of L values
+        return_relative : bool, optional
+            If True, return relative uncertainties (fractional). If False, return the raw
+            square root of diagonal variance elements (default behavior).
+            
+        Returns
+        -------
+        dict or dict of dicts
+            For single int: Dictionary containing 'energies' and 'uncertainties' arrays if found, None otherwise.
+            For list of ints: Dictionary mapping L coefficient to uncertainty data (or None if not found).
+            The uncertainties are the square root of the diagonal elements of the covariance matrix.
+            Note: MF34 covariance data is typically stored as relative covariances (fractional uncertainties).
+        """
+        # Handle single coefficient case
+        if isinstance(l_coefficient, int):
+            # Find the matrix for this specific (isotope, mt, l_coefficient) combination
+            for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c, energy_grid, matrix) in enumerate(zip(
+                self.isotope_rows, self.reaction_rows, self.l_rows,
+                self.isotope_cols, self.reaction_cols, self.l_cols,
+                self.energy_grids, self.matrices
+            )):
+                # Look for diagonal variance matrix (L = L) for the specified parameters
+                if (iso_r == isotope and iso_c == isotope and 
+                    mt_r == mt and mt_c == mt and 
+                    l_r == l_coefficient and l_c == l_coefficient):
+                    
+                    # Extract diagonal elements (variances) and take square root
+                    diagonal_variances = np.diag(matrix)
+                    
+                    # Check for negative variances (which shouldn't happen for diagonal blocks)
+                    if np.any(diagonal_variances < 0):
+                        # Handle negative variances by setting them to zero
+                        diagonal_variances = np.maximum(diagonal_variances, 0.0)
+                    
+                    uncertainties = np.sqrt(diagonal_variances)
+                    
+                    # Handle energy grid vs matrix size difference
+                    # Energy grid defines bin boundaries (N+1 points), matrix defines bin uncertainties (N×N)
+                    energy_array = np.array(energy_grid)
+                    
+                    if len(energy_array) == len(uncertainties) + 1:
+                        # Standard case: energy grid has bin boundaries, calculate bin centers
+                        energy_array = (energy_array[:-1] + energy_array[1:]) / 2.0
+                    elif len(energy_array) == len(uncertainties):
+                        # Energy points already represent bin centers or midpoints
+                        pass
+                    elif len(energy_array) > len(uncertainties):
+                        # More energy points than uncertainty values - truncate energy grid
+                        if len(energy_array) == len(uncertainties) + 1:
+                            # Convert to bin centers
+                            energy_array = (energy_array[:-1] + energy_array[1:]) / 2.0
+                        else:
+                            # Simple truncation
+                            energy_array = energy_array[:len(uncertainties)]
+                    else:
+                        # More uncertainty values than energy points - truncate uncertainties
+                        uncertainties = uncertainties[:len(energy_array)]
+                    
+                    return {
+                        'energies': energy_array,
+                        'uncertainties': uncertainties
+                    }
+            
+            return None
+        
+        # Handle list of coefficients case
+        elif isinstance(l_coefficient, (list, tuple)):
+            result = {}
+            for l_coeff in l_coefficient:
+                result[l_coeff] = self.get_uncertainties_for_legendre_coefficient(isotope, mt, l_coeff)
+            return result
+        
+        else:
+            raise TypeError(f"l_coefficient must be int or list of int, got {type(l_coefficient)}")
+
+
+
+
+    # ------------------------------------------------------------------
+    # Decomposition methods
+    # ------------------------------------------------------------------
+
+    def cholesky_decomposition(
+        self,
+        *,
+        space: str = "log",        # "log" (default) or "linear"
+        jitter_scale: float = 1e-10,
+        max_jitter_ratio: float = 1e-3,
+        verbose: bool = True,
+        logger = None,
+    ) -> np.ndarray:
+        """
+        Robust Cholesky factor L such that M ≈ L L^T.
+        
+        Parameters
+        ----------
+        space : str
+            "linear" or "log" space for decomposition
+        jitter_scale : float
+            Base jitter scale for PSD correction
+        max_jitter_ratio : float
+            Maximum jitter relative to matrix norm
+        verbose : bool
+            Whether to log progress
+        logger : optional
+            Logger instance for output
+            
+        Returns
+        -------
+        np.ndarray
+            Lower triangular Cholesky factor L
+        """
+        from mcnpy.cov.decomposition import cholesky_decomposition
+        return cholesky_decomposition(
+            self, 
+            space=space, 
+            jitter_scale=jitter_scale,
+            max_jitter_ratio=max_jitter_ratio,
+            verbose=verbose, 
+            logger=logger
+        )
+
+    def eigen_decomposition(
+        self,
+        *,
+        space: str = "log",
+        clip_negatives: bool = True,
+        verbose: bool = True,
+        logger = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Eigendecomposition with optional clipping instead of jitter.
+
+        If ``clip_negatives`` is *True*, negative eigenvalues are set to
+        zero and the user is informed of the number of clips and the minimum
+        original value.
+        
+        Parameters
+        ----------
+        space : str
+            "linear" or "log" space for decomposition
+        clip_negatives : bool
+            Whether to clip negative eigenvalues to zero
+        verbose : bool
+            Whether to log progress
+        logger : optional
+            Logger instance for output
+            
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            Eigenvalues and eigenvectors
+        """
+        from mcnpy.cov.decomposition import eigen_decomposition
+        return eigen_decomposition(
+            self,
+            space=space,
+            clip_negatives=clip_negatives,
+            verbose=verbose,
+            logger=logger
+        )
+
+    def svd_decomposition(
+        self,
+        *,
+        space: str = "log",
+        clip_negatives: bool = True,
+        verbose: bool = True,
+        full_matrices: bool = False,
+        logger = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        SVD with pre-clipping using eigendecomposition.
+
+        For symmetric matrices, SVD and eigen are equivalent. If
+        ``clip_negatives`` is activated, a preliminary eigendecomposition,
+        clipping, and reconstruction step is performed before applying SVD,
+        ensuring singular values consistent with a PSD matrix.
+        
+        Parameters
+        ----------
+        space : str
+            "linear" or "log" space for decomposition
+        clip_negatives : bool
+            Whether to clip negative eigenvalues before SVD
+        verbose : bool
+            Whether to log progress
+        full_matrices : bool
+            Whether to return full-sized U and V matrices
+        logger : optional
+            Logger instance for output
+            
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray, np.ndarray]
+            U, singular values, V^T matrices
+        """
+        from mcnpy.cov.decomposition import svd_decomposition
+        return svd_decomposition(
+            self,
+            space=space,
+            clip_negatives=clip_negatives,
+            verbose=verbose,
+            full_matrices=full_matrices,
+            logger=logger
+        )
+
+
+
+
+
+
+    # ------------------------------------------------------------------
+    # Private methods
+    # ------------------------------------------------------------------
+
     def __str__(self) -> str:
         """String representation showing summary information."""
         unique_isos = len(self.isotopes)
@@ -382,81 +614,19 @@ class MF34CovMat:
         
         return header + description + info_table + data_access_section + methods_section
 
-    def plot_covariance_heatmap(
-        self,
-        isotope: int,
-        mt: int,
-        legendre_coeffs: Union[int, List[int], Tuple[int, int]],
-        ax: Optional['plt.Axes'] = None,
-        *,
-        style: str = "default",
-        figsize: Tuple[float, float] = (6, 6),
-        dpi: int = 300,
-        font_family: str = "serif",
-        vmax: Optional[float] = None,
-        vmin: Optional[float] = None,
-        show_energy_ticks: bool = False,
-        show_uncertainties: bool = True,
-        cmap: Optional[any] = None,
-        **imshow_kwargs,
-    ) -> Union['plt.Axes', Tuple['plt.Axes', List['plt.Axes']]]:
+
+
+
+
+    # ------------------------------------------------------------------
+    # Helper methods
+    # ------------------------------------------------------------------
+
+    def _get_param_triplets(self) -> List[Tuple[int, int, int]]:
         """
-        Draw a correlation-matrix heat-map for MF34 angular distribution data.
-
-        Parameters
-        ----------
-        isotope : int
-            Isotope ID
-        mt : int
-            Reaction MT number
-        legendre_coeffs : int, list of int, or tuple of (row_l, col_l)
-            Legendre coefficient(s). Can be:
-            - Single int: diagonal block for that L
-            - List of ints: diagonal blocks for those L values
-            - Tuple of (row_l, col_l): off-diagonal block between row and column L
-        ax : plt.Axes, optional
-            Matplotlib axes to draw into (only used when show_uncertainties=False)
-        style : str
-            Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
-        figsize : tuple
-            Figure size in inches (width, height)
-        dpi : int
-            Dots per inch for figure resolution
-        font_family : str
-            Font family for text elements
-        vmax, vmin : float, optional
-            Color scale limits
-        show_energy_ticks : bool
-            Whether to show subtle energy group tick marks at the heatmap borders
-        show_uncertainties : bool
-            Whether to show uncertainty plots above the heatmap
-        **imshow_kwargs
-            Additional arguments passed to imshow
-
-        Returns
-        -------
-        plt.Axes or tuple
-            If show_uncertainties=False: returns the heatmap axes
-            If show_uncertainties=True: returns (heatmap_axes, uncertainty_axes_list)
+        Return a list of all (isotope, reaction, legendre) triplets present,
+        sorted first by isotope, then by reaction, then by legendre coefficient.
         """
-        from mcnpy.cov.mf34cov_heatmap import plot_mf34_covariance_heatmap
-
-        return plot_mf34_covariance_heatmap(
-            mf34_covmat=self,
-            isotope=isotope,
-            mt=mt,
-            legendre_coeffs=legendre_coeffs,
-            ax=ax,
-            style=style,
-            figsize=figsize,
-            dpi=dpi,
-            font_family=font_family,
-            vmax=vmax,
-            vmin=vmin,
-            show_energy_ticks=show_energy_ticks,
-            show_uncertainties=show_uncertainties,
-            cmap=cmap,
-            **imshow_kwargs
-        )
-
-
+        triplets = set(zip(self.isotope_rows, self.reaction_rows, self.l_rows)) \
+                 | set(zip(self.isotope_cols, self.reaction_cols, self.l_cols))
+        return sorted(triplets, key=lambda t: (t[0], t[1], t[2]))

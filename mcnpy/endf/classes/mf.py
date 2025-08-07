@@ -95,7 +95,7 @@ class MF:
         
         return result
         
-    def to_ang_covmat(self, debug = False) -> MF34CovMat:
+    def to_ang_covmat(self) -> MF34CovMat:
         """
         Convert MF34 data to an MF34CovMat object that contains data from all MT sections.
         
@@ -123,7 +123,7 @@ class MF:
             # Get the individual MF34CovMat for this MT section
             try:
                 # The MT section must be an MF34MT object with to_ang_covmat method
-                mt_ang_covmat: MF34CovMat = mt_section.to_ang_covmat(debug=debug)
+                mt_ang_covmat: MF34CovMat = mt_section.to_ang_covmat()
                 
                 # Add all matrices and their energy grids from this MT section
                 for i in range(mt_ang_covmat.num_matrices):

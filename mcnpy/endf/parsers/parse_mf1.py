@@ -6,6 +6,10 @@ from typing import Dict, List, Tuple
 from ..classes.mf import MF
 from ..classes.mf1.mf1mt import MT451
 from ..utils import parse_line, parse_endf_id, group_lines_by_mt_with_positions
+from ...utils import get_endf_logger
+
+# Initialize logger for this module
+logger = get_endf_logger(__name__)
 
 
 def parse_mf1(lines: List[str], file_offset: int = 0) -> MF:
@@ -19,6 +23,7 @@ def parse_mf1(lines: List[str], file_offset: int = 0) -> MF:
     Returns:
         MF object with parsed MF1 data
     """
+    logger.debug(f"Parsing MF1 with {len(lines)} lines")
     mf = MF(number=1)
     
     # Record number of lines
@@ -26,14 +31,19 @@ def parse_mf1(lines: List[str], file_offset: int = 0) -> MF:
     
     # Group lines by MT sections with position tracking
     mt_groups, line_counts = group_lines_by_mt_with_positions(lines)
+    logger.debug(f"Found MT sections: {list(mt_groups.keys())}")
     
     # Parse MT451 (General Information)
     if 451 in mt_groups:
+        logger.debug(f"Parsing MT451 with {len(mt_groups[451])} lines")
         # Directly add the MT451 object to the MF sections with line count information
         mt451 = parse_mt451(mt_groups[451])
         if 451 in line_counts:
             mt451.num_lines = line_counts[451]
         mf.add_section(mt451)
+        logger.debug("Successfully parsed MT451")
+    else:
+        logger.warning("No MT451 section found in MF1")
     
     # Parse other MT sections in MF1 if present
     # Example: if 452 in mt_groups:
@@ -42,6 +52,7 @@ def parse_mf1(lines: List[str], file_offset: int = 0) -> MF:
     #         mt452._start_line, mt452._end_line = positions[452]
     #     mf.add_section(mt452)
     
+    logger.debug("Finished parsing MF1")
     return mf
 
 
@@ -55,9 +66,11 @@ def parse_mt451(lines: List[str]) -> MT451:
     Returns:
         MT451 object with parsed data
     """
+    logger.debug(f"Parsing MT451 with {len(lines)} lines")
     mt451 = MT451()
     
     if len(lines) < 4:  # Need at least 4 lines for basic metadata
+        logger.warning(f"Insufficient lines for MT451: {len(lines)} < 4")
         return mt451
     
     # Parse first line - numeric data
@@ -68,6 +81,7 @@ def parse_mt451(lines: List[str]) -> MT451:
     mt451._lfi = line1.get("C4")
     mt451._nlib = line1.get("C5")
     mt451._nmod = line1.get("C6")
+    logger.debug(f"MT451 header: ZA={mt451._za}, AWR={mt451._awr}")
     
     # Parse second line - numeric data
     line2 = parse_line(lines[1])
@@ -96,6 +110,8 @@ def parse_mt451(lines: List[str]) -> MT451:
     mt451._nwd = line4.get("C5")
     mt451._nxc = line4.get("C6")
     
+    logger.debug(f"MT451 metadata: NWD={mt451._nwd}, NXC={mt451._nxc}")
+    
     # Get MAT number from first line
     mat, mf, mt = parse_endf_id(lines[0])
     mt451._mat = mat
@@ -107,6 +123,7 @@ def parse_mt451(lines: List[str]) -> MT451:
     # Store the raw text section (NWD lines after the 4 header lines)
     if len(lines) >= 4 + nwd:
         mt451._text_lines = lines[:4+nwd]  # Include the 4 header lines + text lines
+        logger.debug(f"Stored {len(mt451._text_lines)} text lines")
     
     # Extract basic text fields for convenience (if lines are available)
     if len(lines) >= 5:
@@ -116,6 +133,7 @@ def parse_mt451(lines: List[str]) -> MT451:
             mt451._alab = line[11:22].strip()    # cols 12-22
             mt451._edate = line[22:32].strip()   # cols 23-32
             mt451._auth = line[33:66].strip()    # cols 34-66
+            logger.debug(f"Extracted isotope info: {mt451._zsymam} {mt451._alab}")
     
     if len(lines) >= 6:
         line = lines[5]
@@ -124,9 +142,11 @@ def parse_mt451(lines: List[str]) -> MT451:
             mt451._ddate = line[22:32].strip()   # cols 23-32
             mt451._rdate = line[33:43].strip()   # cols 34-43
             mt451._endate = line[55:63].strip()  # cols 56-63
+            logger.debug(f"Extracted reference and dates: {mt451._ref}")
     
     # Parse directory entries
     dir_start = 4 + nwd  # Directory starts after header + text lines
+    dir_entries_parsed = 0
     for i in range(dir_start, min(dir_start + nxc, len(lines))):
         line_data = parse_line(lines[i])
         mf_val = line_data.get("C3")
@@ -141,5 +161,8 @@ def parse_mt451(lines: List[str]) -> MT451:
         # Add valid entries to directory
         if mf_val is not None and mt_val is not None and nc_val is not None and mod_val is not None:
             mt451.add_directory_entry(mf_val, mt_val, nc_val, mod_val)
+            dir_entries_parsed += 1
     
+    logger.debug(f"Parsed {dir_entries_parsed} directory entries")
+    logger.debug("Finished parsing MT451")
     return mt451

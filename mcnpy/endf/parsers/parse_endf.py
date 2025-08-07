@@ -12,6 +12,10 @@ from ..utils import parse_endf_id
 from .parse_mf1 import parse_mf1
 from .parse_mf4 import parse_mf4
 from .parse_mf34 import parse_mf34
+from ...utils import get_endf_logger
+
+# Initialize logger for this module
+logger = get_endf_logger(__name__)
 
 
 # Dictionary mapping MF numbers to their parser functions
@@ -33,13 +37,34 @@ def parse_endf_file(filepath: str) -> ENDF:
     Returns:
         ENDF object with parsed data for all MF sections that have registered parsers
     """
+    logger.debug(f"Starting to parse ENDF file: {filepath}")
     endf = ENDF()
     
     with open(filepath, 'r') as f:
         lines = f.readlines()
+        logger.debug(f"Read {len(lines)} lines from file")
+        
+        # Extract MAT number from the first valid line (columns 67-71, 1-indexed)
+        mat_number = None
+        for line in lines:
+            if len(line) >= 71:
+                try:
+                    mat_candidate = int(line[66:70])  # 0-indexed: 67-71 becomes 66:70
+                    if mat_candidate > 0:  # Valid MAT numbers are positive
+                        mat_number = mat_candidate
+                        break
+                except ValueError:
+                    continue
+        
+        if mat_number is not None:
+            endf.mat = mat_number
+            logger.debug(f"Extracted MAT number: {mat_number}")
+        else:
+            logger.debug("Could not extract MAT number from file")
         
         # First, scan the file to identify available MF sections
         available_mf_numbers = _scan_available_mf(lines)
+        logger.debug(f"Found MF sections: {available_mf_numbers}")
         
         if not available_mf_numbers:
             warnings.warn(f"No MF sections found in file: {filepath}")
@@ -54,7 +79,10 @@ def parse_endf_file(filepath: str) -> ENDF:
             return endf
             
         if skipped_mfs:
+            logger.debug(f"Skipping MF sections without parsers: {skipped_mfs}")
             warnings.warn(f"Skipping MF sections without parsers: {skipped_mfs}. Only parsing: {parseable_mfs}")
+        
+        logger.debug(f"Parsing MF sections: {parseable_mfs}")
         
         # Group lines by MF and MT with position tracking
         mf_mt_groups, line_counts = _group_lines_by_mf_mt_with_positions(lines)
@@ -62,6 +90,7 @@ def parse_endf_file(filepath: str) -> ENDF:
         # Parse each MF section that has a registered parser
         for mf_number in parseable_mfs:
             if mf_number in mf_mt_groups:
+                logger.debug(f"Parsing MF{mf_number}")
                 mt_groups = mf_mt_groups[mf_number]
                 
                 # Extract just the lines for this MF
@@ -73,11 +102,14 @@ def parse_endf_file(filepath: str) -> ENDF:
                 
                 # Parse the MF section with line count information
                 if mf_lines:
+                    logger.debug(f"Parsing MF{mf_number} with {len(mf_lines)} lines")
                     mf = MF_PARSERS[mf_number](mf_lines)
                     if mf_number in line_counts:
                         mf.num_lines = line_counts[mf_number]
                     endf.add_file(mf)
+                    logger.debug(f"Successfully parsed MF{mf_number}")
     
+    logger.debug(f"Finished parsing ENDF file: {filepath}")
     return endf
 
 
@@ -116,6 +148,8 @@ def parse_mf_from_file(filepath: str, mf_number: int) -> Optional[MF]:
     Returns:
         MF object if found and parsed, None otherwise
     """
+    logger.debug(f"Parsing MF{mf_number} from file: {filepath}")
+    
     if mf_number not in MF_PARSERS:
         raise ValueError(f"No parser available for MF{mf_number}")
     
@@ -126,10 +160,14 @@ def parse_mf_from_file(filepath: str, mf_number: int) -> Optional[MF]:
     try:
         with open(filepath, 'r') as f:
             lines = f.readlines()
+            logger.debug(f"Read {len(lines)} lines from file")
             
             # First check if the MF is actually in the file
             available_mfs = _scan_available_mf(lines)
+            logger.debug(f"Available MF sections in file: {available_mfs}")
+            
             if mf_number not in available_mfs:
+                logger.debug(f"MF{mf_number} not found in file")
                 warnings.warn(f"MF{mf_number} not found in file: {filepath}")
                 return None
                 
@@ -146,9 +184,13 @@ def parse_mf_from_file(filepath: str, mf_number: int) -> Optional[MF]:
             
             # Parse the MF section if found
             if mf_lines:
-                return MF_PARSERS[mf_number](mf_lines)
+                logger.debug(f"Found {len(mf_lines)} lines for MF{mf_number}, parsing...")
+                result = MF_PARSERS[mf_number](mf_lines)
+                logger.debug(f"Successfully parsed MF{mf_number}")
+                return result
             
             # Fallback to the group_by method
+            logger.debug(f"Direct line matching failed, trying grouping method")
             mf_mt_groups = _group_lines_by_mf_mt(lines)
             
             # Check if the requested MF is in the file
@@ -160,10 +202,15 @@ def parse_mf_from_file(filepath: str, mf_number: int) -> Optional[MF]:
                 
                 # Parse the MF section
                 if mf_lines:
-                    return MF_PARSERS[mf_number](mf_lines)
+                    logger.debug(f"Found {len(mf_lines)} lines for MF{mf_number} via grouping, parsing...")
+                    result = MF_PARSERS[mf_number](mf_lines)
+                    logger.debug(f"Successfully parsed MF{mf_number}")
+                    return result
     except Exception as e:
+        logger.error(f"Error parsing file: {e}")
         raise RuntimeError(f"Error parsing file: {e}")
     
+    logger.debug(f"MF{mf_number} not found or could not be parsed")
     return None
 
 
