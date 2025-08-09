@@ -77,6 +77,7 @@ ENDF_FORMAT_INT_ZERO = 'int_zero' # Integer with zero rendered as 0 (not blank)
 ENDF_FORMAT_BLANK = 'blank'       # Blank field
 ENDF_FORMAT_PRESERVE = 'preserve' # Use value's own type to determine format
 
+
 def format_endf_data_line(values: Sequence[Union[int, float, None]], 
                          mat: int, mf: int, mt: int, line_num: int = 0,
                          formats: Optional[List[str]] = None) -> str:
@@ -303,47 +304,6 @@ def group_lines_by_mt_with_positions(lines: List[str]) -> Tuple[Dict[int, List[s
         line_counts[current_mt] = len(current_lines)
     
     return result, line_counts
-
-
-# Unused - Waiting for further implementation (Sampling)
-def replace_section(filepath: str, section: Union['MT', 'MT451', 'MF'], output_filepath: Optional[str] = None) -> bool:
-    """
-    Replace a section in an ENDF file with a modified version.
-    
-    Args:
-        filepath: Path to the original ENDF file
-        section: The modified section object (MT, MT451, or MF)
-        output_filepath: Path for the output file (if None, overwrites the input file)
-        
-    Returns:
-        True if the replacement succeeded, False otherwise
-    """
-    start_pos, end_pos = section.position
-    
-    # If position information is missing, can't do targeted replacement
-    if start_pos is None or end_pos is None:
-        return False
-    
-    try:
-        # Read original file
-        with open(filepath, 'r') as f:
-            lines = f.readlines()
-        
-        # Get modified section as string
-        modified_lines = str(section).split('\n')
-        
-        # Replace the lines in the original file
-        new_lines = lines[:start_pos] + modified_lines + lines[end_pos+1:]
-        
-        # Write the result
-        out_path = output_filepath if output_filepath else filepath
-        with open(out_path, 'w') as f:
-            f.writelines([line + '\n' for line in new_lines])
-        
-        return True
-    except Exception as e:
-        print(f"Error replacing section: {e}")
-        return False
 
 
 # Interpolation scheme codes and their meanings based on ENDF format specification

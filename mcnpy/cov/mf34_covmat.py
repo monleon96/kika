@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, Set, Tuple, Union
+from typing import List, Dict, Optional, Set, Tuple, Union, Any
 from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
@@ -512,11 +512,6 @@ class MF34CovMat:
             full_matrices=full_matrices,
             logger=logger
         )
-
-
-
-
-
 
     # ------------------------------------------------------------------
     # Private methods

@@ -14,6 +14,32 @@ ATOMIC_NUMBER_TO_SYMBOL = {
 }
 
 N_AVOGADRO = 6.02214e23
+BOLTZMANN_CONSTANT = 8.617333262145e-11  # MeV/K
+
+K_TO_SUFFIX = {
+    0.1: ".01",
+    293.6: ".02",
+    300: ".03",
+    600: ".06",
+    700: ".07",
+    800: ".08",
+    900: ".09",
+    1000: ".10",
+}
+
+NDLIBRARY_TO_SUFFIX = {
+    'endfb70': '70',
+    'endfb71': '71',
+    'endfb80': '80',
+    'endfb81': '81',
+    'jeff31': '31',
+    'jeff311': '311',
+    'jeff32': '32',
+    'jeff33': '33',
+    'jeff40': '40',
+    'jendl40': '40',
+}
+
 
 MT_TO_REACTION = {
     1: "(n,total).",

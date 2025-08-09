@@ -40,7 +40,8 @@ class ENDF:
             return ENDF_MAT_TO_ZAID.get(self.mat, None)
         return None
     
-    def get_isotope_symbol(self) -> Optional[str]:
+    @property
+    def isotope(self) -> Optional[str]:
         """
         Get the isotope symbol (e.g., 'Fe56') from the ZAID.
         

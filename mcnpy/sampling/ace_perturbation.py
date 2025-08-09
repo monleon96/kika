@@ -13,6 +13,7 @@ from mcnpy.ace.parsers import read_ace
 from mcnpy.ace.writers.write_ace import write_ace
 from mcnpy.cov.parse_covmat import read_scale_covmat, read_njoy_covmat
 from mcnpy._utils import zaid_to_symbol
+from mcnpy.ace.xsdir import write_xsdir_line, build_xsdir_line
 
 class DualLogger:
     """Logger that writes detailed info to file and basic info to console."""
@@ -96,7 +97,7 @@ def _process_sample(
 ):
     # — read & perturb ACE —
     ace = read_ace(ace_file)
-    perturbed_mts = apply_perturbation_factor_to_ace(ace, sample, sample_index, energy_grid, mt_numbers, False)  # Set verbose=False to reduce output
+    apply_perturbation_factor_to_ace(ace, sample, sample_index, energy_grid, mt_numbers, False)  # Set verbose=False to reduce output
 
     # — write perturbed ACE —
     base, ext = os.path.splitext(os.path.basename(ace_file))
@@ -115,45 +116,42 @@ def _process_sample(
     rel = os.path.relpath(out_ace, output_dir).replace(os.sep, "/")
     rel_path = f"../{rel}"
     hdr = ace.header
-    ptable = 'ptable' if getattr(ace.unresolved_resonance, 'has_data', False) else ''
-    line = (
-        f"{hdr.zaid}{ext} "
-        f"{hdr.atomic_weight_ratio:.6f} "
-        f"{rel_path} 0 1 1 "
-        f"{hdr.nxs_array[1]} 0 0 "
-        f"{hdr.temperature:.3E} {ptable}"
+    has_ptable = bool(getattr(ace.unresolved_resonance, 'has_data', False))
+
+    xsdir_line = build_xsdir_line(
+        zaid_with_ext=f"{hdr.zaid}{ext}",
+        awr=hdr.atomic_weight_ratio,
+        file_ref=rel_path,          
+        xss_len=hdr.nxs_array[1],   
+        kT_MeV=hdr.temperature,
+        has_ptable=has_ptable,   
     )
+
     xsdir_path = os.path.join(sample_dir, f"{base}_{sample_str}.xsdir")
-    with open(xsdir_path, 'w') as fx:
-        fx.write(line + "\n")
+    write_xsdir_line(xsdir_path, xsdir_line, mode="w")
 
     if xsdir_file:
-        # Create xsdir directory if it doesn't exist
         xsdir_dir = os.path.join(output_dir, "xsdir")
         os.makedirs(xsdir_dir, exist_ok=True)
-        
-        # 1) build the sample suffix and master-filename (no extra extension)
-        sample_tag       = f"_{sample_index+1:04d}"
-        orig_xs_base     = os.path.splitext(os.path.basename(xsdir_file))[0]
-        master_xs_name   = orig_xs_base + sample_tag
-        master_xs_path   = os.path.join(xsdir_dir, master_xs_name)  # Create directly in xsdir directory
 
-        # 2) copy original master once
+        sample_tag     = f"_{sample_index+1:04d}"
+        orig_xs_base   = os.path.splitext(os.path.basename(xsdir_file))[0]
+        master_xs_name = orig_xs_base + sample_tag
+        master_xs_path = os.path.join(xsdir_dir, master_xs_name)
+
         if not os.path.exists(master_xs_path):
             shutil.copy(xsdir_file, master_xs_path)
 
-        # 3) read & patch only the ZAID line
         with open(master_xs_path, 'r') as f:
             xs_lines = f.readlines()
 
-        ace_ext      = os.path.splitext(ace_file)[1]   # e.g. ".54c"
-        zaid_prefix  = f"{ace.header.zaid}{ace_ext}"
-        new_line     = line + "\n"
+        ace_ext     = os.path.splitext(ace_file)[1]
+        zaid_prefix = f"{hdr.zaid}{ace_ext}"
 
         with open(master_xs_path, 'w') as f:
             for ln in xs_lines:
-                if ln.startswith(zaid_prefix):
-                    f.write(new_line)
+                if ln.split()[0] == zaid_prefix:
+                    f.write(xsdir_line + "\n")
                 else:
                     f.write(ln)
 
@@ -179,22 +177,6 @@ def _process_sample(
                 sf.write(f"{mt:<3}\t{low:.6e}\t{high:.6e}\t{fac:.6e}\n")
 
         sf.write("\n")
-
-#def load_covariance(path):
-#    if not os.path.exists(path):
-#        return None
-#    
-#    for reader in (read_njoy_covmat, read_scale_covmat):
-#        try:
-#            cov = reader(path)
-#            return cov
-#        except Exception as e:
-#            print(f"Reader {reader.__name__} failed with: {type(e).__name__}: {e}")
-#            # Add more detailed traceback for debugging
-#            import traceback
-#            print(f"Full traceback:\n{traceback.format_exc()}")
-#            continue
-#    return None
 
 
 def load_covariance(path):
@@ -977,8 +959,6 @@ def apply_perturbation_factor_to_ace(ace, sample, sample_index, energy_grid, mt_
     if verbose and logger:
         logger.info(f"[ACE] [PERTURB] Applying factors for sample #{sample_index+1:04d}")
         logger.info(f"  Perturbed MT numbers: {perturbed_mts}")
-        
-    return perturbed_mts
 
 
 def _apply_factors_to_mt(ace, mt, factors, boundaries, verbose=True):

@@ -1,4 +1,4 @@
-from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL
+from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL, BOLTZMANN_CONSTANT
 
 def zaid_to_symbol(zaid: int) -> str:
     """
@@ -20,6 +20,38 @@ def zaid_to_symbol(zaid: int) -> str:
     if z in ATOMIC_NUMBER_TO_SYMBOL:
         return f"{ATOMIC_NUMBER_TO_SYMBOL[z]}{a}"
     return f"{zaid}"  # Fallback if conversion fails
+
+def kelvin_to_MeV(temp: float) -> float:
+    """
+    Convert temperature in Kelvin to MeV.
+    
+    Parameters
+    ----------
+    temp : float
+        Temperature in Kelvin
+    
+    Returns
+    -------
+    float
+        Temperature in MeV
+    """
+    return temp * BOLTZMANN_CONSTANT
+
+def MeV_to_kelvin(temp: float) -> float:
+    """
+    Convert temperature in MeV to Kelvin.
+    
+    Parameters
+    ----------
+    temp : float
+        Temperature in MeV
+    
+    Returns
+    -------
+    float
+        Temperature in Kelvin
+    """
+    return temp / BOLTZMANN_CONSTANT 
 
 
 def add_repr_method(method_name, description, buffer=None, method_col_width=30, desc_col_width=45, 
