@@ -11,6 +11,7 @@ from datetime import datetime
 import os
 import numpy as np
 import pandas as pd
+import shutil
 
 from mcnpy.sampling.generators import generate_endf_samples
 from mcnpy.cov.mf34_covmat import MF34CovMat
@@ -19,10 +20,17 @@ from mcnpy.endf.writers.endf_writer import ENDFWriter
 from mcnpy.endf.classes.mf4.polynomial import MF4MTLegendre
 from mcnpy.endf.classes.mf4.mixed import MF4MTMixed
 from mcnpy.endf.classes.mf import MF
-from mcnpy._utils import zaid_to_symbol
+from mcnpy._utils import zaid_to_symbol, temperature_to_suffix
+from mcnpy.njoy.run_njoy import run_njoy
+from mcnpy.endf.read_endf import read_endf
+from mcnpy.ace.xsdir import create_xsdir_files_for_ace
+
 
 # Reuse the DualLogger from ace_perturbation
 from mcnpy.sampling.ace_perturbation import DualLogger
+
+# Import NJOY runner for ACE generation
+from mcnpy.njoy.run_njoy import run_njoy
 
 # Global logger instance
 _logger = None
@@ -40,6 +48,12 @@ def _process_sample(
     param_mapping: List[Tuple[int, int, int, int]],  # List of (isotope, mt, l, energy_bin) tuples
     output_dir: str,
     dry_run: bool = False,
+    generate_ace: bool = False,
+    njoy_exe: Optional[str] = None,
+    temperatures: Optional[List[float]] = None,
+    library_name: Optional[str] = None,
+    njoy_version: str = "NJOY 2016.78",
+    xsdir_file: Optional[str] = None,
 ):
     """
     Process a single perturbation sample for ENDF files.
@@ -60,13 +74,23 @@ def _process_sample(
         Output directory for results
     dry_run : bool
         If True, only generate factors without creating ENDF files
+    generate_ace : bool
+        If True, generate ACE files using NJOY for each perturbed ENDF
+    njoy_exe : Optional[str]
+        Path to NJOY executable
+    temperatures : Optional[Union[float, List[float]]]
+        Temperature(s) for ACE generation (can be single float or list)
+    library_name : Optional[str]
+        Nuclear data library name
+    njoy_version : str
+        NJOY version string
     """
     if dry_run:
         # Parse the ENDF file to get ZAID for proper directory structure
         endf = parse_endf_file(endf_file)
         base = os.path.splitext(os.path.basename(endf_file))[0]
         sample_str = f"{sample_index+1:04d}"
-        sample_dir = os.path.join(output_dir, str(endf.zaid or "unknown"), sample_str)
+        sample_dir = os.path.join(output_dir, "endf", str(endf.zaid or "unknown"), sample_str)
         os.makedirs(sample_dir, exist_ok=True)
         
         _write_sample_summary(
@@ -90,7 +114,7 @@ def _process_sample(
     # Write perturbed ENDF file
     base, ext = os.path.splitext(os.path.basename(endf_file))
     sample_str = f"{sample_index+1:04d}"
-    sample_dir = os.path.join(output_dir, str(endf.zaid or "unknown"), sample_str)
+    sample_dir = os.path.join(output_dir, "endf", str(endf.zaid or "unknown"), sample_str)
     os.makedirs(sample_dir, exist_ok=True)
     out_endf = os.path.join(sample_dir, f"{base}_{sample_str}{ext}")
     
@@ -112,6 +136,157 @@ def _process_sample(
         sample_dir=sample_dir,
         base=base,
     )
+    
+    # Generate ACE files using NJOY if requested
+    if generate_ace and not dry_run:
+        _process_njoy_for_sample(
+            out_endf=out_endf,
+            sample_index=sample_index,
+            njoy_exe=njoy_exe,
+            temperatures=temperatures,
+            library_name=library_name,
+            njoy_version=njoy_version,
+            output_dir=output_dir,
+            xsdir_file=xsdir_file,
+        )
+
+
+def _process_njoy_for_sample(
+    out_endf: str,
+    sample_index: int,
+    njoy_exe: str,
+    temperatures: List[float],
+    library_name: str,
+    njoy_version: str,
+    output_dir: str,
+    xsdir_file: Optional[str] = None,
+):
+    """
+    Process a perturbed ENDF file through NJOY to generate ACE files.
+    
+    Parameters
+    ----------
+    out_endf : str
+        Path to the perturbed ENDF file
+    sample_index : int
+        Sample index (0-based)
+    njoy_exe : str
+        Path to NJOY executable
+    temperatures : List[float]
+        List of temperatures for ACE generation
+    library_name : str
+        Nuclear data library name
+    njoy_version : str
+        NJOY version string
+    output_dir : str
+        Base output directory
+    """
+    
+    logger = _get_logger()
+    sample_str = f"{sample_index+1:04d}"  # Remove 's' prefix
+    
+    if logger:
+        logger.info(f"[NJOY] Processing sample {sample_str} through NJOY for {len(temperatures)} temperatures")
+    
+    # Parse ENDF to get ZAID for directory organization
+    try:
+        endf_data = read_endf(out_endf)
+        zaid = endf_data.zaid or "unknown"
+    except Exception as e:
+        if logger:
+            logger.error(f"[NJOY] Sample {sample_str}: Failed to parse ENDF for ZAID - {e}")
+        return
+    
+    for temp in temperatures:
+        try:
+            # Create custom directory structure: ace/temp/zaid/sample_num/ (no 'K')
+            temp_str = f"{int(temp)}"
+            ace_sample_dir = os.path.join(output_dir, "ace", temp_str, str(zaid), sample_str)
+            njoy_sample_dir = os.path.join(output_dir, "njoy_files", temp_str, str(zaid), sample_str)
+            # Create directories
+            os.makedirs(ace_sample_dir, exist_ok=True)
+            os.makedirs(njoy_sample_dir, exist_ok=True)
+            
+            # Run NJOY with a temporary directory (to avoid library subdirectories)
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="njoy_temp_") as temp_dir:
+                result = run_njoy(
+                    njoy_exe=njoy_exe,
+                    endf_path=out_endf,
+                    temperature=temp,
+                    library_name=library_name,
+                    output_dir=temp_dir,  # Use temporary directory
+                    njoy_version=njoy_version,
+                    additional_suffix=sample_str,  # Remove 's' prefix
+                )
+                
+                if result["returncode"] == 0:
+                    if logger:
+                        logger.info(f"[NJOY] Sample {sample_str} at {temp}K: SUCCESS")
+                    
+                    # Move ACE file to our custom structure
+                    if result.get("ace_file") and os.path.exists(result["ace_file"]):
+                        ace_filename = os.path.basename(result["ace_file"])
+                        dest_ace = os.path.join(ace_sample_dir, ace_filename)
+                        shutil.move(result["ace_file"], dest_ace)
+                        if logger:
+                            logger.info(f"[NJOY] Sample {sample_str} at {temp}K: ACE file -> {dest_ace}")
+                        
+                        # Create xsdir files for the generated ACE file
+                        if xsdir_file is not None:
+                            try:
+                                # Parse ACE file to get header information for xsdir creation
+                                from mcnpy.ace.parsers import read_ace
+                                ace_data = read_ace(dest_ace)
+                                hdr = ace_data.header
+                                has_ptable = bool(getattr(ace_data.unresolved_resonance, 'has_data', False))
+                                
+                                # Determine the proper cross-section library extension
+                                # For NJOY-generated files, calculate extension based on temperature
+                                base_ace, ace_file_ext = os.path.splitext(os.path.basename(dest_ace))
+                                
+                                # Convert temperature from MeV to Kelvin and get proper suffix
+                                from mcnpy._utils import MeV_to_kelvin
+                                temp_K = MeV_to_kelvin(hdr.temperature)
+                                xs_ext = temperature_to_suffix(temp_K) + "c"  # Add 'c' for continuous energy
+                                
+                                create_xsdir_files_for_ace(
+                                    ace_file_path=dest_ace,
+                                    zaid=hdr.zaid,
+                                    awr=hdr.atomic_weight_ratio,
+                                    xss_len=hdr.nxs_array[1],
+                                    temperature_mev=hdr.temperature,
+                                    sample_index=sample_index,
+                                    output_dir=output_dir,
+                                    master_xsdir_file=xsdir_file,
+                                    has_ptable=has_ptable,
+                                )
+                                
+                                if logger:
+                                    logger.info(f"[NJOY] Sample {sample_str} at {temp}K: XSDIR files created")
+                                    
+                            except Exception as xsdir_err:
+                                if logger:
+                                    logger.warning(f"[NJOY] Sample {sample_str} at {temp}K: Failed to create XSDIR files - {xsdir_err}")
+                    
+                    # Move NJOY auxiliary files to our custom structure
+                    aux_files = ["njoy_input", "njoy_output", "xsdir_file", "viewr_output"]
+                    for aux_file in aux_files:
+                        if result.get(aux_file) and os.path.exists(result[aux_file]):
+                            aux_filename = os.path.basename(result[aux_file])
+                            dest_aux = os.path.join(njoy_sample_dir, aux_filename)
+                            try:
+                                shutil.move(result[aux_file], dest_aux)
+                            except Exception as move_err:
+                                if logger:
+                                    logger.warning(f"[NJOY] Could not move {aux_file}: {move_err}")
+                else:
+                    if logger:
+                        logger.error(f"[NJOY] Sample {sample_str} at {temp}K: FAILED (return code: {result['returncode']})")
+                        
+        except Exception as e:
+            if logger:
+                logger.error(f"[NJOY] Sample {sample_str} at {temp}K: EXCEPTION - {e}")
 
 
 def load_mf34_covariance(path: str) -> Optional[MF34CovMat]:
@@ -187,11 +362,11 @@ def load_mf34_covariance(path: str) -> Optional[MF34CovMat]:
 
 def perturb_ENDF_files(
     endf_files: Union[str, List[str]],
-    mf34_cov_files: Union[str, List[str]],
     mt_list: List[int],
     legendre_coeffs: List[int],
     num_samples: int,
-    space: str = "log",
+    mf34_cov_files: Optional[Union[str, List[str]]] = None,
+    space: str = "linear",
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
     output_dir: str = '.',
@@ -199,28 +374,36 @@ def perturb_ENDF_files(
     nprocs: int = 1,
     dry_run: bool = False,
     verbose: bool = True,
+    generate_ace: bool = False,
+    njoy_exe: Optional[str] = None,
+    temperatures: Optional[Union[float, List[float]]] = None,
+    library_name: Optional[str] = None,
+    njoy_version: str = "NJOY 2016.78",
+    xsdir_file: Optional[str] = None,
 ):
     """
     Perturb ENDF nuclear data files using MF34 angular covariance matrices.
     
     This function generates perturbed ENDF files by sampling perturbation factors
     from multivariate normal distributions derived from MF34 covariance matrices.
+    Optionally, it can also generate ACE files for each perturbed ENDF using NJOY.
     
     Parameters
     ----------
     endf_files : Union[str, List[str]]
         Path(s) to ENDF file(s) to be perturbed
-    mf34_cov_files : Union[str, List[str]]
-        Path(s) to MF34 covariance matrix file(s).
-        Can be a single file (used for all ENDF files) or one file per ENDF file.
     mt_list : List[int]
         List of MT reaction numbers to perturb. Empty list means all available MTs
     legendre_coeffs : List[int]
         List of Legendre coefficient indices to perturb (e.g., [0, 1, 2])
     num_samples : int
         Number of perturbed ENDF files to generate
-    space : str, default "log"
-        Sampling space: "linear" (factors = 1 + X) or "log" (factors = exp(Y))
+    mf34_cov_files : Optional[Union[str, List[str]]], default None
+        Path(s) to MF34 covariance matrix file(s). If None, covariance data will be
+        read from the ENDF files themselves (MF34 section). If provided, can be a 
+        single file (used for all ENDF files) or one file per ENDF file.
+    space : str, default "linear"
+        Sampling space: "linear"/"lin" (factors = 1 + X) or "log" (factors = exp(Y))
     decomposition_method : str, default "svd"
         Matrix decomposition method: "svd", "cholesky", "eigen", or "pca"
     sampling_method : str, default "sobol"
@@ -230,18 +413,43 @@ def perturb_ENDF_files(
     seed : Optional[int], default None
         Random seed for reproducible sampling
     nprocs : int, default 1
-        Number of parallel processes (currently unused)
+        Number of parallel processes for sample processing
     dry_run : bool, default False
         If True, only generate perturbation factors without creating ENDF files
     verbose : bool, default True
         Enable verbose logging output
+    generate_ace : bool, default False
+        If True, generate ACE files for each perturbed ENDF using NJOY
+    njoy_exe : Optional[str], default None
+        Path to NJOY executable. Required if generate_ace is True
+    temperatures : Optional[Union[float, List[float]]], default None
+        Temperature(s) (in Kelvin) for ACE generation. Can be a single float or list of floats.
+        Required if generate_ace is True.
+    library_name : Optional[str], default None
+        Nuclear data library name (e.g., 'endfb81', 'jeff40'). Required if generate_ace is True
+    njoy_version : str, default "NJOY 2016.78"
+        NJOY version string for metadata and titles
+    xsdir_file : Optional[str], default None
+        Path to master XSDIR file to be modified for each generated ACE file.
+        Only used when generate_ace=True.
         
     Notes
     -----
     This function does not apply any autofix to the covariance matrices,
     using them exactly as provided in the MF34 data.
+    
+    When generate_ace=True, the output directory structure will include:
+    - output_dir/endf/zaid/sample_num/ : perturbed ENDF files
+    - output_dir/ace/temp/zaid/sample_num/ : ACE files organized by temperature
+    - output_dir/njoy_files/temp/zaid/ : NJOY auxiliary files
+    - output_dir/xsdir/ : modified xsdir files (if xsdir_file provided)
+    - output_dir/*.log and *.parquet : log and master perturbation files
     """
     global _logger
+    
+    # Normalize space parameter: support both 'lin' and 'linear'
+    if space.lower() == 'lin':
+        space = 'linear'
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -255,6 +463,30 @@ def perturb_ENDF_files(
     print(f"[INFO] Starting ENDF perturbation job")
     print(f"[INFO] Log file: {log_file}")
     print(f"[INFO] Output directory: {os.path.abspath(output_dir)}")
+    if generate_ace:
+        print(f"[INFO] ACE generation enabled")
+    
+    # Validate NJOY parameters if ACE generation is requested
+    if generate_ace:
+        if njoy_exe is None:
+            raise ValueError("njoy_exe must be provided when generate_ace=True")
+        if temperatures is None:
+            raise ValueError("temperatures must be provided when generate_ace=True")
+        
+        # Convert temperature to list if it's a single float
+        if isinstance(temperatures, (int, float)):
+            temperatures = [float(temperatures)]
+        elif isinstance(temperatures, list):
+            if len(temperatures) == 0:
+                raise ValueError("temperatures list cannot be empty when generate_ace=True")
+            temperatures = [float(t) for t in temperatures]
+        else:
+            raise ValueError("temperatures must be a float or list of floats")
+            
+        if library_name is None:
+            raise ValueError("library_name must be provided when generate_ace=True")
+        if not os.path.exists(njoy_exe):
+            raise FileNotFoundError(f"NJOY executable not found: {njoy_exe}")
     
     # Print run parameters as metadata TO LOG FILE
     separator = "=" * 80
@@ -271,7 +503,12 @@ def perturb_ENDF_files(
         for i, f in enumerate(endf_files):
             _logger.info(f"  [{i+1}] {f}")
     
-    if isinstance(mf34_cov_files, str):
+    # Handle MF34 covariance files parameter
+    if mf34_cov_files is None:
+        _logger.info(f"MF34 covariance files: None (will read from ENDF files)")
+        # Use ENDF files themselves as covariance sources
+        mf34_cov_files = endf_files[:]
+    elif isinstance(mf34_cov_files, str):
         mf34_cov_files = [mf34_cov_files]
         _logger.info(f"MF34 covariance files: {mf34_cov_files[0]}")
     else:
@@ -286,94 +523,281 @@ def perturb_ENDF_files(
     _logger.info(f"Decomposition method: {decomposition_method}")
     _logger.info(f"Sampling method: {sampling_method}")
     _logger.info(f"Random seed: {seed}")
+    _logger.info(f"Parallel processes: {nprocs}")
     _logger.info(f"Dry run: {dry_run}")
+    _logger.info(f"Generate ACE: {generate_ace}")
+    if generate_ace:
+        _logger.info(f"NJOY executable: {njoy_exe}")
+        _logger.info(f"Temperatures: {temperatures}")
+        _logger.info(f"Library name: {library_name}")
+        _logger.info(f"NJOY version: {njoy_version}")
+        _logger.info(f"XSDIR file: {xsdir_file if xsdir_file else 'None'}")
     _logger.info(f"{separator}")
     
     # Validate inputs
-    if len(mf34_cov_files) != 1 and len(mf34_cov_files) != len(endf_files):
+    if mf34_cov_files is not None and len(mf34_cov_files) != 1 and len(mf34_cov_files) != len(endf_files):
         raise ValueError("Number of MF34 covariance files must be 1 or equal to number of ENDF files")
+    
+    # Initialize summary tracking
+    summary_data = {}
+    failed_files_details = {}
     
     # Process each ENDF file
     all_factors = []
     all_param_mappings = []
     all_energy_grids = []
+    processed_files = 0
+    failed_files = 0
     
     for i, endf_file in enumerate(endf_files):
-        _logger.info(f"\n[ENDF] Processing file {i+1}/{len(endf_files)}: {os.path.basename(endf_file)}")
-        
-        # Determine which covariance file to use
-        cov_file = mf34_cov_files[0] if len(mf34_cov_files) == 1 else mf34_cov_files[i]
-        
-        # Load covariance matrix
-        mf34_cov = load_mf34_covariance(cov_file)
-        if mf34_cov is None:
-            _logger.error(f"[ENDF] [COV] Failed to load covariance matrix from {cov_file}")
-            continue
-        
-        # Filter covariance data by requested MTs and Legendre coefficients
-        filtered_cov = _filter_mf34_covariance(mf34_cov, mt_list, legendre_coeffs)
-        
-        if filtered_cov.num_matrices == 0:
-            _logger.warning(f"No covariance data found for requested MTs {mt_list} and L coefficients {legendre_coeffs}")
-            continue
-        
-        # Create parameter mapping and energy grids
-        param_mapping, energy_grids = _create_parameter_mapping(filtered_cov)
-        
-        # Generate perturbation factors
-        _logger.info(f"Generating {num_samples} perturbation samples...")
-        
         try:
-            factors, _ = generate_endf_samples(
-                filtered_cov,
-                num_samples,
-                space=space,
-                decomposition_method=decomposition_method,
-                sampling_method=sampling_method,
-                seed=seed,
-                mt_numbers=mt_list,
-                verbose=verbose,
-            )
+            _logger.info(f"\n[ENDF] Processing file {i+1}/{len(endf_files)}: {os.path.basename(endf_file)}")
             
-            _logger.info(f"Successfully generated perturbation factors: shape {factors.shape}")
+            # Initialize summary data for this file
+            file_key = os.path.basename(endf_file)
+            summary_data[file_key] = {
+                'file_path': endf_file,
+                'file_index': i + 1,
+                'perturbed_mts': [],
+                'perturbed_l_coeffs': [],
+                'num_samples': num_samples,
+                'warnings': [],
+                'ace_generation': {
+                    'enabled': generate_ace,
+                    'successful_samples': 0,
+                    'failed_samples': 0,
+                    'temperatures': temperatures if generate_ace else None,
+                    'xsdir_created': False
+                }
+            }
             
-        except Exception as e:
-            _logger.error(f"[ENDF] [SAMPLE] Failed to generate perturbation factors: {e}")
+            # Determine which covariance file to use
+            cov_file = mf34_cov_files[0] if len(mf34_cov_files) == 1 else mf34_cov_files[i]
+            
+            # Load covariance matrix
+            mf34_cov = load_mf34_covariance(cov_file)
+            if mf34_cov is None:
+                _logger.error(f"[ENDF] File {i+1}: Failed to load covariance matrix from {cov_file}")
+                failed_files_details[file_key] = "Failed to load MF34 covariance matrix"
+                failed_files += 1
+                continue
+            
+            # Filter covariance data by requested MTs and Legendre coefficients
+            filtered_cov = _filter_mf34_covariance(mf34_cov, mt_list, legendre_coeffs)
+            
+            if filtered_cov.num_matrices == 0:
+                _logger.warning(f"[ENDF] File {i+1}: No covariance data found for requested MTs {mt_list} and L coefficients {legendre_coeffs}")
+                failed_files_details[file_key] = f"No covariance data for requested MTs {mt_list} and L coefficients {legendre_coeffs}"
+                failed_files += 1
+                continue
+            
+            # Store which MTs and L coefficients will be perturbed
+            summary_data[file_key]['perturbed_mts'] = list(filtered_cov.reactions)
+            summary_data[file_key]['perturbed_l_coeffs'] = list(filtered_cov.legendre_indices)
+            
+            # Create parameter mapping and energy grids
+            param_mapping, energy_grids = _create_parameter_mapping(filtered_cov)
+            
+            # Generate perturbation factors
+            _logger.info(f"[ENDF] File {i+1}: Generating {num_samples} perturbation samples...")
+            
+            try:
+                factors, _ = generate_endf_samples(
+                    filtered_cov,
+                    num_samples,
+                    space=space,
+                    decomposition_method=decomposition_method,
+                    sampling_method=sampling_method,
+                    seed=seed,
+                    mt_numbers=mt_list,
+                    verbose=verbose,
+                )
+                
+                _logger.info(f"[ENDF] File {i+1}: Successfully generated perturbation factors: shape {factors.shape}")
+                
+            except Exception as e:
+                _logger.error(f"[ENDF] File {i+1}: Failed to generate perturbation factors: {e}")
+                failed_files_details[file_key] = f"Perturbation generation failed: {str(e)}"
+                failed_files += 1
+                continue
+            
+            # Store factors and mapping for master file
+            all_factors.append(factors)
+            all_param_mappings.append(param_mapping)
+            all_energy_grids.append(energy_grids)
+            
+            # Process samples
+            if not dry_run:
+                _logger.info(f"[ENDF] File {i+1}: Applying perturbations to {num_samples} samples...")
+            else:
+                _logger.info(f"[ENDF] File {i+1}: Dry run: generating factor summaries for {num_samples} samples...")
+            
+            # Process samples with optional parallelization
+            if nprocs > 1 and num_samples > 1:
+                _logger.info(f"[ENDF] File {i+1}: Using {nprocs} processes for parallel processing")
+                
+                try:
+                    with Pool(processes=nprocs) as pool:
+                        futures = []
+                        for sample_idx in range(num_samples):
+                            args = (
+                                endf_file, factors[sample_idx], sample_idx, energy_grids, 
+                                param_mapping, output_dir, dry_run, generate_ace, njoy_exe, 
+                                temperatures, library_name, njoy_version, xsdir_file
+                            )
+                            future = pool.apply_async(_process_sample, args=args)
+                            futures.append(future)
+                        
+                        # Wait for all processes to complete
+                        pool.close()
+                        pool.join()
+                        
+                        # Check for any exceptions
+                        for j, future in enumerate(futures):
+                            try:
+                                future.get()  # This will raise any exception that occurred
+                            except Exception as e:
+                                _logger.error(f"[ENDF] File {i+1}: Sample {j+1:04d} processing failed: {e}")
+                                
+                except Exception as e:
+                    _logger.error(f"[ENDF] File {i+1}: Parallel processing failed, falling back to serial: {e}")
+                    # Fall back to serial processing
+                    for sample_idx in range(num_samples):
+                        try:
+                            _process_sample(
+                                endf_file=endf_file,
+                                sample=factors[sample_idx],
+                                sample_index=sample_idx,
+                                energy_grids=energy_grids,
+                                param_mapping=param_mapping,
+                                output_dir=output_dir,
+                                dry_run=dry_run,
+                                generate_ace=generate_ace,
+                                njoy_exe=njoy_exe,
+                                temperatures=temperatures,
+                                library_name=library_name,
+                                njoy_version=njoy_version,
+                                xsdir_file=xsdir_file,
+                            )
+                        except Exception as sample_e:
+                            _logger.error(f"[ENDF] File {i+1}: Sample {sample_idx+1:04d} processing failed: {sample_e}")
+                            continue
+            else:
+                # Serial processing
+                for sample_idx in range(num_samples):
+                    try:
+                        _process_sample(
+                            endf_file=endf_file,
+                            sample=factors[sample_idx],
+                            sample_index=sample_idx,
+                            energy_grids=energy_grids,
+                            param_mapping=param_mapping,
+                            output_dir=output_dir,
+                            dry_run=dry_run,
+                            generate_ace=generate_ace,
+                            njoy_exe=njoy_exe,
+                            temperatures=temperatures,
+                            library_name=library_name,
+                            njoy_version=njoy_version,
+                            xsdir_file=xsdir_file,
+                        )
+                    except Exception as e:
+                        _logger.error(f"[ENDF] File {i+1}: Sample {sample_idx+1:04d} processing failed: {e}")
+                        continue
+            
+            processed_files += 1
+            _logger.info(f"[ENDF] File {i+1}: Successfully processed all samples")
+            
+        except Exception as file_error:
+            _logger.error(f"[ENDF] File {i+1}: Critical error during processing: {file_error}")
+            failed_files_details[file_key] = f"Critical processing error: {str(file_error)}"
+            failed_files += 1
             continue
-        
-        # Store factors and mapping for master file
-        all_factors.append(factors)
-        all_param_mappings.append(param_mapping)
-        all_energy_grids.append(energy_grids)
-        
-        # Process samples
-        if not dry_run:
-            _logger.info(f"Applying perturbations to {num_samples} samples...")
-        else:
-            _logger.info(f"Dry run: generating factor summaries for {num_samples} samples...")
-        
-        for sample_idx in range(num_samples):
-            _process_sample(
-                endf_file=endf_file,
-                sample=factors[sample_idx],
-                sample_index=sample_idx,
-                energy_grids=energy_grids,
-                param_mapping=param_mapping,
-                output_dir=output_dir,
-                dry_run=dry_run,
-            )
     
     # Write master perturbation factors file
     master_file = _write_master_perturbation_file(
         all_factors, all_param_mappings, all_energy_grids, output_dir, timestamp, verbose
     )
     
-    _logger.info(f"\n[ENDF] Perturbation job completed successfully")
-    if master_file:
-        print(f"[INFO] ENDF perturbation job completed")
-        print(f"[INFO] Master matrix file: {os.path.basename(master_file)}")
+    # =====================================================================
+    #  Print final comprehensive summary for all files TO LOG FILE
+    # =====================================================================
+    separator = "=" * 80
+    _logger.info(f"\n{separator}")
+    _logger.info(f"[ENDF] [SUMMARY] Processing Results")
+    _logger.info(f"{separator}")
+    
+    if not summary_data and not failed_files_details:
+        _logger.info("  No ENDF files were processed.")
     else:
-        print(f"[INFO] ENDF perturbation job completed")
+        # Report files that were successfully processed
+        successfully_processed = {k: v for k, v in summary_data.items() if k not in failed_files_details}
+        
+        if successfully_processed:
+            _logger.info("\n  SUCCESSFULLY PROCESSED ENDF FILES:")
+            _logger.info(f"  {'-' * 60}")
+            
+            for file_key, data in successfully_processed.items():
+                _logger.info(f"\n  File: {file_key}")
+                _logger.info(f"  {'-' * 60}")
+                
+                # MTs and Legendre coefficients that were perturbed
+                if data['perturbed_mts']:
+                    _logger.info(f"  ► Perturbed MT numbers: {', '.join(map(str, sorted(data['perturbed_mts'])))}")
+                if data['perturbed_l_coeffs']:
+                    _logger.info(f"  ► Perturbed Legendre coefficients: {', '.join(map(str, sorted(data['perturbed_l_coeffs'])))}")
+                
+                _logger.info(f"  ► Number of samples generated: {data['num_samples']}")
+                
+                # ACE generation information
+                ace_info = data['ace_generation']
+                if ace_info['enabled']:
+                    _logger.info(f"  ► ACE generation: ENABLED")
+                    if ace_info['temperatures']:
+                        temps_str = ', '.join(f"{t:.1f}K" for t in ace_info['temperatures'])
+                        _logger.info(f"    • Temperatures: {temps_str}")
+                    
+                    # Note: We would need to update the NJOY processing to track successful/failed ACE generations
+                    # For now, just report if it was enabled
+                    if xsdir_file:
+                        _logger.info(f"    • XSDIR files: Generated from master file {os.path.basename(xsdir_file)}")
+                else:
+                    _logger.info(f"  ► ACE generation: DISABLED")
+                
+                # Warnings if any
+                if data['warnings']:
+                    _logger.info(f"  ► Warnings:")
+                    for warning in data['warnings']:
+                        _logger.info(f"    • {warning}")
+
+        # Report files that failed processing
+        if failed_files_details:
+            _logger.info("\n  FAILED ENDF FILES:")
+            _logger.info(f"  {'-' * 60}")
+            
+            for file_key, reason in failed_files_details.items():
+                _logger.info(f"  File: {file_key}")
+                _logger.info(f"    • Reason: {reason}")
+
+    _logger.info(f"\n{separator}")
+    
+    # Console: Final summary
+    processed_count = len(successfully_processed) if 'successfully_processed' in locals() else processed_files
+    failed_count = len(failed_files_details)
+    
+    print(f"\n[INFO] ENDF perturbation job completed!")
+    print(f"[INFO] Processed: {processed_count} file(s)")
+    if failed_count > 0:
+        print(f"[WARNING] Failed: {failed_count} file(s)")
+    print(f"[INFO] Detailed log saved to: {log_file}")
+    
+    if master_file:
+        print(f"[INFO] Master matrix file: {os.path.basename(master_file)}")
+    
+    if generate_ace:
+        print(f"[INFO] ACE generation: {'ENABLED' if generate_ace else 'DISABLED'}")
+        if generate_ace and xsdir_file:
+            print(f"[INFO] XSDIR files generated in: xsdir/ subdirectory")
 
 
 def apply_perturbation_factors_to_endf(
@@ -436,18 +860,23 @@ def apply_perturbation_factors_to_endf(
 
 
 def _apply_factors_to_mf4_legendre(
-    mt_data: MF4MTLegendre,
+    mt_data: Union[MF4MTLegendre, MF4MTMixed],
     factors: np.ndarray,
     param_mapping: List[Tuple[int, int, int, int]],
     energy_grids: Dict[Tuple[int, int, int], List[float]],
     verbose: bool = True
 ):
     """
-    Apply perturbation factors to MF4 Legendre coefficient data.
+    Apply perturbation factors to MF4 Legendre coefficient data with proper discontinuity handling.
+    
+    This function implements the ENDF-6 standard for representing discontinuities by duplicating
+    energy points at bin boundaries to encode proper jumps in the angular distributions.
+    
+    Works with both MF4MTLegendre (LTT=1) and MF4MTMixed (LTT=3) types.
     
     Parameters
     ----------
-    mt_data : MF4MTLegendre
+    mt_data : Union[MF4MTLegendre, MF4MTMixed]
         MF4 MT section with Legendre coefficients
     factors : np.ndarray
         Perturbation factors
@@ -467,8 +896,41 @@ def _apply_factors_to_mf4_legendre(
             _get_logger().warning(f"[ENDF] [MT{mt_data.number}] No Legendre coefficients found")
         return
     
-    # Apply factors to each energy point and Legendre coefficient
+    # Step 0: Make baseline copies before any scaling
+    E0 = mt_data._energies[:]  # Original energy grid
+    A0 = [c[:] for c in mt_data._legendre_coeffs]  # Original coefficients (deep copy)
+    
+    if verbose and _get_logger():
+        _get_logger().debug(f"[ENDF] [MT{mt_data.number}] Baseline: {len(E0)} energy points, max coeffs per point: {max(len(c) for c in A0) if A0 else 0}")
+    
+    # Step 1: Gather boundaries from all energy grids for this MT
+    boundaries = set()
+    
+    for factor_idx, (isotope, mt, l_coeff, energy_bin) in enumerate(param_mapping):
+        if mt != mt_data.number:
+            continue
+            
+        triplet = (isotope, mt, l_coeff)
+        energy_grid = energy_grids.get(triplet, [])
+        
+        if len(energy_grid) < 2:
+            continue
+            
+        # Add internal bin boundaries (not the first and last)
+        for i in range(1, len(energy_grid) - 1):
+            boundary = energy_grid[i]
+            # Only include if within MF4 energy span
+            if E0[0] <= boundary <= E0[-1]:
+                boundaries.add(boundary)
+    
+    boundaries = sorted(list(boundaries))
+    
+    if verbose and _get_logger():
+        _get_logger().debug(f"[ENDF] [MT{mt_data.number}] Found {len(boundaries)} bin boundaries: {boundaries}")
+    
+    # Step 2: Scale interior points (not at boundaries)
     applied_count = 0
+    
     for factor_idx, (isotope, mt, l_coeff, energy_bin) in enumerate(param_mapping):
         if mt != mt_data.number:
             continue
@@ -482,50 +944,234 @@ def _apply_factors_to_mf4_legendre(
         triplet = (isotope, mt, l_coeff)
         energy_grid = energy_grids.get(triplet, [])
         
-        if len(energy_grid) < 2:  # Need at least 2 points to define bins
-            if verbose and _get_logger():
-                _get_logger().debug(f"Skipping {triplet} - insufficient energy grid points ({len(energy_grid)})")
+        if len(energy_grid) < 2:
             continue
         
         # Get energy bounds for this bin
         if energy_bin >= len(energy_grid) - 1:
-            # This is a padding bin - skip it
-            if verbose and _get_logger():
-                _get_logger().debug(f"Skipping padding bin {energy_bin} for {triplet}")
             continue
             
         energy_low = energy_grid[energy_bin]
         energy_high = energy_grid[energy_bin + 1]
         
-        # Apply factor to coefficients in this energy range
-        applied_this_param = 0
-        for energy_idx, energy in enumerate(energies):
-            if energy_low <= energy < energy_high:
-                # Check if this energy point has enough Legendre coefficients
-                if energy_idx >= len(current_coeffs):
-                    continue
-                    
+        # Apply factor to coefficients strictly inside this bin (not at boundaries)
+        for energy_idx, energy in enumerate(mt_data._energies):
+            if energy_low <= energy < energy_high and energy not in boundaries:
                 # Check if this L coefficient exists at this energy
-                # Note: MF34 uses L=1,2,3... but coefficient arrays are 0-indexed [L=0,L=1,L=2...]
-                # So we need to convert: L=1 -> index 0, L=2 -> index 1, etc.
-                coeff_index = l_coeff - 1
-                if coeff_index < 0 or coeff_index >= len(current_coeffs[energy_idx]):
-                    continue
-                
-                old_value = current_coeffs[energy_idx][coeff_index]
-                current_coeffs[energy_idx][coeff_index] *= factor
-                applied_this_param += 1
-                applied_count += 1
-                
-                if verbose and _get_logger():
-                    _get_logger().debug(
-                        f"[ENDF] [APPLY] MT{mt} L{l_coeff} at {energy:.3e} MeV: "
-                        f"factor {factor:.6f}, {old_value:.3e} -> {current_coeffs[energy_idx][coeff_index]:.3e}"
-                    )
+                coeff_index = l_coeff - 1  # Convert L=1,2,3... to 0-indexed
+                if (coeff_index >= 0 and energy_idx < len(mt_data._legendre_coeffs) and 
+                    coeff_index < len(mt_data._legendre_coeffs[energy_idx])):
+                    
+                    old_value = mt_data._legendre_coeffs[energy_idx][coeff_index]
+                    mt_data._legendre_coeffs[energy_idx][coeff_index] *= factor
+                    applied_count += 1
+                    
+                    if verbose and _get_logger():
+                        _get_logger().debug(
+                            f"[ENDF] [INTERIOR] MT{mt} L{l_coeff} at {energy:.3e} MeV: "
+                            f"factor {factor:.6f}, {old_value:.3e} -> {mt_data._legendre_coeffs[energy_idx][coeff_index]:.3e}"
+                        )
+    
+    # Step 3 & 4: Handle discontinuities at boundaries
+    insertions_made = 0
+    
+    for boundary_energy in boundaries:
+        if verbose and _get_logger():
+            _get_logger().debug(f"[ENDF] [BOUNDARY] Processing boundary at {boundary_energy:.3e} MeV")
         
-
+        # Interpolate baseline coefficients at this boundary
+        baseline_coeffs = _interpolate_legendre_coefficients(boundary_energy, E0, A0)
+        
+        if baseline_coeffs is None:
+            if verbose and _get_logger():
+                _get_logger().warning(f"[ENDF] [BOUNDARY] Could not interpolate at {boundary_energy:.3e} MeV")
+            continue
+        
+        # Find the factors for lower and upper bins at this boundary
+        lower_factors = {}  # l_coeff -> factor for the bin below this boundary
+        upper_factors = {}  # l_coeff -> factor for the bin above this boundary
+        
+        for factor_idx, (isotope, mt, l_coeff, energy_bin) in enumerate(param_mapping):
+            if mt != mt_data.number:
+                continue
+                
+            triplet = (isotope, mt, l_coeff)
+            energy_grid = energy_grids.get(triplet, [])
+            
+            if len(energy_grid) < 2 or energy_bin >= len(energy_grid) - 1:
+                continue
+            
+            factor = factors[factor_idx]
+            energy_low = energy_grid[energy_bin]
+            energy_high = energy_grid[energy_bin + 1]
+            
+            # Check which side of the boundary this bin is on
+            if abs(energy_high - boundary_energy) < 1e-10:  # This bin ends at the boundary
+                lower_factors[l_coeff] = factor  # This factor applies to the lower side
+            if abs(energy_low - boundary_energy) < 1e-10:  # This bin starts at the boundary  
+                upper_factors[l_coeff] = factor  # This factor applies to the upper side
+        
+        # If no factors found, skip this boundary
+        if not lower_factors and not upper_factors:
+            continue
+        
+        # Apply factors to create lower and upper coefficient vectors
+        coeffs_minus = baseline_coeffs[:]
+        coeffs_plus = baseline_coeffs[:]
+        
+        for l_coeff, factor in lower_factors.items():
+            coeff_index = l_coeff - 1
+            if 0 <= coeff_index < len(coeffs_minus):
+                coeffs_minus[coeff_index] *= factor
+        
+        for l_coeff, factor in upper_factors.items():
+            coeff_index = l_coeff - 1
+            if 0 <= coeff_index < len(coeffs_plus):
+                coeffs_plus[coeff_index] *= factor
+        
+        # Insert or replace the boundary points
+        _insert_boundary_discontinuity(
+            mt_data, boundary_energy, coeffs_minus, coeffs_plus, verbose
+        )
+        insertions_made += 1
+    
+    # Step 5: Update bookkeeping for ENDF output
+    mt_data._ne = len(mt_data._energies)
+    if mt_data._ne > 0:
+        mt_data._interpolation = [(mt_data._ne, 2)]  # One region, linear-linear
+        mt_data._nr = 1
+    
+    # For MF4MTMixed, also update Legendre-specific attributes
+    if isinstance(mt_data, MF4MTMixed):
+        mt_data._ne1 = mt_data._ne  # Number of Legendre energy points
+        # Note: _ne2 and _nr_tab are for the tabulated part and should remain unchanged
+    
     if verbose and _get_logger():
-        _get_logger().info(f"[ENDF] [MT{mt_data.number}] Applied {applied_count} perturbation factors")
+        _get_logger().info(
+            f"[ENDF] [MT{mt_data.number}] Applied {applied_count} interior factors and "
+            f"{insertions_made} boundary discontinuities. Final: {mt_data._ne} energy points"
+        )
+
+
+def _interpolate_legendre_coefficients(
+    energy: float, 
+    energy_grid: List[float], 
+    coeff_grid: List[List[float]]
+) -> Optional[List[float]]:
+    """
+    Interpolate Legendre coefficients at a given energy using linear-linear interpolation.
+    
+    Parameters
+    ----------
+    energy : float
+        Energy at which to interpolate
+    energy_grid : List[float]
+        Original energy grid
+    coeff_grid : List[List[float]]
+        Coefficient arrays for each energy point
+        
+    Returns
+    -------
+    Optional[List[float]]
+        Interpolated coefficients, or None if interpolation fails
+    """
+    if len(energy_grid) != len(coeff_grid) or len(energy_grid) < 2:
+        return None
+    
+    # Find bracketing energies
+    if energy <= energy_grid[0]:
+        return coeff_grid[0][:]  # Return copy of first point
+    if energy >= energy_grid[-1]:
+        return coeff_grid[-1][:]  # Return copy of last point
+    
+    # Find the interval containing this energy
+    for i in range(len(energy_grid) - 1):
+        if energy_grid[i] <= energy <= energy_grid[i + 1]:
+            e1, e2 = energy_grid[i], energy_grid[i + 1]
+            c1, c2 = coeff_grid[i], coeff_grid[i + 1]
+            
+            # Linear interpolation factor
+            if abs(e2 - e1) < 1e-15:  # Avoid division by zero
+                return c1[:]
+            
+            t = (energy - e1) / (e2 - e1)
+            
+            # Interpolate each coefficient
+            max_coeffs = max(len(c1), len(c2))
+            result = []
+            
+            for j in range(max_coeffs):
+                v1 = c1[j] if j < len(c1) else 0.0
+                v2 = c2[j] if j < len(c2) else 0.0
+                result.append(v1 + t * (v2 - v1))
+            
+            return result
+    
+    return None
+
+
+def _insert_boundary_discontinuity(
+    mt_data: Union[MF4MTLegendre, MF4MTMixed],
+    boundary_energy: float,
+    coeffs_minus: List[float],
+    coeffs_plus: List[float],
+    verbose: bool = True
+):
+    """
+    Insert a discontinuity at a boundary energy by duplicating the energy point.
+    
+    Works with both MF4MTLegendre and MF4MTMixed types.
+    
+    Parameters
+    ----------
+    mt_data : Union[MF4MTLegendre, MF4MTMixed]
+        MF4 section to modify
+    boundary_energy : float
+        Energy at which to insert discontinuity
+    coeffs_minus : List[float]
+        Coefficients for the "minus" side (lower bin)
+    coeffs_plus : List[float]
+        Coefficients for the "plus" side (upper bin)
+    verbose : bool
+        Whether to log details
+    """
+    # Find if this energy already exists
+    existing_indices = [i for i, e in enumerate(mt_data._energies) if abs(e - boundary_energy) < 1e-10]
+    
+    if existing_indices:
+        # Replace existing point with two consecutive points
+        idx = existing_indices[0]
+        
+        if verbose and _get_logger():
+            _get_logger().debug(f"[ENDF] [BOUNDARY] Replacing existing point at {boundary_energy:.3e} MeV")
+        
+        # Replace the existing point with minus side
+        mt_data._energies[idx] = boundary_energy
+        mt_data._legendre_coeffs[idx] = coeffs_minus[:]
+        
+        # Insert plus side right after
+        mt_data._energies.insert(idx + 1, boundary_energy)
+        mt_data._legendre_coeffs.insert(idx + 1, coeffs_plus[:])
+        
+    else:
+        # Find insertion point to maintain sorted order
+        insert_idx = 0
+        for i, e in enumerate(mt_data._energies):
+            if e < boundary_energy:
+                insert_idx = i + 1
+            else:
+                break
+        
+        if verbose and _get_logger():
+            _get_logger().debug(f"[ENDF] [BOUNDARY] Inserting new points at {boundary_energy:.3e} MeV at index {insert_idx}")
+        
+        # Insert minus side first
+        mt_data._energies.insert(insert_idx, boundary_energy)
+        mt_data._legendre_coeffs.insert(insert_idx, coeffs_minus[:])
+        
+        # Insert plus side right after
+        mt_data._energies.insert(insert_idx + 1, boundary_energy)
+        mt_data._legendre_coeffs.insert(insert_idx + 1, coeffs_plus[:])
 
 
 def _find_energy_group(energy: float, energy_grid: List[float]) -> int:

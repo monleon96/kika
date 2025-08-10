@@ -1,4 +1,4 @@
-from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL, BOLTZMANN_CONSTANT
+from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL, BOLTZMANN_CONSTANT, K_TO_SUFFIX
 
 def zaid_to_symbol(zaid: int) -> str:
     """
@@ -52,6 +52,32 @@ def MeV_to_kelvin(temp: float) -> float:
         Temperature in Kelvin
     """
     return temp / BOLTZMANN_CONSTANT 
+
+
+def temperature_to_suffix(temp_K: float) -> str:
+    """
+    Convert temperature in Kelvin to MCNP suffix based on K_TO_SUFFIX mapping.
+    
+    Parameters
+    ----------
+    temp_K : float
+        Temperature in Kelvin
+    
+    Returns
+    -------
+    str
+        MCNP suffix (e.g., ".02", ".03", etc.)
+        
+    Examples
+    --------
+    >>> temperature_to_suffix(293.6)
+    '.02'
+    >>> temperature_to_suffix(300)
+    '.03'
+    """
+    # Find the closest temperature in K_TO_SUFFIX
+    closest_temp = min(K_TO_SUFFIX.keys(), key=lambda k: abs(k - temp_K))
+    return K_TO_SUFFIX[closest_temp]
 
 
 def add_repr_method(method_name, description, buffer=None, method_col_width=30, desc_col_width=45, 

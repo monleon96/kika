@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from textwrap import dedent
-from templates import NJOY_INPUT_TEMPLATE
+from .templates import NJOY_INPUT_TEMPLATE
 from mcnpy.endf.read_endf import read_endf
 from mcnpy._constants import K_TO_SUFFIX, NDLIBRARY_TO_SUFFIX
 from mcnpy._utils import MeV_to_kelvin

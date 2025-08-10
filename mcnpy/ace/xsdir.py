@@ -76,3 +76,122 @@ def write_xsdir_line(xsdir_path: str, line: str, mode: str = "w") -> None:
     """Write a single xsdir line to file. `mode='a'` appends, `mode='w'` overwrites."""
     with open(xsdir_path, mode) as fx:
         fx.write(line + "\n")
+
+
+def create_xsdir_files_for_ace(
+    ace_file_path: str,
+    zaid: int,
+    awr: float,
+    xss_len: int,
+    temperature_mev: float,
+    sample_index: int,
+    output_dir: str,
+    master_xsdir_file: str = None,
+    has_ptable: bool = False,
+) -> None:
+    """
+    Create xsdir files for a perturbed ACE file.
+    
+    This function creates both per-sample xsdir files and optionally updates
+    a master xsdir file. It's designed to be shared between ACE and ENDF 
+    perturbation workflows.
+    
+    Parameters
+    ----------
+    ace_file_path : str
+        Full path to the ACE file
+    zaid : int
+        ZAID of the isotope
+    awr : float
+        Atomic weight ratio
+    xss_len : int
+        Length of XSS array
+    temperature_mev : float
+        Temperature in MeV
+    sample_index : int
+        Sample index (0-based)
+    output_dir : str
+        Base output directory
+    master_xsdir_file : str, optional
+        Path to master xsdir file to copy and modify for each sample
+    has_ptable : bool, default False
+        Whether the ACE file has probability tables
+    """
+    import os
+    import shutil
+    
+    # Extract file information
+    base, ace_ext = os.path.splitext(os.path.basename(ace_file_path))
+    sample_str = f"{sample_index+1:04d}"
+    sample_dir = os.path.dirname(ace_file_path)
+    
+    # Remove sample string from base name if already present (avoid double sample numbers)
+    if base.endswith(f"_{sample_str}"):
+        base = base[:-len(f"_{sample_str}")]
+    
+    # — write per-sample .xsdir —
+    rel = os.path.relpath(ace_file_path, output_dir).replace(os.sep, "/")
+    rel_path = f"../{rel}"
+    
+    xsdir_line = build_xsdir_line(
+        zaid_with_ext=f"{zaid}{ace_ext}",
+        awr=awr,
+        file_ref=rel_path,          
+        xss_len=xss_len,   
+        kT_MeV=temperature_mev,
+        has_ptable=has_ptable,   
+    )
+
+    xsdir_path = os.path.join(sample_dir, f"{base}_{sample_str}.xsdir")
+    write_xsdir_line(xsdir_path, xsdir_line, mode="w")
+
+    # — write master xsdir files if requested —
+    if master_xsdir_file:
+        xsdir_dir = os.path.join(output_dir, "xsdir")
+        os.makedirs(xsdir_dir, exist_ok=True)
+
+        sample_tag = f"_{sample_index+1:04d}"
+        orig_xs_base = os.path.splitext(os.path.basename(master_xsdir_file))[0]
+        master_xs_name = orig_xs_base + sample_tag + ".xsdir"
+        master_xs_path = os.path.join(xsdir_dir, master_xs_name)
+
+        # Determine the source file: use existing modified file if available, otherwise original
+        if os.path.exists(master_xs_path):
+            # File already exists from previous isotope/run - use it as base
+            source_xsdir = master_xs_path
+        else:
+            # First time creating this file - use original master as base
+            source_xsdir = master_xsdir_file
+            
+        # Read from the appropriate source
+        with open(source_xsdir, 'r') as f:
+            xs_lines = f.readlines()
+
+        zaid_prefix = f"{zaid}{ace_ext}"
+        line_found = False
+
+        with open(master_xs_path, 'w') as f:
+            for line in xs_lines:
+                if line.strip().startswith(zaid_prefix):
+                    # Replace the line with our perturbed version
+                    f.write(xsdir_line + "\n")
+                    line_found = True
+                else:
+                    f.write(line)
+            
+            # If this is a new isotope not in the original file, append the line
+            if not line_found:
+                # Simple robust approach: ensure the file ends properly before adding new content
+                if xs_lines:
+                    # Ensure the last line has a newline if it doesn't already
+                    if not xs_lines[-1].endswith('\n'):
+                        f.write('\n')
+                    
+                    # Check if we need an extra newline for clean separation
+                    # Only add one if the last line is not already blank
+                    if xs_lines[-1].strip() != '':
+                        # The last line has content, so our new line will be properly separated
+                        pass
+                
+                # Add our new entry
+                f.write(xsdir_line + "\n")

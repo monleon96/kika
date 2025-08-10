@@ -109,18 +109,25 @@ class MF4MTLegendre(MF4MT):
         line_num += 1
         
         # Format third line with interpolation info and energy count
+        # Use actual length instead of stored _ne for safety
+        ne_actual = len(self._energies)
         line3 = format_endf_data_line(
-            [0.0, 0.0, 0, 0, self._nr or 0, self._ne or 0],
+            [0.0, 0.0, 0, 0, self._nr or 0, ne_actual],
             mat, mf, mt, line_num,
             formats=[ENDF_FORMAT_FLOAT, ENDF_FORMAT_FLOAT, ENDF_FORMAT_INT_ZERO, ENDF_FORMAT_INT_ZERO, ENDF_FORMAT_INT, ENDF_FORMAT_INT]
         )
         lines.append(line3)
         line_num += 1
         
+        # Ensure interpolation scheme is set if empty
+        interpolation_pairs = self._interpolation
+        if not interpolation_pairs and ne_actual > 0:
+            interpolation_pairs = [(ne_actual, 2)]  # Default to linear-linear
+        
         # Format energy interpolation scheme pairs - all as integers
-        if self._interpolation and self._nr and self._nr > 0:
+        if interpolation_pairs and len(interpolation_pairs) > 0:
             # Process interpolation pairs in groups of 3 (6 values per line)
-            remaining_pairs = self._interpolation.copy()
+            remaining_pairs = interpolation_pairs.copy()
             while remaining_pairs:
                 # Take up to 3 pairs for this line
                 line_pairs = remaining_pairs[:3]

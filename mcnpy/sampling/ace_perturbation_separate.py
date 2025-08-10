@@ -1,3 +1,36 @@
+"""
+ACE Perturbation Module for Existing Files
+
+This module provides functionality to apply perturbations to existing ACE files
+that have been created by the ENDF perturbation process. Unlike the original
+version that created new ACE files, this version:
+
+1. Works with existing ACE files in a predefined directory structure
+2. Applies each perturbation sample to a different existing ACE file
+3. Replaces files in-place without creating new directories
+4. Skips samples where ACE files don't exist
+5. Does not create XSDIR files (assumes they already exist)
+
+Key Changes from Original:
+- Function signature changed to take root_dir, temperatures, zaids instead of ace_files
+- New _process_sample_inplace function for in-place file modification
+- Directory structure follows: root_dir/ace/tempK/zaid/sample_num/
+- No XSDIR file generation
+- Enhanced logging for missing files and skipped samples
+
+Usage:
+    from mcnpy.sampling.ace_perturbation_separate import perturb_seprate_ACE_files
+    
+    perturb_seprate_ACE_files(
+        root_dir="/path/to/output",
+        temperatures=[300.0, 600.0],
+        zaids=[92235, 92238],
+        cov_files="covariance.cov",
+        mt_list=[1, 2, 18],
+        num_samples=100
+    )
+"""
+
 import numpy as np
 import os
 import shutil
@@ -12,8 +45,7 @@ from mcnpy.sampling.generators import generate_samples
 from mcnpy.ace.parsers import read_ace
 from mcnpy.ace.writers.write_ace import write_ace
 from mcnpy.cov.parse_covmat import read_scale_covmat, read_njoy_covmat
-from mcnpy._utils import zaid_to_symbol
-from mcnpy.ace.xsdir import write_xsdir_line, build_xsdir_line, create_xsdir_files_for_ace
+from mcnpy._utils import zaid_to_symbol, temperature_to_suffix
 
 class DualLogger:
     """Logger that writes detailed info to file and basic info to console."""
@@ -86,73 +118,42 @@ def _get_logger():
     """Get the global logger instance."""
     return _logger
 
-def _process_sample(
+
+def _process_sample_inplace(
     ace_file: str,
     sample: np.ndarray,
     sample_index: int,
     energy_grid: List[float],
     mt_numbers: List[int],
-    output_dir: str,
-    xsdir_file: Optional[str],
+    temperature: float,
 ):
-    # — read & perturb ACE —
+    """
+    Apply perturbation to an existing ACE file and replace it in-place.
+    
+    Parameters
+    ----------
+    ace_file : str
+        Path to the existing ACE file to perturb
+    sample : np.ndarray
+        Perturbation factors to apply
+    sample_index : int
+        Sample index (for logging purposes)
+    energy_grid : List[float]
+        Energy grid boundaries
+    mt_numbers : List[int]
+        MT numbers to perturb
+    temperature : float
+        Temperature of the ACE file (for logging/organization)
+    """
+    # Read & perturb ACE
     ace = read_ace(ace_file)
     apply_perturbation_factor_to_ace(ace, sample, sample_index, energy_grid, mt_numbers, False)  # Set verbose=False to reduce output
 
-    # — write perturbed ACE —
-    base, ext = os.path.splitext(os.path.basename(ace_file))
-    sample_str = f"{sample_index+1:04d}"
-    sample_dir = os.path.join(output_dir, str(ace.zaid), sample_str)
-    os.makedirs(sample_dir, exist_ok=True)
-    out_ace = os.path.join(sample_dir, f"{base}_{sample_str}{ext}")
-    
-    # Recalculate cross sections but don't print
+    # Recalculate cross sections
     ace.update_cross_sections()
     
-    # Write ACE file without verbose output
-    write_ace(ace, out_ace, overwrite=True)
-
-    # — write xsdir files using shared function —
-    hdr = ace.header
-    has_ptable = bool(getattr(ace.unresolved_resonance, 'has_data', False))
-    
-    # Get the proper cross-section library extension from the ACE file
-    base, file_ext = os.path.splitext(os.path.basename(ace_file))
-    
-    create_xsdir_files_for_ace(
-        ace_file_path=out_ace,
-        zaid=hdr.zaid,
-        awr=hdr.atomic_weight_ratio,
-        xss_len=hdr.nxs_array[1],
-        temperature_mev=hdr.temperature,
-        sample_index=sample_index,
-        output_dir=output_dir,
-        master_xsdir_file=xsdir_file,
-        has_ptable=has_ptable,
-    )
-
-    # — write this sample's small summary file —
-    n_groups    = len(energy_grid) - 1
-    boundaries  = np.asarray(energy_grid, dtype=np.float32)  # Convert energy boundaries to float32
-    summary_tmp = os.path.join(sample_dir, f"{base}_{sample_str}_summary.txt")
-
-    # Convert sample to float32 for consistency
-    sample = sample.astype(np.float32)
-
-    with open(summary_tmp, 'w') as sf:
-
-        for mt_idx, mt in enumerate(mt_numbers):
-            start    = mt_idx * n_groups
-            end      = start + n_groups
-            grp_facs = sample[start:end]
-
-            for grp in range(n_groups):
-                low, high = boundaries[grp], boundaries[grp+1]
-                fac       = grp_facs[grp]
-                # Use 6 decimal places for float32 precision for all values
-                sf.write(f"{mt:<3}\t{low:.6e}\t{high:.6e}\t{fac:.6e}\n")
-
-        sf.write("\n")
+    # Write ACE file back in-place (overwrite the original)
+    write_ace(ace, ace_file, overwrite=True)
 
 
 def load_covariance(path):
@@ -188,16 +189,16 @@ def load_covariance(path):
     return None
 
 
-def perturb_ACE_files(
-    ace_files: Union[str, List[str]],
+def perturb_seprate_ACE_files(
+    root_dir: str,
+    temperatures: Union[float, List[float]],
+    zaids: List[int],
     cov_files: Union[str, List[str]],
     mt_list: List[int],
     num_samples: int,
     space: str = "log",
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
-    output_dir: str = '.',
-    xsdir_file: Optional[str] = None,
     seed: Optional[int] = None,
     nprocs: int = 1,
     dry_run: bool = False,
@@ -208,38 +209,40 @@ def perturb_ACE_files(
     verbose: bool = True,
 ):
     """
-    Perturb ACE nuclear data files using covariance matrices.
+    Perturb existing ACE nuclear data files using covariance matrices.
     
-    This function generates perturbed ACE files by sampling perturbation factors
-    from multivariate normal distributions derived from covariance matrices.
+    This function applies perturbation factors to existing ACE files that are organized
+    in a specific directory structure (from ENDF perturbation output). Each perturbation
+    sample is applied to a different existing ACE file, replacing it in-place.
     
     Parameters
     ----------
-    ace_files : Union[str, List[str]]
-        Path(s) to ACE file(s) to be perturbed
+    root_dir : str
+        Root directory containing the ACE files in the structure:
+        root_dir/ace/tempK/zaid/sample_num/
+    temperatures : Union[float, List[float]]
+        Temperature(s) (in Kelvin) for which ACE files exist
+    zaids : List[int]
+        List of ZAID numbers to process
     cov_files : Union[str, List[str]]
         Path(s) to covariance matrix file(s) (SCALE or NJOY format).
-        Can be a single file (used for all ACE files) or one file per ACE file.
+        Can be a single file (used for all ZAIDs) or one file per ZAID.
     mt_list : List[int]
         List of MT reaction numbers to perturb. Empty list means all available MTs
     num_samples : int
-        Number of perturbed ACE files to generate
+        Number of perturbation samples to apply (must match existing ACE files)
     space : str, default "log"
         Sampling space: "linear" (factors = 1 + X) or "log" (factors = exp(Y))
     decomposition_method : str, default "svd"
         Matrix decomposition method: "svd", "cholesky", "eigen", or "pca"
     sampling_method : str, default "sobol"
         Sampling method: "sobol", "lhs", or "random"
-    output_dir : str, default "."
-        Output directory for perturbed files
-    xsdir_file : Optional[str], default None
-        Path to master XSDIR file to be modified for each sample
     seed : Optional[int], default None
         Random seed for reproducible sampling
     nprocs : int, default 1
         Number of parallel processes (currently unused)
     dry_run : bool, default False
-        If True, only generate perturbation factors without creating ACE files
+        If True, only generate perturbation factors without modifying ACE files
     autofix : Optional[str], default None
         Covariance matrix fixing level:
         - None: No autofix - use covariance matrix as-is
@@ -257,14 +260,24 @@ def perturb_ACE_files(
         
     Notes
     -----
-    When autofix=None, the covariance matrix is used exactly as read from the file,
-    without any modifications. This may result in decomposition failures if the
-    matrix is not positive semi-definite, but preserves the original uncertainties
-    and correlations exactly as specified in the nuclear data evaluation.
+    This function expects ACE files to exist in the directory structure created by
+    perturb_ENDF_files. Each perturbation sample will be applied to the corresponding
+    existing ACE file and replace it in-place. No new XSDIR files are created as
+    they should already exist from the original ENDF perturbation process.
     """
     global _logger
     
-    # Create output directory if it doesn't exist
+    # Normalize temperatures to list
+    if isinstance(temperatures, (int, float)):
+        temperatures = [float(temperatures)]
+    elif isinstance(temperatures, list):
+        temperatures = [float(t) for t in temperatures]
+    else:
+        raise ValueError("temperatures must be a float or list of floats")
+    
+    # Create output directory for logs and matrices (use root_dir, not temperature subdirectory)
+    # We'll create master files in root_dir and then copy them to each temperature directory
+    output_dir = root_dir
     os.makedirs(output_dir, exist_ok=True)
     
     # Setup logging
@@ -275,7 +288,7 @@ def perturb_ACE_files(
     # Console: Basic start message
     print(f"[INFO] Starting ACE perturbation job")
     print(f"[INFO] Log file: {log_file}")
-    print(f"[INFO] Output directory: {os.path.abspath(output_dir)}")
+    print(f"[INFO] Root directory: {os.path.abspath(root_dir)}")
     
     # Print run parameters as metadata TO LOG FILE
     separator = "=" * 80
@@ -284,13 +297,7 @@ def perturb_ACE_files(
     _logger.info(f"{separator}")
     
     # Format and print input files
-    if isinstance(ace_files, str):
-        ace_files = [ace_files]
-        formatted_ace = ace_files[0]
-    else:
-        formatted_ace = f"{len(ace_files)} files"
-        if len(ace_files) <= 3:
-            formatted_ace = ", ".join(os.path.basename(f) for f in ace_files)
+    formatted_temps = ", ".join(f"{t:.1f}K" for t in temperatures)
     
     if isinstance(cov_files, str):
         cov_files = [cov_files]
@@ -299,6 +306,12 @@ def perturb_ACE_files(
         formatted_cov = f"{len(cov_files)} files"
         if len(cov_files) <= 3:
             formatted_cov = ", ".join(os.path.basename(f) for f in cov_files)
+    
+    # Format ZAID list
+    if len(zaids) <= 10:
+        formatted_zaids = ", ".join(str(zaid) for zaid in zaids)
+    else:
+        formatted_zaids = f"{len(zaids)} ZAIDs: {', '.join(str(zaid) for zaid in zaids[:5])}..."
     
     # Format MT list
     if len(mt_list) == 0:
@@ -309,18 +322,18 @@ def perturb_ACE_files(
         formatted_mt = f"{len(mt_list)} MTs: {', '.join(str(mt) for mt in mt_list[:5])}..."
     
     # Print all parameters TO LOG FILE
-    _logger.info(f"  ACE files:             {formatted_ace}")
+    _logger.info(f"  Root directory:        {os.path.abspath(root_dir)}")
+    _logger.info(f"  Temperatures:          {formatted_temps}")
+    _logger.info(f"  ZAID numbers:          {formatted_zaids}")
     _logger.info(f"  Covariance files:      {formatted_cov}")
     _logger.info(f"  MT numbers:            {formatted_mt}")
     _logger.info(f"  Number of samples:     {num_samples}")
     _logger.info(f"  Sampling space:        {space}")
     _logger.info(f"  Decomposition method:  {decomposition_method}")
     _logger.info(f"  Sampling method:       {sampling_method}")
-    _logger.info(f"  Output directory:      {os.path.abspath(output_dir)}")
-    _logger.info(f"  XSDIR file:            {xsdir_file if xsdir_file else 'None'}")
     _logger.info(f"  Random seed:           {seed if seed is not None else 'Random'}")
     _logger.info(f"  Parallel processes:    {nprocs}")
-    _logger.info(f"  Mode:                  {'Dry run (factors only)' if dry_run else 'Full ACE generation'}")
+    _logger.info(f"  Mode:                  {'Dry run (factors only)' if dry_run else 'Full ACE perturbation'}")
     _logger.info(f"  Autofix covariance:    {autofix if autofix is not None else 'None (no autofix)'}")
     _logger.info(f"  High value threshold:  {high_val_thresh}")
     _logger.info(f"  Accept tolerance:      {accept_tol}")
@@ -331,17 +344,15 @@ def perturb_ACE_files(
     _logger.info(f"  Timestamp:             {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     _logger.info(f"{separator}\n")
 
-    # normalize inputs (already done in the prints, but needed for the rest of the function)
-    if isinstance(ace_files, str):
-        ace_files = [ace_files]
+    # normalize inputs (already done for cov_files, need for zaids)
     if isinstance(cov_files, str):
         cov_files = [cov_files]
 
     # Validate input compatibility
-    if len(cov_files) != 1 and len(cov_files) != len(ace_files):
+    if len(cov_files) != 1 and len(cov_files) != len(zaids):
         raise ValueError(
             f"Number of covariance files ({len(cov_files)}) must be either 1 "
-            f"(to be used for all ACE files) or equal to the number of ACE files ({len(ace_files)})"
+            f"(to be used for all ZAIDs) or equal to the number of ZAIDs ({len(zaids)})"
         )
 
     # Initialize a dictionary to collect summary information for each isotope
@@ -358,32 +369,49 @@ def perturb_ACE_files(
     _logger.info(f"[MATRIX] [INIT] Initialized matrix directory: {os.path.basename(matrix_dir)}")
 
     # Console: Show progress
-    print(f"[INFO] Processing {len(ace_files)} isotope(s)")
+    print(f"[INFO] Processing {len(zaids)} isotope(s)")
     print(f"[INFO] Matrix directory: {os.path.basename(matrix_dir)}")
 
-    # Handle case where there's only one covariance file for multiple ACE files
-    if len(cov_files) == 1 and len(ace_files) > 1:
-        # Use the same covariance file for all ACE files
-        cov_files = cov_files * len(ace_files)
-        _logger.info(f"[ACE] [COV] Using single covariance file for all {len(ace_files)} isotopes: {os.path.basename(cov_files[0])}")
+    # Handle case where there's only one covariance file for multiple ZAIDs
+    if len(cov_files) == 1 and len(zaids) > 1:
+        # Use the same covariance file for all ZAIDs
+        cov_files = cov_files * len(zaids)
+        _logger.info(f"[ACE] [COV] Using single covariance file for all {len(zaids)} isotopes: {os.path.basename(cov_files[0])}")
 
-    for i, (ace_file, cov_file) in enumerate(zip(ace_files, cov_files)):
+    for i, (zaid, cov_file) in enumerate(zip(zaids, cov_files)):
 
-        # ====== Start of ACE file processing ======
+        # ====== Start of ZAID processing ======
         separator = "=" * 80
         _logger.info(f"\n{separator}")
-        _logger.info(f"[ACE] [PROCESSING] {ace_file}")
+        _logger.info(f"[ACE] [PROCESSING] ZAID {zaid}")
         _logger.info(f"{separator}\n")
 
         # Console: Basic progress
-        print(f"\n[INFO] Processing isotope {i+1}/{len(ace_files)}: {os.path.basename(ace_file)}")
+        print(f"\n[INFO] Processing isotope {i+1}/{len(zaids)}: ZAID {zaid}")
 
-        # Check if ACE file exists
-        if not os.path.exists(ace_file):
-            _logger.error(f"[ACE] [ERROR] ACE file not found: {ace_file}")
-            zaid = os.path.splitext(os.path.basename(ace_file))[0]  # Use filename without extension as ZAID
+        # Find a representative ACE file to read structure and MT numbers
+        # Look for any sample file to get the ACE structure
+        ace_file = None
+        for temp in temperatures:
+            temp_str = f"{int(temp)}"
+            sample_dir = os.path.join(root_dir, "ace", temp_str, str(zaid), "0001")
+            if os.path.exists(sample_dir):
+                # Get the expected file extension for this temperature
+                temp_suffix = temperature_to_suffix(temp)
+                expected_ext = f"{temp_suffix}c"
+                # Find ACE file in this directory with correct extension
+                for filename in os.listdir(sample_dir):
+                    if filename.endswith(expected_ext):
+                        ace_file = os.path.join(sample_dir, filename)
+                        break
+                if ace_file:
+                    break
+        
+        if ace_file is None:
+            _logger.error(f"[ACE] [ERROR] No representative ACE file found for ZAID {zaid}")
+            _logger.error(f"  Looked in: {root_dir}/ace/*/{ zaid}/0001/")
             summary_data[zaid] = {
-                "ace_file": os.path.basename(ace_file),
+                "representative_ace": "Not found",
                 "cov_file": os.path.basename(cov_file),
                 "mt_in_ace": [],
                 "mt_in_cov": [],
@@ -397,33 +425,62 @@ def perturb_ACE_files(
                     "converged": False,
                     "soft_threshold_warning": False
                 },
-                "warnings": [f"ACE file not found: {os.path.basename(ace_file)}"]
+                "warnings": [f"No representative ACE file found"]
             }
-            skipped_isotopes[zaid] = "ACE file not found"
+            skipped_isotopes[zaid] = "No representative ACE file found"
             _logger.info(f"\n{separator}\n")
-            print(f"[ERROR] ACE file not found for {os.path.basename(ace_file)}")
+            print(f"[ERROR] No ACE files found for ZAID {zaid}")
             continue
 
-        # Read ACE file first to get ZAID
+        # Check if ACE file exists
+        if not os.path.exists(ace_file):
+            _logger.error(f"[ACE] [ERROR] Representative ACE file not found: {ace_file}")
+            summary_data[zaid] = {
+                "representative_ace": os.path.basename(ace_file),
+                "cov_file": os.path.basename(cov_file),
+                "mt_in_ace": [],
+                "mt_in_cov": [],
+                "mt_perturbed": [],
+                "removed_mts": {},
+                "autofix_info": {
+                    "level": autofix,
+                    "removed_pairs": [],
+                    "removed_mts": [],
+                    "removed_correlations": [],
+                    "converged": False,
+                    "soft_threshold_warning": False
+                },
+                "warnings": [f"Representative ACE file not found: {os.path.basename(ace_file)}"]
+            }
+            skipped_isotopes[zaid] = f"Representative ACE file not found: {os.path.basename(ace_file)}"
+            _logger.info(f"\n{separator}\n")
+            print(f"[ERROR] Representative ACE file not found for ZAID {zaid}")
+            continue
+
+        # Read ACE file first to get ZAID and structure
         ace = read_ace(ace_file)
-        zaid = ace.zaid
+        actual_zaid = ace.zaid
         base, _ = os.path.splitext(os.path.basename(ace_file))
+
+        # Verify ZAID matches
+        if actual_zaid != zaid:
+            _logger.warning(f"[ACE] [WARNING] ZAID mismatch: requested {zaid}, found {actual_zaid} in {ace_file}")
 
         # Initialize summary information for this isotope
         summary_data[zaid] = {
-            "ace_file": os.path.basename(ace_file),
+            "representative_ace": os.path.basename(ace_file),
             "cov_file": os.path.basename(cov_file),
             "mt_in_ace": sorted(set(ace.mt_numbers)),
             "mt_in_cov": [],
             "mt_perturbed": [],
-            "removed_mts": {},  # Will store MT: reason pairs
-            "autofix_info": {  # Track autofix-specific information
+            "removed_mts": {},
+            "autofix_info": {
                 "level": autofix,
                 "removed_pairs": [],
                 "removed_mts": [],
-                "removed_correlations": [],  # Track off-diagonal block removals
+                "removed_correlations": [],
                 "converged": True,
-                "soft_threshold_warning": False  # Track if soft autofix didn't meet threshold
+                "soft_threshold_warning": False
             },
             "warnings": []
         }
@@ -434,6 +491,7 @@ def perturb_ACE_files(
             summary_data[zaid]["warnings"].append(f"No valid covariance file found: {os.path.basename(cov_file)}")
             skipped_isotopes[zaid] = "No valid covariance file found"
             _logger.info(f"\n{separator}\n")
+            _logger.error(f"Failed to load covariance for {os.path.basename(ace_file)}", console=False)
             print(f"[ERROR] Failed to load covariance for {os.path.basename(ace_file)}")
             continue
 
@@ -449,6 +507,7 @@ def perturb_ACE_files(
             summary_data[zaid]["warnings"].append("No covariance data found in matrix")
             skipped_isotopes[zaid] = "No covariance data found in matrix"
             _logger.info(f"\n{separator}\n")
+            _logger.warning(f"No covariance data for {os.path.basename(ace_file)}", console=False)
             print(f"[WARNING] No covariance data for {os.path.basename(ace_file)}")
             continue
 
@@ -624,6 +683,7 @@ def perturb_ACE_files(
                 skipped_isotopes[zaid] = str(e)
                 
                 _logger.info(f"\n{separator}\n")
+                _logger.error(f"Soft autofix and decomposition failed for {os.path.basename(ace_file)}", console=False)
                 print(f"[ERROR] Soft autofix and decomposition failed for {os.path.basename(ace_file)}")
                 continue
             elif isinstance(e, CovarianceFixError):
@@ -636,6 +696,7 @@ def perturb_ACE_files(
                 skipped_isotopes[zaid] = str(e)
                 
                 _logger.info(f"\n{separator}\n")
+                _logger.error(f"Covariance fix failed for {os.path.basename(ace_file)}", console=False)
                 print(f"[ERROR] Covariance fix failed for {os.path.basename(ace_file)}")
                 continue
             else:
@@ -681,64 +742,113 @@ def perturb_ACE_files(
                 matrix_dir, zaid, factors, mt_perturb_final, energy_grid, verbose
             )
 
-        # -- prepare output dirs ----------------------------------------------
-        iso_dir = os.path.join(output_dir, str(zaid))
-        os.makedirs(iso_dir, exist_ok=True)
-
         # =====================================================================
         #  DRY‑RUN
         # =====================================================================
         if dry_run:
             _logger.info(f"\n[ACE] [DRY-RUN] Generating only perturbation factors (no ACE files will be written)")
-            for j in range(num_samples):
-                _write_sample_summary(factors[j], j, energy_grid, mt_perturb_final, iso_dir, base)
+            
+            # For dry run, create summary for all samples across all temperatures
+            processed_samples_by_temp_dry = {temp: list(range(num_samples)) for temp in temperatures}
+            
+            # Copy summary files to temperature directories
+            _copy_files_to_temperature_directories(
+                root_dir, temperatures, zaid, factors, mt_perturb_final, energy_grid, 
+                base, num_samples, processed_samples_by_temp_dry, dry_run, verbose
+            )
+            
             _logger.info(f"\n{separator}\n")
             print(f"[INFO] Completed dry run for ZAID {zaid}")
             continue
 
         # =====================================================================
-        #  FULL processing (ACE rewrite)
+        #  FULL processing (ACE perturbation in-place)
         # =====================================================================
-        _logger.info(f"\n[ACE] [PROCESSING] Creating {num_samples} perturbed ACE files")
-        _logger.info(f"  Output directory: {os.path.abspath(output_dir)}")
+        _logger.info(f"\n[ACE] [PROCESSING] Applying perturbations to {num_samples} existing ACE files")
+        _logger.info(f"  Root directory: {os.path.abspath(root_dir)}")
         if nprocs > 1:
             _logger.info(f"  Using {nprocs} parallel processes")
             
         # Create progress tracking variables
         report_interval = max(1, min(100, num_samples // 10))  # Report at most 10 times
         
-        tasks = [(ace_file, factors[j], j, energy_grid, mt_perturb_final, output_dir, xsdir_file) for j in range(num_samples)]
+        # Build list of ACE files to process and their corresponding perturbation factors
+        tasks = []
+        skipped_samples = []
+        processed_samples_by_temp = {temp: [] for temp in temperatures}
+        
+        for j in range(num_samples):
+            sample_str = f"{j+1:04d}"
+            
+            # Try to find ACE file for this sample across all temperatures
+            for temp in temperatures:
+                temp_str = f"{temp:.1f}K"
+                sample_dir = os.path.join(root_dir, "ace", temp_str, str(zaid), sample_str)
+                
+                if os.path.exists(sample_dir):
+                    # Get the expected file extension for this temperature
+                    temp_suffix = temperature_to_suffix(temp)
+                    expected_ext = f"{temp_suffix}c"
+                    
+                    # Find ACE file in this directory with correct extension
+                    for filename in os.listdir(sample_dir):
+                        if filename.endswith(expected_ext):
+                            sample_ace_file = os.path.join(sample_dir, filename)
+                            tasks.append((sample_ace_file, factors[j], j, energy_grid, mt_perturb_final, temp))
+                            processed_samples_by_temp[temp].append(j)
+                            break
+            
+            # Check if sample was found in any temperature
+            if not any(j in processed_samples_by_temp[temp] for temp in temperatures):
+                skipped_samples.append(j+1)
+        
+        if skipped_samples:
+            _logger.warning(f"  Skipped {len(skipped_samples)} samples - ACE files not found: {skipped_samples[:10]}{'...' if len(skipped_samples) > 10 else ''}")
+        
+        if not tasks:
+            _logger.error(f"  No ACE files found for any samples of ZAID {zaid}")
+            _logger.info(f"\n{separator}\n")
+            print(f"[ERROR] No ACE files found for ZAID {zaid}")
+            continue
+        
+        _logger.info(f"  Found {len(tasks)} ACE files to process out of {num_samples} requested samples")
 
         if nprocs > 1:
             # For parallel processing, just show start and end messages
-            _logger.info(f"  Starting parallel sample generation... (progress updates disabled in parallel mode)")
+            _logger.info(f"  Starting parallel sample processing... (progress updates disabled in parallel mode)")
             
             with Pool(processes=nprocs) as pool:
                 for args in tasks:
-                    pool.apply_async(_process_sample, args=args)
+                    pool.apply_async(_process_sample_inplace, args=args)
                 pool.close()
                 pool.join()
                 
-            _logger.info(f"  Completed generating {num_samples} samples")
-            print(f"[INFO] Completed ACE generation for ZAID {zaid}")
+            _logger.info(f"  Completed processing {len(tasks)} samples")
+            print(f"[INFO] Completed ACE perturbation for ZAID {zaid}")
         else:
             # For sequential processing, show periodic progress updates
-            _logger.info(f"  Generating samples (progress updates every {report_interval} samples)")
+            _logger.info(f"  Processing samples (progress updates every {report_interval} samples)")
             
             for i, args in enumerate(tasks):
-                _process_sample(*args)
+                _process_sample_inplace(*args)
                 
                 # Report progress periodically TO LOG FILE
-                if (i + 1) % report_interval == 0 or i + 1 == num_samples:
-                    progress = (i + 1) / num_samples * 100
-                    _logger.info(f"  Progress: {i + 1}/{num_samples} samples ({progress:.1f}%)")
+                if (i + 1) % report_interval == 0 or i + 1 == len(tasks):
+                    progress = (i + 1) / len(tasks) * 100
+                    _logger.info(f"  Progress: {i + 1}/{len(tasks)} samples ({progress:.1f}%)")
             
-            print(f"[INFO] Completed ACE generation for ZAID {zaid}")
+            print(f"[INFO] Completed ACE perturbation for ZAID {zaid}")
 
-        # ====== End of ACE file processing ======
+        # ====== End of ZAID processing ======
         _logger.info(f"\n{separator}")
-        _logger.info(f"[ACE] [COMPLETED] {ace_file} ({num_samples} samples generated)")
+        _logger.info(f"[ACE] [COMPLETED] ZAID {zaid} ({len(tasks)} samples processed)")
         _logger.info(f"{separator}\n")
+
+        # Copy summary files and parquet data to each temperature directory
+        _copy_files_to_temperature_directories(
+            root_dir, temperatures, zaid, factors, mt_perturb_final, energy_grid, 
+            base, num_samples, processed_samples_by_temp, dry_run, verbose
+        )
 
     # =====================================================================
     #  Print final summary for all isotopes TO LOG FILE
@@ -854,8 +964,25 @@ def perturb_ACE_files(
     
     # Convert individual files to master parquet and clean up
     final_parquet_path = _finalize_master_perturbation_matrix(matrix_dir, verbose)
-    _logger.info(f"[MATRIX] [COMPLETE] Master perturbation matrix finalized")
-    _logger.info(f"  Final matrix file: {os.path.basename(final_parquet_path)}")
+    if final_parquet_path is not None:
+        _logger.info(f"[MATRIX] [COMPLETE] Master perturbation matrix finalized")
+        _logger.info(f"  Final matrix file: {os.path.basename(final_parquet_path)}")
+        
+        # Copy the master parquet file to each temperature directory
+        _copy_master_files_to_temperature_directories(root_dir, temperatures, final_parquet_path, log_file, verbose)
+        
+        # Clean up master files from root directory after copying
+        if final_parquet_path and os.path.exists(final_parquet_path):
+            os.remove(final_parquet_path)
+            _logger.info(f"[CLEANUP] Removed master parquet from root directory")
+        
+        matrix_file_msg = f"Master matrix file copied to temperature directories"
+    else:
+        _logger.info(f"[MATRIX] [COMPLETE] No master perturbation matrix created (no valid data)")
+        matrix_file_msg = "No master matrix file created (no valid perturbation data)"
+    
+    # Clean up root log file after copying (will be copied to temperature directories)
+    # We'll remove it at the very end after all console output is done
     
     # Console: Final summary
     processed_count = len([zaid for zaid in summary_data.keys() if zaid not in skipped_isotopes])
@@ -865,7 +992,181 @@ def perturb_ACE_files(
     print(f"[INFO] Processed: {processed_count} isotope(s)")
     print(f"[INFO] Skipped: {skipped_count} isotope(s)")
     print(f"[INFO] Detailed log saved to: {log_file}")
-    print(f"[INFO] Master matrix file: {os.path.basename(final_parquet_path)}")
+    print(f"[INFO] {matrix_file_msg}")
+    
+    # Clean up root log file after all console output is complete
+    # The log file has been copied to temperature directories
+    try:
+        if os.path.exists(log_file):
+            os.remove(log_file)
+            # Note: Can't log this removal since we just deleted the log file
+    except Exception as e:
+        # Silently ignore cleanup errors
+        pass
+    
+    # Clean up any empty ZAID directories that might have been created in root
+    for zaid in zaids:
+        zaid_dir = os.path.join(root_dir, str(zaid))
+        try:
+            if os.path.exists(zaid_dir) and os.path.isdir(zaid_dir):
+                # Only remove if directory is empty
+                if not os.listdir(zaid_dir):
+                    os.rmdir(zaid_dir)
+        except Exception as e:
+            # Silently ignore cleanup errors
+            pass
+
+
+def _copy_files_to_temperature_directories(
+    root_dir: str,
+    temperatures: List[float],
+    zaid: int,
+    factors: np.ndarray,
+    mt_numbers: List[int],
+    energy_grid: List[float],
+    base_filename: str,
+    num_samples: int,
+    processed_samples_by_temp: Dict[float, List[int]],
+    dry_run: bool,
+    verbose: bool = True
+):
+    """
+    Copy summary files to each temperature directory for the current ZAID.
+    
+    Parameters
+    ----------
+    root_dir : str
+        Root directory
+    temperatures : List[float]
+        List of temperatures
+    zaid : int
+        ZAID being processed
+    factors : np.ndarray
+        Perturbation factors
+    mt_numbers : List[int]
+        MT numbers that were perturbed
+    energy_grid : List[float]
+        Energy grid boundaries
+    base_filename : str
+        Base filename for outputs
+    num_samples : int
+        Total number of samples
+    processed_samples_by_temp : Dict[float, List[int]]
+        Dictionary mapping temperature to list of processed sample indices
+    dry_run : bool
+        Whether this was a dry run
+    verbose : bool
+        Whether to log progress
+    """
+    logger = _get_logger()
+    
+    if verbose and logger:
+        logger.info(f"[COPY] Copying summary files to temperature directories for ZAID {zaid}")
+    
+    for temp in temperatures:
+        temp_str = f"{temp:.1f}K"
+        temp_ace_dir = os.path.join(root_dir, "ace", temp_str)
+        
+        # Create ZAID-specific directory in this temperature
+        zaid_temp_dir = os.path.join(temp_ace_dir, str(zaid))
+        os.makedirs(zaid_temp_dir, exist_ok=True)
+        
+        # Create summary file for this temperature/ZAID combination
+        summary_file = os.path.join(zaid_temp_dir, f"{base_filename}_perturbation_summary_{temp_str}.txt")
+        
+        processed_samples = processed_samples_by_temp[temp]
+        
+        with open(summary_file, 'w') as f:
+            f.write(f"# ACE Perturbation Summary for ZAID {zaid} at {temp_str}\n")
+            f.write(f"# Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# Mode: {'Dry run' if dry_run else 'Full processing'}\n")
+            f.write(f"# Perturbed MT numbers: {', '.join(map(str, mt_numbers))}\n")
+            f.write(f"# Total samples requested: {num_samples}\n")
+            f.write(f"# Samples processed at this temperature: {len(processed_samples)}\n")
+            f.write(f"# Energy groups: {len(energy_grid) - 1}\n")
+            f.write(f"#\n")
+            f.write(f"# Format: Sample_ID  MT  Energy_Low  Energy_High  Factor\n")
+            f.write(f"#\n")
+            
+            n_groups = len(energy_grid) - 1
+            boundaries = np.asarray(energy_grid, dtype=np.float32)
+            
+            for sample_idx in processed_samples:
+                sample = factors[sample_idx].astype(np.float32)
+                f.write(f"\n# Sample {sample_idx+1:04d}\n")
+                
+                for mt_idx, mt in enumerate(mt_numbers):
+                    start = mt_idx * n_groups
+                    end = start + n_groups
+                    grp_facs = sample[start:end]
+                    
+                    for grp in range(n_groups):
+                        low, high = boundaries[grp], boundaries[grp+1]
+                        fac = grp_facs[grp]
+                        f.write(f"{sample_idx+1:04d}  {mt:<3}  {low:.6e}  {high:.6e}  {fac:.6e}\n")
+        
+        if verbose and logger:
+            logger.info(f"  Created summary for {temp_str}: {len(processed_samples)} samples")
+
+
+def _copy_master_files_to_temperature_directories(
+    root_dir: str,
+    temperatures: List[float],
+    master_parquet_path: Optional[str],
+    log_file: str,
+    verbose: bool = True
+):
+    """
+    Copy master parquet file and log file to each temperature directory.
+    
+    Parameters
+    ----------
+    root_dir : str
+        Root directory
+    temperatures : List[float]
+        List of temperatures
+    master_parquet_path : Optional[str]
+        Path to the master parquet file (can be None if no file was created)
+    log_file : str
+        Path to the log file
+    verbose : bool
+        Whether to log progress
+    """
+    logger = _get_logger()
+    
+    if verbose and logger:
+        logger.info(f"[COPY] Copying master files to temperature directories")
+    
+    import shutil
+    
+    for temp in temperatures:
+        temp_str = f"{temp:.1f}K"
+        temp_ace_dir = os.path.join(root_dir, "ace", temp_str)
+        os.makedirs(temp_ace_dir, exist_ok=True)
+        
+        # Copy parquet file (only if it exists and is not already in this location)
+        if master_parquet_path is not None and os.path.exists(master_parquet_path):
+            dest_parquet = os.path.join(temp_ace_dir, os.path.basename(master_parquet_path))
+            # Only copy if source and destination are different
+            if os.path.abspath(master_parquet_path) != os.path.abspath(dest_parquet):
+                shutil.copy2(master_parquet_path, dest_parquet)
+                if verbose and logger:
+                    logger.info(f"  Copied parquet to {temp_str}/")
+            elif verbose and logger:
+                logger.info(f"  Parquet already exists in {temp_str}/")
+        elif verbose and logger:
+            logger.info(f"  No parquet file to copy to {temp_str}/")
+        
+        # Copy log file (only if it's not already in this location)
+        if os.path.exists(log_file):
+            dest_log = os.path.join(temp_ace_dir, os.path.basename(log_file))
+            # Only copy if source and destination are different
+            if os.path.abspath(log_file) != os.path.abspath(dest_log):
+                shutil.copy2(log_file, dest_log)
+                if verbose and logger:
+                    logger.info(f"  Copied log to {temp_str}/")
+            elif verbose and logger:
+                logger.info(f"  Log already exists in {temp_str}/")
 
 
 def apply_perturbation_factor_to_ace(ace, sample, sample_index, energy_grid, mt_numbers, verbose=True):
@@ -1121,7 +1422,8 @@ def _finalize_master_perturbation_matrix(matrix_dir: str, verbose: bool = True) 
     if not isotope_files:
         if verbose and logger:
             logger.warning(f"[MATRIX] [WARNING] No isotope files found in {matrix_dir}")
-        return matrix_dir
+        # Return None instead of directory path when no files found
+        return None
     
     if verbose and logger:
         logger.info(f"  Found {len(isotope_files)} isotope files to combine")
@@ -1187,34 +1489,3 @@ def _finalize_master_perturbation_matrix(matrix_dir: str, verbose: bool = True) 
             logger.error(f"[MATRIX] [ERROR] Failed to combine isotope files: {e}")
         return matrix_dir
 
-
-def _write_sample_summary(
-    sample: np.ndarray,
-    sample_index: int,
-    energy_grid: List[float],
-    mt_numbers: List[int],
-    iso_dir: str,
-    base: str,
-):
-    """Serialise a single sample's perturbation factors."""
-    n_groups = len(energy_grid) - 1
-    boundaries = np.asarray(energy_grid, dtype=np.float32) 
-    tag = f"{sample_index + 1:04d}"
-    sdir = os.path.join(iso_dir, tag)
-    os.makedirs(sdir, exist_ok=True)
-    path = os.path.join(sdir, f"{base}_{tag}_pert_factors.txt")
-
-    # Convert sample to float32
-    sample = sample.astype(np.float32)
-
-    with open(path, "w") as f:
-        for mt_idx, mt in enumerate(mt_numbers):
-            start = mt_idx * n_groups
-            end = start + n_groups
-            slice_ = sample[start:end]
-            for grp in range(n_groups):
-                lo, hi = boundaries[grp], boundaries[grp + 1]
-                fac = slice_[grp]
-                # Use 6 decimal places for float32 precision for all values
-                f.write(f"{mt:<3}\t{lo:.6e}\t{hi:.6e}\t{fac:.6e}\n")
-        f.write("\n")
