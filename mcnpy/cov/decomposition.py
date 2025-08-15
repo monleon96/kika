@@ -322,3 +322,277 @@ def compute_correlation(
 
     return corr
 
+
+# ----------------------------------------------------------------------
+# Decomposition Quality Verification Functions
+# ----------------------------------------------------------------------
+
+def _verify_decomposition_quality(
+    original_matrix: np.ndarray,
+    reconstructed_matrix: np.ndarray,
+    method_name: str,
+    space: str,
+    verbose: bool = True,
+    logger = None,
+) -> Tuple[float, float, float]:
+    """
+    Verify the quality of a matrix decomposition by comparing reconstruction.
+    
+    Parameters
+    ----------
+    original_matrix : np.ndarray
+        Original covariance matrix
+    reconstructed_matrix : np.ndarray
+        Reconstructed matrix from decomposition
+    method_name : str
+        Name of decomposition method for logging
+    space : str
+        Space ("linear" or "log") for logging
+    verbose : bool
+        Whether to log results
+    logger : optional
+        Logger instance for output
+        
+    Returns
+    -------
+    Tuple[float, float, float]
+        Relative Frobenius error (%), max diagonal error (%), max off-diagonal error (%)
+    """
+    # Compute errors
+    diff_matrix = reconstructed_matrix - original_matrix
+    
+    # Relative Frobenius norm error
+    frob_orig = np.linalg.norm(original_matrix, ord='fro')
+    frob_diff = np.linalg.norm(diff_matrix, ord='fro')
+    frob_rel_error = (frob_diff / frob_orig) * 100.0 if frob_orig > 0 else 0.0
+    
+    # Diagonal reconstruction errors
+    diag_orig = np.diag(original_matrix)
+    diag_recon = np.diag(reconstructed_matrix)
+    diag_errors = np.abs(diag_recon - diag_orig)
+    
+    # Relative diagonal errors (avoid division by zero)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        diag_rel_errors = np.where(
+            diag_orig != 0,
+            (diag_errors / np.abs(diag_orig)) * 100.0,
+            0.0
+        )
+    max_diag_error = np.max(diag_rel_errors)
+    
+    # Off-diagonal reconstruction errors
+    n = original_matrix.shape[0]
+    off_diag_mask = ~np.eye(n, dtype=bool)
+    
+    off_diag_orig = original_matrix[off_diag_mask]
+    off_diag_diff = diff_matrix[off_diag_mask]
+    
+    # Max absolute off-diagonal error relative to Frobenius norm of original
+    max_off_diag_error = np.max(np.abs(off_diag_diff)) / frob_orig * 100.0 if frob_orig > 0 else 0.0
+    
+    # Log results
+    if verbose:
+        separator = "-" * 60
+        msg_header = f"\n[DECOMPOSITION] [QUALITY] {method_name.upper()} in {space} space\n{separator}"
+        _log_message(msg_header, logger, verbose)
+        
+        msg_frob = f"  Relative Frobenius error: {frob_rel_error:.6f}%"
+        _log_message(msg_frob, logger, verbose)
+        
+        msg_diag = f"  Max diagonal error: {max_diag_error:.6f}%"
+        _log_message(msg_diag, logger, verbose)
+        
+        msg_off_diag = f"  Max off-diagonal error: {max_off_diag_error:.6f}%"
+        _log_message(msg_off_diag, logger, verbose)
+        
+        # Quality assessment
+        if frob_rel_error < 1e-10:
+            quality = "EXCELLENT"
+        elif frob_rel_error < 1e-6:
+            quality = "VERY GOOD"
+        elif frob_rel_error < 1e-3:
+            quality = "GOOD"
+        elif frob_rel_error < 1e-1:
+            quality = "ACCEPTABLE"
+        else:
+            quality = "POOR"
+            
+        msg_quality = f"  Quality assessment: {quality}"
+        _log_message(msg_quality, logger, verbose)
+        
+        msg_footer = f"{separator}"
+        _log_message(msg_footer, logger, verbose)
+    
+    return frob_rel_error, max_diag_error, max_off_diag_error
+
+
+def verify_cholesky_decomposition(
+    original_matrix: np.ndarray,
+    L: np.ndarray,
+    space: str,
+    verbose: bool = True,
+    logger = None,
+) -> Tuple[float, float, float]:
+    """
+    Verify Cholesky decomposition quality by reconstructing L @ L.T.
+    
+    Parameters
+    ----------
+    original_matrix : np.ndarray
+        Original covariance matrix
+    L : np.ndarray
+        Cholesky factor (lower triangular)
+    space : str
+        Space ("linear" or "log") for logging
+    verbose : bool
+        Whether to log results
+    logger : optional
+        Logger instance for output
+        
+    Returns
+    -------
+    Tuple[float, float, float]
+        Relative Frobenius error (%), max diagonal error (%), max off-diagonal error (%)
+    """
+    reconstructed = L @ L.T
+    return _verify_decomposition_quality(
+        original_matrix, reconstructed, "Cholesky", space, verbose, logger
+    )
+
+
+def verify_eigen_decomposition(
+    original_matrix: np.ndarray,
+    eigvals: np.ndarray,
+    eigvecs: np.ndarray,
+    space: str,
+    verbose: bool = True,
+    logger = None,
+) -> Tuple[float, float, float]:
+    """
+    Verify eigendecomposition quality by reconstructing V @ Λ @ V.T.
+    
+    Parameters
+    ----------
+    original_matrix : np.ndarray
+        Original covariance matrix
+    eigvals : np.ndarray
+        Eigenvalues
+    eigvecs : np.ndarray
+        Eigenvectors
+    space : str
+        Space ("linear" or "log") for logging
+    verbose : bool
+        Whether to log results
+    logger : optional
+        Logger instance for output
+        
+    Returns
+    -------
+    Tuple[float, float, float]
+        Relative Frobenius error (%), max diagonal error (%), max off-diagonal error (%)
+    """
+    reconstructed = eigvecs @ np.diag(eigvals) @ eigvecs.T
+    return _verify_decomposition_quality(
+        original_matrix, reconstructed, "Eigendecomposition", space, verbose, logger
+    )
+
+
+def verify_svd_decomposition(
+    original_matrix: np.ndarray,
+    U: np.ndarray,
+    S: np.ndarray,
+    Vt: np.ndarray,
+    space: str,
+    verbose: bool = True,
+    logger = None,
+) -> Tuple[float, float, float]:
+    """
+    Verify SVD quality by reconstructing U @ Σ @ V.T.
+    
+    Parameters
+    ----------
+    original_matrix : np.ndarray
+        Original covariance matrix
+    U : np.ndarray
+        Left singular vectors
+    S : np.ndarray
+        Singular values
+    Vt : np.ndarray
+        Right singular vectors (transposed)
+    space : str
+        Space ("linear" or "log") for logging
+    verbose : bool
+        Whether to log results
+    logger : optional
+        Logger instance for output
+        
+    Returns
+    -------
+    Tuple[float, float, float]
+        Relative Frobenius error (%), max diagonal error (%), max off-diagonal error (%)
+    """
+    reconstructed = U @ np.diag(S) @ Vt
+    return _verify_decomposition_quality(
+        original_matrix, reconstructed, "SVD", space, verbose, logger
+    )
+
+
+def verify_pca_decomposition(
+    original_matrix: np.ndarray,
+    eigvals: np.ndarray,
+    eigvecs: np.ndarray,
+    k: int,
+    space: str,
+    verbose: bool = True,
+    logger = None,
+) -> Tuple[float, float, float]:
+    """
+    Verify PCA decomposition quality by reconstructing the truncated approximation.
+    
+    Parameters
+    ----------
+    original_matrix : np.ndarray
+        Original covariance matrix
+    eigvals : np.ndarray
+        All eigenvalues (sorted descending)
+    eigvecs : np.ndarray
+        All eigenvectors (sorted by descending eigenvalue)
+    k : int
+        Number of components kept in truncation
+    space : str
+        Space ("linear" or "log") for logging
+    verbose : bool
+        Whether to log results
+    logger : optional
+        Logger instance for output
+        
+    Returns
+    -------
+    Tuple[float, float, float]
+        Relative Frobenius error (%), max diagonal error (%), max off-diagonal error (%)
+    """
+    # Reconstruct using only the first k components
+    eigvals_k = eigvals[:k]
+    eigvecs_k = eigvecs[:, :k]
+    reconstructed = eigvecs_k @ np.diag(eigvals_k) @ eigvecs_k.T
+    
+    if verbose:
+        # Also report variance captured
+        total_var = np.sum(eigvals)
+        captured_var = np.sum(eigvals_k)
+        var_fraction = captured_var / total_var if total_var > 0 else 0.0
+        
+        separator = "-" * 60
+        msg_header = f"\n[DECOMPOSITION] [QUALITY] PCA in {space} space\n{separator}"
+        _log_message(msg_header, logger, verbose)
+        
+        msg_components = f"  Components used: {k}/{len(eigvals)}"
+        _log_message(msg_components, logger, verbose)
+        
+        msg_variance = f"  Variance captured: {var_fraction:.6f} ({var_fraction*100:.4f}%)"
+        _log_message(msg_variance, logger, verbose)
+    
+    return _verify_decomposition_quality(
+        original_matrix, reconstructed, "PCA", space, verbose, logger
+    )
+

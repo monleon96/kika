@@ -13,6 +13,7 @@ from mcnpy.ace.parsers import read_ace
 from mcnpy.ace.writers.write_ace import write_ace
 from mcnpy.cov.parse_covmat import read_scale_covmat, read_njoy_covmat
 from mcnpy._utils import zaid_to_symbol
+from mcnpy._constants import MT_GROUPS
 from mcnpy.ace.xsdir import write_xsdir_line, build_xsdir_line, create_xsdir_files_for_ace
 
 class DualLogger:
@@ -510,19 +511,11 @@ def perturb_ACE_files(
         original_mt_perturb = set(mt_in_cov) & set(mt_request) & set(mt_in_ace)
         
         mt_perturb = set(mt_in_cov) & set(mt_request) & set(mt_in_ace)
-        groups = [
-            (4,   range(51,  92)),
-            (103, range(600, 650)),
-            (104, range(650, 700)),
-            (105, range(700, 750)),
-            (106, range(750, 800)),
-            (107, range(800, 850)),
-        ]
 
         # Track removed MTs during group processing
         group_removed_mts = {}
 
-        for single, rng in groups:
+        for single, rng in MT_GROUPS:
             cov_has_single  = single in mt_in_cov
             cov_in_range    = [mt for mt in mt_in_cov if mt in rng]
             list_has_single = single in mt_request

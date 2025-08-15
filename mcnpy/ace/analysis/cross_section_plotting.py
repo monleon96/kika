@@ -1,7 +1,22 @@
 """
-Utility for plotting cross sections from ACE files.
+Utility for plotting cross sections from ACE objects.
 
-This module provides a simple function for plotting cross sections from ACE objects.
+This module provides functions for plotting cross sections from ACE objects that have
+already been loaded/parsed. The functions accept ACE objects directly, promoting
+better separation of concerns and reusability.
+
+Functions
+---------
+plot_cross_sections : Plot cross sections from ACE objects
+get_cross_section_dataframe : Get cross section data as DataFrame from ACE objects
+
+Examples
+--------
+>>> # Load ACE objects first using mcnpy.ace.read_ace, then plot
+>>> from mcnpy.ace import read_ace
+>>> ace1 = read_ace(ace_file1)
+>>> ace2 = read_ace(ace_file2)
+>>> plot_cross_sections([ace1, ace2], 1)  # Total cross section
 """
 
 import os
@@ -9,19 +24,121 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from typing import List, Optional, Tuple, Union
-from mcnpy.ace.classes.ace import Ace
+from mcnpy.ace import read_ace
+from mcnpy._plot_settings import setup_plot_style, format_axes
+from mcnpy._constants import MT_GROUPS
+from mcnpy._utils import zaid_to_symbol
+
+
+def _get_cross_section_with_fallback(ace, mt_number, verbose=False):
+    """
+    Get cross section data for a given MT number, with automatic fallback to summing
+    component reactions if the primary MT is not available but its components are.
+    
+    Parameters
+    ----------
+    ace : ACE object
+        The ACE data object
+    mt_number : int
+        The primary MT number requested
+    verbose : bool, optional
+        If True, print information about component summation
+        
+    Returns
+    -------
+    dict or None
+        Dictionary with 'Energy' and f'MT={mt_number}' keys, or None if unavailable
+    """
+    # First, try to get the MT directly
+    try:
+        if verbose:
+            print(f"Found MT={mt_number} directly in ACE file")
+        return ace.get_cross_section(mt_number)
+    except:
+        # If direct MT is not available, check if it's in MT_GROUPS
+        pass
+    
+    # Look for the MT in MT_GROUPS
+    component_range = None
+    for primary_mt, mt_range in MT_GROUPS:
+        if primary_mt == mt_number:
+            component_range = mt_range
+            break
+    
+    if component_range is None:
+        # MT is not in MT_GROUPS, can't do anything
+        if verbose:
+            print(f"MT={mt_number} not found directly and not in MT_GROUPS")
+        return None
+    
+    # Check which component MTs are available in the ACE file
+    available_components = []
+    for component_mt in component_range:
+        try:
+            ace.get_cross_section(component_mt)
+            available_components.append(component_mt)
+        except:
+            continue
+    
+    if not available_components:
+        # No component MTs are available
+        if verbose:
+            print(f"MT={mt_number} not found directly and no component MTs available from range {list(component_range)}")
+        return None
+    
+    if verbose:
+        print(f"MT={mt_number} not found directly, summing {len(available_components)} component MTs: {available_components}")
+    
+    # Sum the available component cross sections
+    energy = None
+    total_xs = None
+    
+    for component_mt in available_components:
+        try:
+            xs_data = ace.get_cross_section(component_mt)
+            component_energy = xs_data["Energy"]
+            component_xs = xs_data[f"MT={component_mt}"]
+            
+            if energy is None:
+                # First component - use its energy grid as reference
+                energy = component_energy.copy()
+                total_xs = component_xs.copy()
+            else:
+                # Subsequent components - need to interpolate to common energy grid
+                if not np.array_equal(energy, component_energy):
+                    # Interpolate component cross section to reference energy grid
+                    component_xs_interp = np.interp(energy, component_energy, component_xs)
+                    total_xs += component_xs_interp
+                else:
+                    # Same energy grid, just add
+                    total_xs += component_xs
+        except Exception as e:
+            # Skip this component if there's an error
+            if verbose:
+                print(f"Warning: Could not process component MT={component_mt}: {e}")
+            continue
+    
+    if energy is None or total_xs is None:
+        if verbose:
+            print(f"Failed to compute sum for MT={mt_number}")
+        return None
+    
+    # Return in the same format as ace.get_cross_section()
+    return {
+        "Energy": energy,
+        f"MT={mt_number}": total_xs
+    }
 
 def plot_cross_sections(
-    ace_objects: List[Ace], 
+    ace_objects: List,
     mt_number: Union[int, List[int]],
     labels: Optional[List[str]] = None,
     energy_range: Optional[Tuple[float, float]] = None,
-    figsize: Tuple[float, float] = (10, 6),
-    log_scale: bool = True,
+    figsize: Tuple[float, float] = (8, 5),
+    y_range: Optional[Tuple[float, float]] = None,
     save_path: Optional[str] = None,
     dpi: int = 300,
     style: str = "default",
-    font_family: str = "serif",
     show: bool = True,
     **plot_kwargs
 ) -> plt.Figure:
@@ -30,26 +147,25 @@ def plot_cross_sections(
     
     Parameters
     ----------
-    ace_objects : List[Ace]
-        List of Ace objects
+    ace_objects : List
+        List of ACE objects (already loaded/parsed)
     mt_number : int or List[int]
         MT number to plot for all ACE objects, or list of MT numbers (one per ACE object)
     labels : List[str], optional
-        Labels to use in the legend (defaults to ZAID if available)
+        Labels to use in the legend (defaults to element symbol like Fe56 if ZAID available)
     energy_range : Tuple[float, float], optional
         Energy range to plot (min, max) in MeV
     figsize : Tuple[float, float], optional
         Figure size (width, height) in inches
-    log_scale : bool, optional
-        Use logarithmic scales (True by default)
+    y_range : Tuple[float, float], optional
+        Optional y-axis limits to apply to the cross section axis (min, max). If provided,
+        these will be used when formatting the axes. Note: values must be positive for log scale.
     save_path : str, optional
         Path to save figure (if None, figure is not saved)
     dpi : int, optional
         DPI for saved figure
     style : str, optional
         Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
-    font_family : str, optional
-        Font family for text elements
     show : bool, optional
         Whether to display the figure (default: True)
     **plot_kwargs
@@ -63,86 +179,22 @@ def plot_cross_sections(
     Examples
     --------
     >>> # Compare total cross section between two ACE objects (same MT for both)
-    >>> plot_cross_sections([u235_ace, u238_ace], 1)
+    >>> ace1 = read_ace(ace_file1)
+    >>> ace2 = read_ace(ace_file2)
+    >>> plot_cross_sections([ace1, ace2], 1)
     
     >>> # Plot different MT numbers for each ACE object
-    >>> plot_cross_sections([u235_ace, u238_ace], [1, 2])  # Total for u235, Elastic for u238
+    >>> plot_cross_sections([ace1, ace2], [1, 2])  # Total for first, Elastic for second
     
     >>> # With custom labels and energy range
     >>> plot_cross_sections(
-    ...     [fe56_ace, fe54_ace], 
+    ...     [ace_fe56, ace_fe54], 
     ...     2,  # Elastic scattering for both
     ...     labels=['Fe-56', 'Fe-54'],
     ...     energy_range=(1e-5, 20.0),
     ...     style='publication'
     ... )
     """
-    # Reset matplotlib to default state to avoid contamination from previous plots
-    plt.rcdefaults()
-    
-    # Setup publication-quality settings
-    plt.rcParams.update({
-        'font.family': font_family,
-        'font.size': 12,
-        'axes.labelsize': 14,
-        'axes.titlesize': 14,
-        'xtick.labelsize': 12,
-        'ytick.labelsize': 12,
-        'legend.fontsize': 12,
-        'figure.figsize': figsize,
-        'figure.dpi': dpi,
-        'axes.linewidth': 1.2,
-        'lines.linewidth': 2.5,
-        'lines.markersize': 8,
-        'axes.grid': True,
-        'grid.alpha': 0.3,
-        'grid.linestyle': '--',
-        'xtick.major.width': 1.2,
-        'ytick.major.width': 1.2,
-        'xtick.minor.width': 1.0,
-        'ytick.minor.width': 1.0,
-        'xtick.major.size': 5.0,
-        'ytick.major.size': 5.0,
-        'xtick.minor.size': 3.0,
-        'ytick.minor.size': 3.0,
-        'xtick.direction': 'out',
-        'ytick.direction': 'out',
-        'axes.facecolor': 'white',
-        'figure.facecolor': 'white',
-        'savefig.facecolor': 'white',
-        'figure.constrained_layout.use': True,
-    })
-    
-    # Apply style customizations
-    if style == 'dark':
-        plt.rcParams.update({
-            'axes.facecolor': 'black',
-            'figure.facecolor': 'black',
-            'savefig.facecolor': 'black',
-            'axes.edgecolor': 'white',
-            'axes.labelcolor': 'white',
-            'xtick.color': 'white',
-            'ytick.color': 'white',
-            'text.color': 'white',
-        })
-    elif style == 'presentation':
-        plt.rcParams.update({
-            'font.size': 14,
-            'axes.labelsize': 16,
-            'axes.titlesize': 16,
-            'lines.linewidth': 3.0,
-        })
-    elif style in {'paper', 'publication'}:
-        plt.rcParams.update({
-            'font.size': 10,
-            'axes.labelsize': 12,
-            'axes.titlesize': 12,
-            'legend.fontsize': 10,
-        })
-    
-    # Close any existing figures to prevent interference
-    plt.close('all')
-    
     if not ace_objects:
         print("No ACE objects provided")
         return None
@@ -160,9 +212,11 @@ def plot_cross_sections(
     if labels is None:
         labels = []
         for i, ace in enumerate(ace_objects):
-            if ace.header and ace.header.zaid:
-                labels.append(ace.header.zaid)
-            elif ace.filename:
+            if hasattr(ace, 'header') and ace.header and hasattr(ace.header, 'zaid') and ace.header.zaid:
+                # Convert ZAID to symbol format (e.g., 26056 -> Fe56)
+                symbol = zaid_to_symbol(ace.header.zaid)
+                labels.append(symbol)
+            elif hasattr(ace, 'filename') and ace.filename:
                 labels.append(os.path.basename(ace.filename))
             else:
                 labels.append(f"ACE Object {i+1}")
@@ -181,8 +235,11 @@ def plot_cross_sections(
         except ImportError:
             return f"MT={mt_num}"
     
-    # Create a figure
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    # Setup plot style using common plotting settings
+    plot_setup = setup_plot_style(style=style, figsize=figsize, dpi=dpi, **plot_kwargs)
+    fig = plot_setup['_fig']
+    ax = plot_setup['ax']
+    colors = plot_setup['_colors']
     
     # Determine title based on MT numbers
     if len(set(mt_numbers)) == 1:
@@ -194,14 +251,16 @@ def plot_cross_sections(
         # Multiple different MT numbers
         title = f"Cross Sections (MT={mt_numbers})"
     
-    # Colors for plotting - use consistent color cycle
-    colors = plt.cm.tab10.colors
-    
     # Plot cross section from each ACE object
     for i, (ace, mt_num) in enumerate(zip(ace_objects, mt_numbers)):
         try:
-            # Get cross section data
-            xs_data = ace.get_cross_section(mt_num)
+            # Get cross section data with fallback to component summation
+            xs_data = _get_cross_section_with_fallback(ace, mt_num)
+            
+            if xs_data is None:
+                label = labels[i] if i < len(labels) else f"ACE Object {i+1}"
+                print(f"Warning: MT={mt_num} not available for {label} (neither directly nor through component reactions)")
+                continue
             
             # Apply energy range filter if specified
             if energy_range is not None:
@@ -227,26 +286,31 @@ def plot_cross_sections(
             label = labels[i] if i < len(labels) else f"ACE Object {i+1}"
             print(f"Warning: Could not plot MT={mt_num} for {label}: {str(e)}")
     
-    # Set up the plot with improved styling
-    if log_scale:
-        ax.set_xscale('log')
-        ax.set_yscale('log')
+    # Format axes using common plotting settings (always log-log for cross sections)
+    ax = format_axes(
+        ax, 
+        style=style, 
+        use_log_scale=True,  # Always use log scale for energy axis
+        is_energy_axis=True,
+        x_label="Energy (MeV)",
+        y_label="Cross Section (barns)",
+        title=title if style not in {"paper", "publication"} else None,
+        legend_loc='best',
+        use_y_log_scale=True  # Always use log scale for cross section axis
+    )
     
-    # Set labels and title with consistent styling
-    ax.set_xlabel('Energy (MeV)')
-    ax.set_ylabel('Cross Section (barns)')
+    # Set y-axis to log scale explicitly
+    ax.set_yscale('log')
     
-    # Only add title for non-publication styles
-    if style not in {"paper", "publication"}:
-        ax.set_title(title)
+    # Apply energy range limits if specified
+    if energy_range is not None:
+        ax.set_xlim(energy_range)
     
-    ax.grid(True, which='both', linestyle='--', alpha=0.5)
-    ax.legend(frameon=True, fancybox=True, shadow=True)
+    # Apply y-axis range limits if specified
+    if y_range is not None:
+        ax.set_ylim(y_range)
     
-    # Improve layout
-    fig.tight_layout()
-    
-    # Save figure if requested with consistent DPI
+    # Save figure if requested
     if save_path is not None:
         try:
             fig.savefig(save_path, dpi=dpi, bbox_inches='tight', 
@@ -262,7 +326,7 @@ def plot_cross_sections(
     return fig
 
 def get_cross_section_dataframe(
-    ace_objects: List[Ace], 
+    ace_objects: List,
     mt_number: int,
     labels: Optional[List[str]] = None,
     energy_range: Optional[Tuple[float, float]] = None
@@ -272,12 +336,12 @@ def get_cross_section_dataframe(
     
     Parameters
     ----------
-    ace_objects : List[Ace]
-        List of Ace objects
+    ace_objects : List
+        List of ACE objects (already loaded/parsed)
     mt_number : int
         MT number for the cross section data
     labels : List[str], optional
-        Labels to use for column names (defaults to ZAID if available)
+        Labels to use for column names (defaults to element symbol like Fe56 if ZAID available)
     energy_range : Tuple[float, float], optional
         Energy range to include (min, max) in MeV
         
@@ -289,16 +353,18 @@ def get_cross_section_dataframe(
     Raises
     ------
     ValueError
-        If ACE objects have incompatible energy grids
+        If ACE objects are invalid or have incompatible energy grids
         
     Examples
     --------
     >>> # Get total cross section data for two ACE objects
-    >>> df = get_cross_section_dataframe([u235_ace, u238_ace], 1)
+    >>> ace1 = read_ace(ace_file1)
+    >>> ace2 = read_ace(ace_file2)
+    >>> df = get_cross_section_dataframe([ace1, ace2], 1)
     >>> 
     >>> # With custom labels and energy range
     >>> df = get_cross_section_dataframe(
-    ...     [fe56_ace, fe54_ace], 
+    ...     [ace_fe56, ace_fe54], 
     ...     2,  # Elastic scattering
     ...     labels=['Fe-56', 'Fe-54'],
     ...     energy_range=(1e-5, 20.0)
@@ -311,9 +377,11 @@ def get_cross_section_dataframe(
     if labels is None:
         labels = []
         for i, ace in enumerate(ace_objects):
-            if ace.header and ace.header.zaid:
-                labels.append(ace.header.zaid)
-            elif ace.filename:
+            if hasattr(ace, 'header') and ace.header and hasattr(ace.header, 'zaid') and ace.header.zaid:
+                # Convert ZAID to symbol format (e.g., 26056 -> Fe56)
+                symbol = zaid_to_symbol(ace.header.zaid)
+                labels.append(symbol)
+            elif hasattr(ace, 'filename') and ace.filename:
                 labels.append(os.path.basename(ace.filename))
             else:
                 labels.append(f"ACE Object {i+1}")
@@ -339,7 +407,11 @@ def get_cross_section_dataframe(
     all_xs_data = []
     for i, ace in enumerate(ace_objects):
         try:
-            xs_data = ace.get_cross_section(mt_number)
+            xs_data = _get_cross_section_with_fallback(ace, mt_number)
+            
+            if xs_data is None:
+                label = labels[i] if i < len(labels) else f"ACE Object {i+1}"
+                raise ValueError(f"MT={mt_number} not available for {label} (neither directly nor through component reactions)")
             
             # Apply energy range filter if specified
             if energy_range is not None:

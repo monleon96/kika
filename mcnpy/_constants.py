@@ -43,6 +43,15 @@ NDLIBRARY_TO_SUFFIX = {
 }
 
 
+MT_GROUPS = [
+    (4,   range(51,  92)),   # Total inelastic and specific inelastic levels
+    (103, range(600, 650)),  # (n,p) reactions
+    (104, range(650, 700)),  # (n,d) reactions
+    (105, range(700, 750)),  # (n,t) reactions
+    (106, range(750, 800)),  # (n,3He) reactions
+    (107, range(800, 850)),  # (n,α) reactions
+]
+
 MT_TO_REACTION = {
     1: "(n,total).",
     2: "(z,z0)",

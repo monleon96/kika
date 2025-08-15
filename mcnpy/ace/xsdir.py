@@ -152,7 +152,7 @@ def create_xsdir_files_for_ace(
 
         sample_tag = f"_{sample_index+1:04d}"
         orig_xs_base = os.path.splitext(os.path.basename(master_xsdir_file))[0]
-        master_xs_name = orig_xs_base + sample_tag + ".xsdir"
+        master_xs_name = orig_xs_base + sample_tag
         master_xs_path = os.path.join(xsdir_dir, master_xs_name)
 
         # Determine the source file: use existing modified file if available, otherwise original

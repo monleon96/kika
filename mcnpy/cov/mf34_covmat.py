@@ -382,8 +382,6 @@ class MF34CovMat:
             raise TypeError(f"l_coefficient must be int or list of int, got {type(l_coefficient)}")
 
 
-
-
     # ------------------------------------------------------------------
     # Decomposition methods
     # ------------------------------------------------------------------

@@ -12,6 +12,7 @@ import os
 import numpy as np
 import pandas as pd
 import shutil
+import tempfile
 
 from mcnpy.sampling.generators import generate_endf_samples
 from mcnpy.cov.mf34_covmat import MF34CovMat
@@ -139,7 +140,7 @@ def _process_sample(
     
     # Generate ACE files using NJOY if requested
     if generate_ace and not dry_run:
-        _process_njoy_for_sample(
+        njoy_result = _process_njoy_for_sample(
             out_endf=out_endf,
             sample_index=sample_index,
             njoy_exe=njoy_exe,
@@ -149,6 +150,9 @@ def _process_sample(
             output_dir=output_dir,
             xsdir_file=xsdir_file,
         )
+        return njoy_result
+    
+    return {"success": True, "temperatures_processed": [], "errors": [], "warnings": []}
 
 
 def _process_njoy_for_sample(
@@ -180,13 +184,15 @@ def _process_njoy_for_sample(
         NJOY version string
     output_dir : str
         Base output directory
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary with success status and any error messages
     """
     
     logger = _get_logger()
-    sample_str = f"{sample_index+1:04d}"  # Remove 's' prefix
-    
-    if logger:
-        logger.info(f"[NJOY] Processing sample {sample_str} through NJOY for {len(temperatures)} temperatures")
+    sample_str = f"{sample_index+1:04d}"
     
     # Parse ENDF to get ZAID for directory organization
     try:
@@ -195,12 +201,14 @@ def _process_njoy_for_sample(
     except Exception as e:
         if logger:
             logger.error(f"[NJOY] Sample {sample_str}: Failed to parse ENDF for ZAID - {e}")
-        return
+        return {"success": False, "error": f"Failed to parse ENDF for ZAID: {e}"}
+    
+    results = {"success": True, "temperatures_processed": [], "errors": [], "warnings": []}
     
     for temp in temperatures:
         try:
-            # Create custom directory structure: ace/temp/zaid/sample_num/ (no 'K')
-            temp_str = f"{int(temp)}"
+            # Create custom directory structure: ace/temp/zaid/sample_num/ using exact temperature input
+            temp_str = str(temp).rstrip('0').rstrip('.') if '.' in str(temp) else str(temp)
             ace_sample_dir = os.path.join(output_dir, "ace", temp_str, str(zaid), sample_str)
             njoy_sample_dir = os.path.join(output_dir, "njoy_files", temp_str, str(zaid), sample_str)
             # Create directories
@@ -208,7 +216,6 @@ def _process_njoy_for_sample(
             os.makedirs(njoy_sample_dir, exist_ok=True)
             
             # Run NJOY with a temporary directory (to avoid library subdirectories)
-            import tempfile
             with tempfile.TemporaryDirectory(prefix="njoy_temp_") as temp_dir:
                 result = run_njoy(
                     njoy_exe=njoy_exe,
@@ -217,20 +224,17 @@ def _process_njoy_for_sample(
                     library_name=library_name,
                     output_dir=temp_dir,  # Use temporary directory
                     njoy_version=njoy_version,
-                    additional_suffix=sample_str,  # Remove 's' prefix
+                    additional_suffix=sample_str,
                 )
                 
                 if result["returncode"] == 0:
-                    if logger:
-                        logger.info(f"[NJOY] Sample {sample_str} at {temp}K: SUCCESS")
+                    results["temperatures_processed"].append(temp)
                     
                     # Move ACE file to our custom structure
                     if result.get("ace_file") and os.path.exists(result["ace_file"]):
                         ace_filename = os.path.basename(result["ace_file"])
                         dest_ace = os.path.join(ace_sample_dir, ace_filename)
                         shutil.move(result["ace_file"], dest_ace)
-                        if logger:
-                            logger.info(f"[NJOY] Sample {sample_str} at {temp}K: ACE file -> {dest_ace}")
                         
                         # Create xsdir files for the generated ACE file
                         if xsdir_file is not None:
@@ -261,13 +265,12 @@ def _process_njoy_for_sample(
                                     master_xsdir_file=xsdir_file,
                                     has_ptable=has_ptable,
                                 )
-                                
-                                if logger:
-                                    logger.info(f"[NJOY] Sample {sample_str} at {temp}K: XSDIR files created")
                                     
                             except Exception as xsdir_err:
+                                warning_msg = f"Failed to create XSDIR files at {temp}K: {xsdir_err}"
+                                results["warnings"].append(warning_msg)
                                 if logger:
-                                    logger.warning(f"[NJOY] Sample {sample_str} at {temp}K: Failed to create XSDIR files - {xsdir_err}")
+                                    logger.warning(f"[NJOY] Sample {sample_str} at {temp}K: {warning_msg}")
                     
                     # Move NJOY auxiliary files to our custom structure
                     aux_files = ["njoy_input", "njoy_output", "xsdir_file", "viewr_output"]
@@ -278,15 +281,110 @@ def _process_njoy_for_sample(
                             try:
                                 shutil.move(result[aux_file], dest_aux)
                             except Exception as move_err:
+                                warning_msg = f"Could not move {aux_file} at {temp}K: {move_err}"
+                                results["warnings"].append(warning_msg)
                                 if logger:
-                                    logger.warning(f"[NJOY] Could not move {aux_file}: {move_err}")
+                                    logger.warning(f"[NJOY] Sample {sample_str}: {warning_msg}")
                 else:
+                    error_msg = f"NJOY failed at {temp}K with return code {result['returncode']}"
+                    results["errors"].append(error_msg)
+                    results["success"] = False
                     if logger:
-                        logger.error(f"[NJOY] Sample {sample_str} at {temp}K: FAILED (return code: {result['returncode']})")
+                        logger.error(f"[NJOY] Sample {sample_str}: {error_msg}")
                         
         except Exception as e:
+            error_msg = f"Exception at {temp}K: {e}"
+            results["errors"].append(error_msg)
+            results["success"] = False
             if logger:
-                logger.error(f"[NJOY] Sample {sample_str} at {temp}K: EXCEPTION - {e}")
+                logger.error(f"[NJOY] Sample {sample_str}: {error_msg}")
+    
+    return results
+
+
+def _log_njoy_batch_results(njoy_results, file_key, file_index, temperatures, summary_data):
+    """
+    Log NJOY processing results in batch to reduce log verbosity.
+    
+    Parameters
+    ----------
+    njoy_results : List[Tuple[int, Dict]]
+        List of (sample_index, result_dict) tuples
+    file_key : str
+        File identifier for summary tracking
+    file_index : int
+        1-based file index
+    temperatures : List[float]
+        List of temperatures processed
+    summary_data : Dict
+        Summary data dictionary to update
+    """
+    logger = _get_logger()
+    if not logger:
+        return
+    
+    total_samples = len(njoy_results)
+    successful_samples = sum(1 for _, result in njoy_results if result.get("success", False))
+    failed_samples = total_samples - successful_samples
+    
+    # Count warnings and errors across all samples
+    all_warnings = []
+    all_errors = []
+    temp_success_count = {temp: 0 for temp in temperatures}
+    
+    for sample_idx, result in njoy_results:
+        if result.get("warnings"):
+            all_warnings.extend(result["warnings"])
+        if result.get("errors"):
+            all_errors.extend(result["errors"])
+        
+        # Count successful temperatures
+        for temp in result.get("temperatures_processed", []):
+            temp_success_count[temp] += 1
+    
+    # Update summary data
+    if file_key in summary_data:
+        summary_data[file_key]['ace_generation']['successful_samples'] = successful_samples
+        summary_data[file_key]['ace_generation']['failed_samples'] = failed_samples
+    
+    # Log batch summary
+    logger.info(f"[NJOY] File {file_index}: Batch processing complete - {successful_samples}/{total_samples} samples successful")
+    
+    # Log temperature-specific results
+    for temp in temperatures:
+        success_count = temp_success_count[temp]
+        temp_str = str(temp).rstrip('0').rstrip('.') if '.' in str(temp) else str(temp)
+        logger.info(f"[NJOY] File {file_index}: Temperature {temp_str} - {success_count}/{total_samples} samples successful")
+    
+    # Log warnings (if any) - aggregate similar warnings
+    if all_warnings:
+        warning_counts = {}
+        for warning in all_warnings:
+            # Extract the core warning message (remove temperature-specific parts)
+            core_warning = warning.split(" at ")[0] if " at " in warning else warning
+            warning_counts[core_warning] = warning_counts.get(core_warning, 0) + 1
+        
+        logger.warning(f"[NJOY] File {file_index}: {len(all_warnings)} warnings occurred:")
+        for warning, count in warning_counts.items():
+            if count > 1:
+                logger.warning(f"[NJOY] File {file_index}:   {warning} (occurred {count} times)")
+            else:
+                logger.warning(f"[NJOY] File {file_index}:   {warning}")
+    
+    # Log errors (if any) - aggregate similar errors
+    if all_errors:
+        error_counts = {}
+        for error in all_errors:
+            # Extract the core error message (remove temperature-specific parts)
+            core_error = error.split(" at ")[0] if " at " in error else error
+            error_counts[core_error] = error_counts.get(core_error, 0) + 1
+        
+        logger.error(f"[NJOY] File {file_index}: {len(all_errors)} errors occurred:")
+        for error, count in error_counts.items():
+            if count > 1:
+                logger.error(f"[NJOY] File {file_index}:   {error} (occurred {count} times)")
+            else:
+                logger.error(f"[NJOY] File {file_index}:   {error}")
 
 
 def load_mf34_covariance(path: str) -> Optional[MF34CovMat]:
@@ -440,7 +538,7 @@ def perturb_ENDF_files(
     
     When generate_ace=True, the output directory structure will include:
     - output_dir/endf/zaid/sample_num/ : perturbed ENDF files
-    - output_dir/ace/temp/zaid/sample_num/ : ACE files organized by temperature
+    - output_dir/ace/temp/zaid/sample_num/ : ACE files organized by temperature (temp uses exact input format)
     - output_dir/njoy_files/temp/zaid/ : NJOY auxiliary files
     - output_dir/xsdir/ : modified xsdir files (if xsdir_file provided)
     - output_dir/*.log and *.parquet : log and master perturbation files
@@ -633,6 +731,8 @@ def perturb_ENDF_files(
                 _logger.info(f"[ENDF] File {i+1}: Dry run: generating factor summaries for {num_samples} samples...")
             
             # Process samples with optional parallelization
+            njoy_results = []  # Track NJOY results for batch logging
+            
             if nprocs > 1 and num_samples > 1:
                 _logger.info(f"[ENDF] File {i+1}: Using {nprocs} processes for parallel processing")
                 
@@ -652,19 +752,22 @@ def perturb_ENDF_files(
                         pool.close()
                         pool.join()
                         
-                        # Check for any exceptions
+                        # Collect results and check for any exceptions
                         for j, future in enumerate(futures):
                             try:
-                                future.get()  # This will raise any exception that occurred
+                                result = future.get()  # This will raise any exception that occurred
+                                if result and generate_ace and not dry_run:
+                                    njoy_results.append((j, result))
                             except Exception as e:
                                 _logger.error(f"[ENDF] File {i+1}: Sample {j+1:04d} processing failed: {e}")
                                 
                 except Exception as e:
                     _logger.error(f"[ENDF] File {i+1}: Parallel processing failed, falling back to serial: {e}")
                     # Fall back to serial processing
+                    njoy_results = []
                     for sample_idx in range(num_samples):
                         try:
-                            _process_sample(
+                            result = _process_sample(
                                 endf_file=endf_file,
                                 sample=factors[sample_idx],
                                 sample_index=sample_idx,
@@ -679,6 +782,8 @@ def perturb_ENDF_files(
                                 njoy_version=njoy_version,
                                 xsdir_file=xsdir_file,
                             )
+                            if result and generate_ace and not dry_run:
+                                njoy_results.append((sample_idx, result))
                         except Exception as sample_e:
                             _logger.error(f"[ENDF] File {i+1}: Sample {sample_idx+1:04d} processing failed: {sample_e}")
                             continue
@@ -686,7 +791,7 @@ def perturb_ENDF_files(
                 # Serial processing
                 for sample_idx in range(num_samples):
                     try:
-                        _process_sample(
+                        result = _process_sample(
                             endf_file=endf_file,
                             sample=factors[sample_idx],
                             sample_index=sample_idx,
@@ -701,9 +806,15 @@ def perturb_ENDF_files(
                             njoy_version=njoy_version,
                             xsdir_file=xsdir_file,
                         )
+                        if result and generate_ace and not dry_run:
+                            njoy_results.append((sample_idx, result))
                     except Exception as e:
                         _logger.error(f"[ENDF] File {i+1}: Sample {sample_idx+1:04d} processing failed: {e}")
                         continue
+            
+            # Batch logging for NJOY results
+            if generate_ace and not dry_run and njoy_results:
+                _log_njoy_batch_results(njoy_results, file_key, i+1, temperatures, summary_data)
             
             processed_files += 1
             _logger.info(f"[ENDF] File {i+1}: Successfully processed all samples")
@@ -754,7 +865,7 @@ def perturb_ENDF_files(
                 if ace_info['enabled']:
                     _logger.info(f"  ► ACE generation: ENABLED")
                     if ace_info['temperatures']:
-                        temps_str = ', '.join(f"{t:.1f}K" for t in ace_info['temperatures'])
+                        temps_str = ', '.join(str(t).rstrip('0').rstrip('.') if '.' in str(t) else str(t) for t in ace_info['temperatures'])
                         _logger.info(f"    • Temperatures: {temps_str}")
                     
                     # Note: We would need to update the NJOY processing to track successful/failed ACE generations

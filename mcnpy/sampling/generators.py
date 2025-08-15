@@ -6,6 +6,12 @@ import scipy.sparse.csgraph as cs
 from typing import List, Sequence, Optional, Tuple, Dict, Any
 
 from mcnpy.cov.covmat import CovMat
+from mcnpy.cov.decomposition import (
+    verify_cholesky_decomposition,
+    verify_eigen_decomposition, 
+    verify_svd_decomposition,
+    verify_pca_decomposition
+)
 
 
 
@@ -56,10 +62,17 @@ def _pca_decomposition_sampling(
     seed: Optional[int],
     trunc_threshold: float,
     verbose: bool,
-) -> np.ndarray:
+    space: str = "log",
+    logger = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """
     Draw N(0, Σ) samples via PCA truncation while capturing
     `trunc_threshold` of the variance.
+    
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray, np.ndarray, int]
+        (samples, eigenvalues, eigenvectors, k) where k is number of components used
     """
     # 1) Force symmetry
     T = (cov_mat + cov_mat.T) / 2.0
@@ -83,13 +96,26 @@ def _pca_decomposition_sampling(
         print(f"PCA: using k={k} components "
               f"({cumvar[k-1] / total_var:.4f} variance)")
 
-    # 6) Build transform L and draw uncorrelated Z
+    # 6) Verify PCA decomposition quality
+    if verbose:
+        verify_pca_decomposition(
+            original_matrix=T,
+            eigvals=eigvals,
+            eigvecs=eigvecs,
+            k=k,
+            space=space,
+            verbose=verbose,
+            logger=logger
+        )
+
+    # 7) Build transform L and draw uncorrelated Z
     Vred    = eigvecs[:, :k]
     sqrt_D  = np.sqrt(eigvals[:k])
     L       = Vred @ np.diag(sqrt_D)
     Z       = _uncorrelated(k, n_samples, sampling_method, seed)
 
-    return Z @ L.T                      # shape (n_samples, p)
+    samples = Z @ L.T                      # shape (n_samples, p)
+    return samples, eigvals, eigvecs, k
 
 
 
@@ -572,16 +598,53 @@ def generate_samples(
         if method == "pca":
             Y = _pca_decomposition_sampling(
                 cov_mat, n_samples, sampling_method, seed,
-                TRUNC_THRESHOLD, verbose
+                TRUNC_THRESHOLD, verbose, space, logger
             )
         else:
             if method == "cholesky":
-                L = cov_fixed.cholesky_decomposition(space=space, verbose=verbose, logger=logger)
+                try:
+                    L = cov_fixed.cholesky_decomposition(space=space, verbose=verbose, logger=logger)
+                    # Verify Cholesky decomposition quality
+                    if verbose:
+                        verify_cholesky_decomposition(
+                            original_matrix=cov_mat,
+                            L=L,
+                            space=space,
+                            verbose=verbose,
+                            logger=logger
+                        )
+                except Exception as chol_err:
+                    if verbose and logger:
+                        logger.info(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
+                    elif verbose:
+                        print(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
+                    raise  # Re-raise the original exception
             elif method == "eigen":
                 eigvals, eigvecs = cov_fixed.eigen_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)
+                # Verify eigendecomposition quality
+                if verbose:
+                    verify_eigen_decomposition(
+                        original_matrix=cov_mat,
+                        eigvals=eigvals,
+                        eigvecs=eigvecs,
+                        space=space,
+                        verbose=verbose,
+                        logger=logger
+                    )
                 L = eigvecs @ np.diag(np.sqrt(eigvals))
             elif method == "svd":
-                U, S, _ = cov_fixed.svd_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)
+                U, S, Vt = cov_fixed.svd_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)
+                # Verify SVD quality
+                if verbose:
+                    verify_svd_decomposition(
+                        original_matrix=cov_mat,
+                        U=U,
+                        S=S,
+                        Vt=Vt,
+                        space=space,
+                        verbose=verbose,
+                        logger=logger
+                    )
                 L = U @ np.diag(np.sqrt(S))
             else:
                 raise ValueError(
@@ -752,16 +815,53 @@ def generate_endf_samples(
     if method == "pca":
         Y = _pca_decomposition_sampling(
             cov_mat, n_samples, sampling_method, seed,
-            TRUNC_THRESHOLD, verbose
+            TRUNC_THRESHOLD, verbose, space, logger
         )
     else:
         if method == "cholesky":
-            L = mf34_cov.cholesky_decomposition(space=space, verbose=verbose, logger=logger)
+            try:
+                L = mf34_cov.cholesky_decomposition(space=space, verbose=verbose, logger=logger)
+                # Verify Cholesky decomposition quality
+                if verbose:
+                    verify_cholesky_decomposition(
+                        original_matrix=cov_mat,
+                        L=L,
+                        space=space,
+                        verbose=verbose,
+                        logger=logger
+                    )
+            except Exception as chol_err:
+                if verbose and logger:
+                    logger.info(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
+                elif verbose:
+                    print(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
+                raise  # Re-raise the original exception
         elif method == "eigen":
             eigvals, eigvecs = mf34_cov.eigen_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)
+            # Verify eigendecomposition quality
+            if verbose:
+                verify_eigen_decomposition(
+                    original_matrix=cov_mat,
+                    eigvals=eigvals,
+                    eigvecs=eigvecs,
+                    space=space,
+                    verbose=verbose,
+                    logger=logger
+                )
             L = eigvecs @ np.diag(np.sqrt(eigvals))
         elif method == "svd":
-            U, S, _ = mf34_cov.svd_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)
+            U, S, Vt = mf34_cov.svd_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)
+            # Verify SVD quality
+            if verbose:
+                verify_svd_decomposition(
+                    original_matrix=cov_mat,
+                    U=U,
+                    S=S,
+                    Vt=Vt,
+                    space=space,
+                    verbose=verbose,
+                    logger=logger
+                )
             L = U @ np.diag(np.sqrt(S))
         else:
             raise ValueError(

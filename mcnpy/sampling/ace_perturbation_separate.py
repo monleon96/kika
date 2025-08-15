@@ -393,7 +393,8 @@ def perturb_seprate_ACE_files(
         # Look for any sample file to get the ACE structure
         ace_file = None
         for temp in temperatures:
-            temp_str = f"{int(temp)}"
+            # Use exact temperature formatting to match ENDF perturbation directory structure
+            temp_str = str(temp).rstrip('0').rstrip('.') if '.' in str(temp) else str(temp)
             sample_dir = os.path.join(root_dir, "ace", temp_str, str(zaid), "0001")
             if os.path.exists(sample_dir):
                 # Get the expected file extension for this temperature
@@ -409,7 +410,12 @@ def perturb_seprate_ACE_files(
         
         if ace_file is None:
             _logger.error(f"[ACE] [ERROR] No representative ACE file found for ZAID {zaid}")
-            _logger.error(f"  Looked in: {root_dir}/ace/*/{ zaid}/0001/")
+            # Show the exact temperature directories that were searched
+            searched_paths = []
+            for temp in temperatures:
+                temp_str = str(temp).rstrip('0').rstrip('.') if '.' in str(temp) else str(temp)
+                searched_paths.append(f"{root_dir}/ace/{temp_str}/{zaid}/0001/")
+            _logger.error(f"  Looked in: {searched_paths}")
             summary_data[zaid] = {
                 "representative_ace": "Not found",
                 "cov_file": os.path.basename(cov_file),
@@ -782,7 +788,8 @@ def perturb_seprate_ACE_files(
             
             # Try to find ACE file for this sample across all temperatures
             for temp in temperatures:
-                temp_str = f"{temp:.1f}K"
+                # Use exact temperature formatting to match ENDF perturbation directory structure
+                temp_str = str(temp).rstrip('0').rstrip('.') if '.' in str(temp) else str(temp)
                 sample_dir = os.path.join(root_dir, "ace", temp_str, str(zaid), sample_str)
                 
                 if os.path.exists(sample_dir):
@@ -1064,7 +1071,8 @@ def _copy_files_to_temperature_directories(
         logger.info(f"[COPY] Copying summary files to temperature directories for ZAID {zaid}")
     
     for temp in temperatures:
-        temp_str = f"{temp:.1f}K"
+        # Use exact temperature formatting to match ENDF perturbation directory structure
+        temp_str = str(temp).rstrip('0').rstrip('.') if '.' in str(temp) else str(temp)
         temp_ace_dir = os.path.join(root_dir, "ace", temp_str)
         
         # Create ZAID-specific directory in this temperature
@@ -1140,7 +1148,8 @@ def _copy_master_files_to_temperature_directories(
     import shutil
     
     for temp in temperatures:
-        temp_str = f"{temp:.1f}K"
+        # Use exact temperature formatting to match ENDF perturbation directory structure
+        temp_str = str(temp).rstrip('0').rstrip('.') if '.' in str(temp) else str(temp)
         temp_ace_dir = os.path.join(root_dir, "ace", temp_str)
         os.makedirs(temp_ace_dir, exist_ok=True)
         

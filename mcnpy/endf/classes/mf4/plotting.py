@@ -4,6 +4,122 @@ from typing import List, Optional, Union, Tuple, Dict, Any
 from ...._plot_settings import setup_plot_style, format_axes
 
 
+def _plot_uncertainty_bands(ax, coeff_energies, coeff_values, mf34_covmat, isotope_id, mt, order, 
+                           uncertainty_sigma, color, alpha=0.2):
+    """
+    Helper function to plot uncertainty bands using actual energy bin boundaries from MF34 covariance data.
+    
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axes to plot on
+    coeff_energies : array-like
+        Energy values for coefficient data
+    coeff_values : array-like  
+        Coefficient values
+    mf34_covmat : MF34CovMat
+        Covariance matrix object
+    isotope_id : int
+        Isotope ID
+    mt : int
+        MT reaction number
+    order : int
+        Legendre coefficient order
+    uncertainty_sigma : float
+        Number of sigma levels for uncertainty bands
+    color : str or tuple
+        Color for the uncertainty bands
+    alpha : float
+        Transparency level for uncertainty bands
+        
+    Returns
+    -------
+    bool
+        True if uncertainty bands were plotted successfully, False otherwise
+    """
+    try:
+        # Get uncertainty data for this order
+        unc_data = mf34_covmat.get_uncertainties_for_legendre_coefficient(isotope_id, mt, order)
+        if unc_data is None:
+            return False
+            
+        unc_energies = unc_data['energies']
+        unc_values = unc_data['uncertainties']
+        
+        # Get the actual energy bin boundaries from the covariance matrix
+        bin_boundaries = None
+        for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
+            mf34_covmat.isotope_rows, mf34_covmat.reaction_rows, mf34_covmat.l_rows,
+            mf34_covmat.isotope_cols, mf34_covmat.reaction_cols, mf34_covmat.l_cols
+        )):
+            # Look for diagonal variance matrix (L = L) for the specified parameters
+            if (iso_r == isotope_id and iso_c == isotope_id and 
+                mt_r == mt and mt_c == mt and 
+                l_r == order and l_c == order):
+                
+                bin_boundaries = np.array(mf34_covmat.energy_grids[i])
+                break
+        
+        if bin_boundaries is None or len(bin_boundaries) != len(unc_energies) + 1:
+            # Fallback: can't find proper bin boundaries, skip uncertainty plotting
+            print(f"Warning: Could not find proper energy bin boundaries for uncertainty plotting of order {order}")
+            return False
+        
+        # Find the intersection of energy ranges between coefficients and uncertainties
+        min_energy = max(min(coeff_energies), min(bin_boundaries))
+        max_energy = min(max(coeff_energies), max(bin_boundaries))
+        
+        if min_energy >= max_energy:
+            print(f"Warning: No overlapping energy range between coefficients and uncertainties for order {order}")
+            return False
+        
+        # For each energy bin, find coefficient points within that bin and apply the bin's uncertainty
+        band_energies = []
+        band_coeffs = []
+        band_uncertainties = []
+        
+        for i in range(len(bin_boundaries) - 1):
+            bin_min = bin_boundaries[i]
+            bin_max = bin_boundaries[i + 1]
+            
+            # Find coefficient points in this bin
+            bin_coeff_indices = [j for j, e in enumerate(coeff_energies) 
+                               if bin_min <= e < bin_max or (i == len(bin_boundaries) - 2 and bin_min <= e <= bin_max)]
+            
+            if bin_coeff_indices and i < len(unc_values):
+                for idx in bin_coeff_indices:
+                    band_energies.append(coeff_energies[idx])
+                    band_coeffs.append(coeff_values[idx])
+                    band_uncertainties.append(unc_values[i])  # Same uncertainty for the whole bin
+        
+        if not band_energies:
+            print(f"Warning: No coefficient points found within uncertainty energy bins for order {order}")
+            return False
+        
+        # Convert to numpy arrays
+        band_energies = np.array(band_energies)
+        band_coeffs = np.array(band_coeffs)
+        band_uncertainties = np.array(band_uncertainties)
+        
+        # Convert relative uncertainties to absolute uncertainties
+        # MF34 covariance data is typically stored as relative covariances
+        absolute_unc = band_uncertainties * np.abs(band_coeffs) * uncertainty_sigma
+        
+        # Create uncertainty bounds
+        upper_bound = band_coeffs + absolute_unc
+        lower_bound = band_coeffs - absolute_unc
+        
+        # Plot uncertainty bands as shaded area
+        ax.fill_between(band_energies, lower_bound, upper_bound, 
+                       color=color, alpha=alpha, linewidth=0)
+        
+        return True
+        
+    except Exception as e:
+        print(f"Warning: Error plotting uncertainty bands for order {order}: {e}")
+        return False
+
+
 def plot_legendre_coefficients_from_endf(
     endf,
     mt: int,
@@ -14,6 +130,7 @@ def plot_legendre_coefficients_from_endf(
     legend_loc: str = 'best',
     marker: bool = False,
     include_uncertainties: bool = False,
+    uncertainty_sigma: float = 1.0,
     **kwargs
 ) -> plt.Figure:
     """
@@ -43,6 +160,8 @@ def plot_legendre_coefficients_from_endf(
         Whether to include markers on the plot lines
     include_uncertainties : bool
         Whether to include uncertainty bands from MF34 data if available
+    uncertainty_sigma : float
+        Number of sigma levels for uncertainty bands (default: 1.0 for 1σ)
     **kwargs
         Additional plotting arguments
     
@@ -126,44 +245,6 @@ def plot_legendre_coefficients_from_endf(
     elif not isinstance(orders, list):
         orders = list(orders)  # Convert other iterables to list
     
-    # Get uncertainties if requested and MF34 data is available
-    uncertainties = {}
-    if include_uncertainties and 34 in endf.mf:
-        try:
-            mf34 = endf.mf[34]
-            # Check if MT exists in MF34 before proceeding
-            if mt in mf34.mt:
-                # Use the existing to_ang_covmat method to convert MF34MT to MF34CovMat
-                mf34_mt = mf34.mt[mt]
-                mf34_covmat = mf34_mt.to_ang_covmat()
-                
-                # Get the isotope ID from mf4_data
-                isotope_id = int(mf4_data.zaid) if hasattr(mf4_data, 'zaid') else 0
-                
-                # Extract uncertainties for each requested Legendre order
-                uncertainties_data = mf34_covmat.get_uncertainties_for_legendre_coefficient(
-                    isotope=isotope_id, 
-                    mt=mt, 
-                    l_coefficient=orders
-                )
-                
-                # Convert to the format expected by the plotting code
-                if isinstance(uncertainties_data, dict):
-                    # Handle both single coefficient (dict) and multiple coefficients (dict of dicts)
-                    if 'energies' in uncertainties_data:  # Single coefficient result
-                        # This shouldn't happen when passing a list, but handle it just in case
-                        uncertainties[orders[0]] = uncertainties_data
-                    else:  # Multiple coefficients result
-                        for l_order, unc_data in uncertainties_data.items():
-                            if unc_data is not None:
-                                uncertainties[l_order] = unc_data
-            else:
-                print(f"Warning: MT{mt} not found in MF34 data. No uncertainties will be plotted.")
-                        
-        except Exception as e:
-            print(f"Warning: Could not extract uncertainties from MF34: {e}")
-            uncertainties = {}
-    
     # Plot each order
     for i, order in enumerate(orders):
         color = colors[i % len(colors)]
@@ -185,8 +266,11 @@ def plot_legendre_coefficients_from_endf(
         
         if energy_values:
             # Create label based on whether uncertainties are included
-            if include_uncertainties and order in uncertainties:
-                label = f"$a_{{{order}}} \\pm 1\\sigma$"
+            if include_uncertainties and 34 in endf.mf and mt in endf.mf[34].mt:
+                if uncertainty_sigma == 1.0:
+                    label = f"$a_{{{order}}} \\pm 1\\sigma$"
+                else:
+                    label = f"$a_{{{order}}} \\pm {uncertainty_sigma}\\sigma$"
             else:
                 label = f"$a_{{{order}}}$"
             
@@ -199,86 +283,21 @@ def plot_legendre_coefficients_from_endf(
                         label=label, linewidth=2)
             
             # Add uncertainty bands if available and requested
-            if include_uncertainties and order in uncertainties:
-                unc_data = uncertainties[order]
-                unc_energies = unc_data['energies']
-                unc_values = unc_data['uncertainties']
+            if include_uncertainties and 34 in endf.mf and mt in endf.mf[34].mt:
+                # Get the MF34 covariance matrix data
+                mf34_mt = endf.mf[34].mt[mt]
+                mf34_covmat = mf34_mt.to_ang_covmat()
+                isotope_id = int(mf4_data.zaid) if hasattr(mf4_data, 'zaid') else 0
                 
-                # Ensure arrays have the same length and are valid for interpolation
-                if (len(unc_energies) > 1 and len(unc_values) > 1 and 
-                    len(unc_energies) == len(unc_values)):
-                    
-                    # Create arrays for the energy range where we have both coefficient and uncertainty data
-                    # Find the intersection of energy ranges
-                    min_energy = max(min(energy_values), min(unc_energies))
-                    max_energy = min(max(energy_values), max(unc_energies))
-                    
-                    if min_energy < max_energy:
-                        # Since covariance data represents energy bins, uncertainties should be constant within bins
-                        # Create step-wise uncertainty bands rather than smooth interpolation
-                        
-                        # For each uncertainty energy bin, find all coefficient points within that bin
-                        bin_energies = []
-                        bin_coeffs = []
-                        bin_uncertainties = []
-                        
-                        # Process each uncertainty bin
-                        for i in range(len(unc_energies)):
-                            # Find coefficient points that fall within this uncertainty bin
-                            # For bins, we need to determine the bin boundaries
-                            if i == 0:
-                                # First bin: from minimum energy to midpoint between first and second bin centers
-                                if len(unc_energies) > 1:
-                                    bin_max = (unc_energies[i] + unc_energies[i+1]) / 2
-                                else:
-                                    bin_max = max_energy
-                                bin_min = min_energy
-                            elif i == len(unc_energies) - 1:
-                                # Last bin: from midpoint to maximum energy
-                                bin_min = (unc_energies[i-1] + unc_energies[i]) / 2
-                                bin_max = max_energy
-                            else:
-                                # Middle bins: from midpoint to midpoint
-                                bin_min = (unc_energies[i-1] + unc_energies[i]) / 2
-                                bin_max = (unc_energies[i] + unc_energies[i+1]) / 2
-                            
-                            # Find coefficient points in this bin
-                            bin_coeff_indices = [j for j, e in enumerate(energy_values) 
-                                               if bin_min <= e <= bin_max]
-                            
-                            if bin_coeff_indices:
-                                for idx in bin_coeff_indices:
-                                    bin_energies.append(energy_values[idx])
-                                    bin_coeffs.append(coeff_values[idx])
-                                    bin_uncertainties.append(unc_values[i])  # Same uncertainty for the whole bin
-                        
-                        if bin_energies:
-                            # Convert to numpy arrays
-                            bin_energies = np.array(bin_energies)
-                            bin_coeffs = np.array(bin_coeffs)
-                            bin_uncertainties = np.array(bin_uncertainties)
-                            
-                            # Convert relative uncertainties to absolute uncertainties
-                            # MF34 covariance data is typically stored as relative covariances
-                            absolute_unc = bin_uncertainties * np.abs(bin_coeffs)
-                            
-                            # Create uncertainty bounds
-                            upper_bound = bin_coeffs + absolute_unc
-                            lower_bound = bin_coeffs - absolute_unc
-                            
-                            # Plot uncertainty bands as shaded area with same color as line
-                            ax.fill_between(bin_energies, lower_bound, upper_bound, 
-                                          color=color, alpha=0.2, linewidth=0)
-                    else:
-                        print(f"Warning: No overlapping energy range between coefficients and uncertainties for order {order}")
-                else:
-                    print(f"Warning: Uncertainty data for order {order} has inconsistent array lengths or insufficient data")
+                # Use the helper function to plot uncertainty bands
+                _plot_uncertainty_bands(ax, energy_values, coeff_values, mf34_covmat, 
+                                       isotope_id, mt, order, uncertainty_sigma, color)
     
     # Create an improved title with isotope and reaction information
     title_parts = []
     
     # Add isotope information if available
-    isotope_symbol = endf.get_isotope_symbol()
+    isotope_symbol = endf.isotope
     if isotope_symbol:
         title_parts.append(f"{isotope_symbol}")
     
@@ -534,14 +553,76 @@ def plot_legendre_coefficient_uncertainties_from_endf(
                 raise ValueError(f"uncertainty_type must be 'relative' or 'absolute', got '{uncertainty_type}'")
             
             # Plot the uncertainty values using step plot since uncertainties are constant within energy bins
-            ax.step(unc_energies, plot_values, where='mid', color=color, 
-                   label=label, linewidth=2, markersize=4)
+            # Get the actual energy bin boundaries from the covariance matrix's energy_grids attribute
+            bin_boundaries = None
+            
+            # Find the energy grid that corresponds to this (isotope, mt, order) combination
+            for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
+                mf34_covmat.isotope_rows, mf34_covmat.reaction_rows, mf34_covmat.l_rows,
+                mf34_covmat.isotope_cols, mf34_covmat.reaction_cols, mf34_covmat.l_cols
+            )):
+                # Look for diagonal variance matrix (L = L) for the specified parameters
+                if (iso_r == isotope_id and iso_c == isotope_id and 
+                    mt_r == mt and mt_c == mt and 
+                    l_r == order and l_c == order):
+                    
+                    bin_boundaries = np.array(mf34_covmat.energy_grids[i])
+                    break
+            
+            if len(unc_energies) == 1:
+                # Single point - plot as horizontal line across entire range
+                ax.axhline(y=plot_values[0], color=color, label=label, linewidth=2)
+            else:
+                if bin_boundaries is not None and len(bin_boundaries) == len(unc_energies) + 1:
+                    # We have the actual bin boundaries - use them for proper step plot
+                    step_energies = bin_boundaries
+                    step_values = np.append(plot_values, plot_values[-1])  # Extend last value for step plot
+                    
+                    # Plot as step function
+                    ax.step(step_energies[:-1], step_values[:-1], where='post', color=color, 
+                           label=label, linewidth=2)
+                    
+                    # Extend the last step to the final boundary
+                    ax.hlines(step_values[-1], step_energies[-2], step_energies[-1], 
+                             colors=color, linewidth=2)
+                             
+                else:
+                    # Fallback: estimate bin boundaries from bin centers
+                    # This approach may not be accurate for actual energy bin structure
+                    step_energies = []
+                    step_values = []
+                    
+                    # Add first boundary (extrapolated)
+                    if len(unc_energies) > 1:
+                        first_boundary = unc_energies[0] - (unc_energies[1] - unc_energies[0]) / 2
+                        step_energies.append(max(first_boundary, 1e-5))  # Don't go below 1e-5 eV
+                    else:
+                        step_energies.append(unc_energies[0] / 2)
+                    step_values.append(plot_values[0])
+                    
+                    # Add boundaries between consecutive points
+                    for i in range(len(unc_energies) - 1):
+                        boundary = (unc_energies[i] + unc_energies[i + 1]) / 2
+                        step_energies.append(boundary)
+                        step_values.append(plot_values[i])
+                    
+                    # Add the last bin
+                    step_energies.append(unc_energies[-1] + (unc_energies[-1] - unc_energies[-2]) / 2)
+                    step_values.append(plot_values[-1])
+                    
+                    # Plot as step function with 'post' positioning
+                    ax.step(step_energies[:-1], step_values[:-1], where='post', color=color, 
+                           label=label, linewidth=2)
+                    
+                    # Extend the last step to the final boundary
+                    ax.hlines(step_values[-1], step_energies[-2], step_energies[-1], 
+                             colors=color, linewidth=2)
     
     # Create title with isotope and reaction information
     title_parts = []
     
     # Add isotope information if available
-    isotope_symbol = endf.get_isotope_symbol()
+    isotope_symbol = endf.isotope
     if isotope_symbol:
         title_parts.append(f"{isotope_symbol}")
     
@@ -1026,7 +1107,8 @@ def plot_legendre_coefficient_comparison(
     style: str = 'default',
     figsize: Tuple[float, float] = (8, 5),
     legend_loc: str = 'best',
-    # include_uncertainties parameter removed
+    include_uncertainties: bool = False,
+    uncertainty_sigma: float = 1.0,
     reference_label: Optional[str] = None,
     comparison_labels: Optional[Union[str, List[str]]] = None,
     **kwargs
@@ -1057,7 +1139,10 @@ def plot_legendre_coefficient_comparison(
         Figure size
     legend_loc : str
         Legend location
-    # Uncertainty plotting is not supported in this version
+    include_uncertainties : bool
+        Whether to include uncertainty bands from MF34 data for the reference file if available
+    uncertainty_sigma : float
+        Number of sigma levels for uncertainty bands (default: 1.0 for 1σ)
     reference_label : str, optional
         Label for the reference line. If None, uses "Reference"
     comparison_labels : str or list of str, optional
@@ -1089,7 +1174,27 @@ def plot_legendre_coefficient_comparison(
     ... )
     >>> fig.show()
     
-    # Example with multiple files (uncertainties not supported):
+    Compare with uncertainties for the reference file:
+    
+    >>> fig = plot_legendre_coefficient_comparison(
+    ...     ref_endf, comp_endf, mt=2, order=1,
+    ...     include_uncertainties=True,
+    ...     reference_label="ENDF/B-VIII.0",
+    ...     comparison_labels="JEFF-3.3"
+    ... )
+    >>> fig.show()
+    
+    Compare with 2-sigma uncertainty bands:
+    
+    >>> fig = plot_legendre_coefficient_comparison(
+    ...     ref_endf, comp_endf, mt=2, order=1,
+    ...     include_uncertainties=True, uncertainty_sigma=2.0,
+    ...     reference_label="ENDF/B-VIII.0",
+    ...     comparison_labels="JEFF-3.3"
+    ... )
+    >>> fig.show()
+    
+    # Example with multiple files:
     # >>> comp_files = [read_endf('file1.txt'), read_endf('file2.txt')]
     # >>> fig = plot_legendre_coefficient_comparison(
     # ...     ref_endf, comp_files, mt=2, order=2,
@@ -1166,11 +1271,30 @@ def plot_legendre_coefficient_comparison(
         ax.text(0.5, 0.5, 'No Legendre coefficient data available in reference file', 
                 ha='center', va='center', transform=ax.transAxes)
         return fig
+    
     # Plot reference data (solid line)
     ref_color = colors[0]
-    ref_label = reference_label or "Reference"
+    if include_uncertainties and 34 in reference_endf.mf and mt in reference_endf.mf[34].mt:
+        if uncertainty_sigma == 1.0:
+            ref_label = f"{reference_label or 'Reference'} ± 1σ"
+        else:
+            ref_label = f"{reference_label or 'Reference'} ± {uncertainty_sigma}σ"
+    else:
+        ref_label = reference_label or "Reference"
     ax.plot(ref_energies, ref_coeffs, '-', color=ref_color,
         label=ref_label, linewidth=2)
+    
+    # Add uncertainty bands for reference data if available and requested
+    if include_uncertainties and 34 in reference_endf.mf and mt in reference_endf.mf[34].mt:
+        # Get the MF34 covariance matrix data
+        mf34_mt = reference_endf.mf[34].mt[mt]
+        mf34_covmat = mf34_mt.to_ang_covmat()
+        ref_mf4_data = reference_endf.mf[4].mt[mt]
+        isotope_id = int(ref_mf4_data.zaid) if hasattr(ref_mf4_data, 'zaid') else 0
+        
+        # Use the helper function to plot uncertainty bands
+        _plot_uncertainty_bands(ax, ref_energies, ref_coeffs, mf34_covmat, 
+                               isotope_id, mt, order, uncertainty_sigma, ref_color)
     
     # Plot comparison data (dashed lines)
     for i, comp_endf in enumerate(comparison_endfs):
@@ -1200,7 +1324,7 @@ def plot_legendre_coefficient_comparison(
     title_parts = []
     
     # Add isotope information from reference if available
-    isotope_symbol = reference_endf.get_isotope_symbol() if hasattr(reference_endf, 'get_isotope_symbol') else None
+    isotope_symbol = reference_endf.isotope
     if isotope_symbol:
         title_parts.append(f"{isotope_symbol}")
     
