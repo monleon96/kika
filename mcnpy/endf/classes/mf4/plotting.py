@@ -4,6 +4,44 @@ from typing import List, Optional, Union, Tuple, Dict, Any
 from ...._plot_settings import setup_plot_style, format_axes
 
 
+def _generate_unique_labels(endf_list, labels):
+    """
+    Generate unique labels for ENDF objects, handling duplicates properly.
+    
+    Parameters
+    ----------
+    endf_list : list
+        List of ENDF objects
+    labels : None, str, or list of str
+        Label specification
+        
+    Returns
+    -------
+    list of str
+        Unique labels for each ENDF object
+    """
+    if labels is None:
+        # For multiple ENDF objects without custom labels, use simple indices
+        if len(endf_list) > 1:
+            endf_labels = [str(i+1) for i in range(len(endf_list))]
+        else:
+            # For single ENDF, no label needed (will just show isotope - coefficient)
+            endf_labels = [None]
+    elif isinstance(labels, str):
+        if len(endf_list) == 1:
+            endf_labels = [labels]
+        else:
+            # Use the string as a prefix with indices
+            endf_labels = [f"{labels} {i+1}" for i in range(len(endf_list))]
+    else:
+        endf_labels = list(labels)
+        # Pad with generic labels if not enough provided
+        while len(endf_labels) < len(endf_list):
+            endf_labels.append(f"ENDF {len(endf_labels)+1}")
+    
+    return endf_labels
+
+
 def _plot_uncertainty_bands(ax, coeff_energies, coeff_values, mf34_covmat, isotope_id, mt, order, 
                            uncertainty_sigma, color, alpha=0.2):
     """
@@ -121,7 +159,7 @@ def _plot_uncertainty_bands(ax, coeff_energies, coeff_values, mf34_covmat, isoto
 
 
 def plot_legendre_coefficients_from_endf(
-    endf,
+    endf: Union[object, List[object]],
     mt: int,
     orders: Optional[Union[int, List[int]]] = None,
     energy_range: Optional[Tuple[float, float]] = None,
@@ -131,18 +169,20 @@ def plot_legendre_coefficients_from_endf(
     marker: bool = False,
     include_uncertainties: bool = False,
     uncertainty_sigma: float = 1.0,
+    labels: Optional[Union[str, List[str]]] = None,
     **kwargs
 ) -> plt.Figure:
     """
-    Plot specific Legendre coefficients as a function of energy from an ENDF object.
+    Plot specific Legendre coefficients as a function of energy from one or more ENDF objects.
     
-    This function automatically accesses the MF4 file and specified MT from the ENDF object,
+    This function automatically accesses the MF4 file and specified MT from the ENDF object(s),
     and optionally includes uncertainties from MF34 if available.
     
     Parameters
     ----------
-    endf : ENDF
-        ENDF data object containing MF4 (and optionally MF34) files
+    endf : ENDF or list of ENDF
+        ENDF data object(s) containing MF4 (and optionally MF34) files.
+        If a list is provided, all ENDF objects will be plotted on the same figure.
     mt : int
         MT reaction number to plot (e.g., 2 for elastic scattering)
     orders : int or list of int, optional
@@ -162,6 +202,10 @@ def plot_legendre_coefficients_from_endf(
         Whether to include uncertainty bands from MF34 data if available
     uncertainty_sigma : float
         Number of sigma levels for uncertainty bands (default: 1.0 for 1σ)
+    labels : str or list of str, optional
+        Labels for each ENDF object in the legend. If None, uses isotope symbols
+        or generic labels. If a single string and multiple ENDF objects, uses
+        the string as a prefix with indices.
     **kwargs
         Additional plotting arguments
     
@@ -173,32 +217,43 @@ def plot_legendre_coefficients_from_endf(
     Raises
     ------
     ValueError
-        If the ENDF object doesn't contain MF4 data or the specified MT
+        If any ENDF object doesn't contain MF4 data or the specified MT
     
     Examples
     --------
-    Plot elastic scattering Legendre coefficients with uncertainties:
+    Plot elastic scattering Legendre coefficients from multiple ENDF files:
     
     >>> from mcnpy.endf.read_endf import read_endf
-    >>> endf = read_endf('path/to/endf_file.txt')
+    >>> endf1 = read_endf('path/to/endf_file1.txt')
+    >>> endf2 = read_endf('path/to/endf_file2.txt')
     >>> fig = plot_legendre_coefficients_from_endf(
-    ...     endf, mt=2, orders=[1, 2, 3], 
+    ...     [endf1, endf2], mt=2, orders=[1, 2, 3], 
+    ...     labels=['Library A', 'Library B'],
     ...     include_uncertainties=True
     ... )
     >>> fig.show()
     """
-    # Check if ENDF object has MF4 data
-    if 4 not in endf.mf:
-        raise ValueError(f"ENDF object does not contain MF4 (angular distribution) data")
+    # Convert single ENDF object to list for uniform processing
+    if not isinstance(endf, list):
+        endf_list = [endf]
+    else:
+        endf_list = endf
     
-    mf4 = endf.mf[4]
+    # Handle labels
+    endf_labels = _generate_unique_labels(endf_list, labels)
     
-    # Check if the specified MT exists in MF4
-    if mt not in mf4.mt:
-        available_mts = list(mf4.mt.keys())
-        raise ValueError(f"MT{mt} not found in MF4. Available MTs: {available_mts}")
-    
-    mf4_data = mf4.mt[mt]
+    # Validate all ENDF objects first
+    for i, endf_obj in enumerate(endf_list):
+        # Check if ENDF object has MF4 data
+        if 4 not in endf_obj.mf:
+            raise ValueError(f"ENDF object {i+1} ({endf_labels[i]}) does not contain MF4 (angular distribution) data")
+        
+        mf4 = endf_obj.mf[4]
+        
+        # Check if the specified MT exists in MF4
+        if mt not in mf4.mt:
+            available_mts = list(mf4.mt.keys())
+            raise ValueError(f"MT{mt} not found in MF4 for ENDF object {i+1} ({endf_labels[i]}). Available MTs: {available_mts}")
     
     # Setup plot style
     plot_kwargs = setup_plot_style(style=style, figsize=figsize, **kwargs)
@@ -206,12 +261,16 @@ def plot_legendre_coefficients_from_endf(
     ax = plot_kwargs['ax']
     colors = plot_kwargs['_colors']
     
-    # Check if the object has Legendre coefficients
-    if not hasattr(mf4_data, 'legendre_energies') or not hasattr(mf4_data, 'legendre_coefficients'):
+    # Get the first valid ENDF object to determine available orders
+    first_endf = endf_list[0]
+    first_mf4_data = first_endf.mf[4].mt[mt]
+    
+    # Check if the first object has Legendre coefficients
+    if not hasattr(first_mf4_data, 'legendre_energies') or not hasattr(first_mf4_data, 'legendre_coefficients'):
         # Provide helpful error message for unsupported types
-        obj_class_name = type(mf4_data).__name__
-        if hasattr(mf4_data, 'distribution_type'):
-            dist_type = mf4_data.distribution_type
+        obj_class_name = type(first_mf4_data).__name__
+        if hasattr(first_mf4_data, 'distribution_type'):
+            dist_type = first_mf4_data.distribution_type
             error_msg = f"Cannot plot Legendre coefficients for {obj_class_name} object.\n" \
                        f"This object contains {dist_type} angular distributions,\n" \
                        f"which do not have Legendre coefficients.\n\n" \
@@ -226,80 +285,106 @@ def plot_legendre_coefficients_from_endf(
         ax.set_title("Unsupported Data Type")
         return fig
     
-    # Get data
-    energies = mf4_data.legendre_energies
-    coeffs_list = mf4_data.legendre_coefficients
-    
-    if not energies or not coeffs_list:
-        ax.text(0.5, 0.5, 'No Legendre coefficient data available', 
-                ha='center', va='center', transform=ax.transAxes)
-        return fig
-    
-    # Determine which orders to plot
+    # Determine which orders to plot based on first ENDF object
     if orders is None:
-        # Plot all available orders
-        max_available = max(len(coeffs) for coeffs in coeffs_list)
-        orders = list(range(max_available))
+        # Plot all available orders from first object
+        first_coeffs_list = first_mf4_data.legendre_coefficients
+        if first_coeffs_list:
+            max_available = max(len(coeffs) for coeffs in first_coeffs_list)
+            orders = list(range(max_available))
+        else:
+            ax.text(0.5, 0.5, 'No Legendre coefficient data available', 
+                    ha='center', va='center', transform=ax.transAxes)
+            return fig
     elif isinstance(orders, int):
         orders = [orders]
     elif not isinstance(orders, list):
         orders = list(orders)  # Convert other iterables to list
     
-    # Plot each order
-    for i, order in enumerate(orders):
-        color = colors[i % len(colors)]
+    # Track all energies for setting x-axis limits later
+    all_energies = []
+    
+    # Plot each ENDF object
+    for endf_idx, (endf_obj, endf_label) in enumerate(zip(endf_list, endf_labels)):
+        mf4_data = endf_obj.mf[4].mt[mt]
         
-        # Extract coefficient values for this order across all energies
-        coeff_values = []
-        energy_values = []
+        # Skip if this object doesn't have Legendre coefficients
+        if not hasattr(mf4_data, 'legendre_energies') or not hasattr(mf4_data, 'legendre_coefficients'):
+            print(f"Warning: {endf_label} does not have Legendre coefficients, skipping")
+            continue
+            
+        # Get data
+        energies = mf4_data.legendre_energies
+        coeffs_list = mf4_data.legendre_coefficients
         
-        for j, coeffs in enumerate(coeffs_list):
-            # Note: coeffs[0] = a_1, coeffs[1] = a_2, etc.
-            # So order 0 means a_0 (always 1), order 1 means a_1 (coeffs[0]), etc.
-            if order == 0:
-                # a_0 is always 1 (implicit in ENDF format)
-                coeff_values.append(1.0)
-                energy_values.append(energies[j])
-            elif order - 1 < len(coeffs):  # order 1 -> coeffs[0], order 2 -> coeffs[1], etc.
-                coeff_values.append(coeffs[order - 1])
-                energy_values.append(energies[j])
+        if not energies or not coeffs_list:
+            print(f"Warning: {endf_label} has no Legendre coefficient data, skipping")
+            continue
+            
+        all_energies.extend(energies)
         
-        if energy_values:
-            # Create label based on whether uncertainties are included
-            if include_uncertainties and 34 in endf.mf and mt in endf.mf[34].mt:
-                if uncertainty_sigma == 1.0:
-                    label = f"$a_{{{order}}} \\pm 1\\sigma$"
+        # Plot each order for this ENDF object
+        for order_idx, order in enumerate(orders):
+            # Calculate color index: different base colors for each ENDF, 
+            # but cycle through orders within each ENDF
+            color_idx = (endf_idx * len(orders) + order_idx) % len(colors)
+            color = colors[color_idx]
+            
+            # Extract coefficient values for this order across all energies
+            coeff_values = []
+            energy_values = []
+            
+            for j, coeffs in enumerate(coeffs_list):
+                # Note: coeffs[0] = a_1, coeffs[1] = a_2, etc.
+                # So order 0 means a_0 (always 1), order 1 means a_1 (coeffs[0]), etc.
+                if order == 0:
+                    # a_0 is always 1 (implicit in ENDF format)
+                    coeff_values.append(1.0)
+                    energy_values.append(energies[j])
+                elif order - 1 < len(coeffs):  # order 1 -> coeffs[0], order 2 -> coeffs[1], etc.
+                    coeff_values.append(coeffs[order - 1])
+                    energy_values.append(energies[j])
+            
+            if energy_values:
+                # Create label combining ENDF label and coefficient order
+                # Create base label with isotope and coefficient order
+                isotope_symbol = endf_obj.isotope if hasattr(endf_obj, 'isotope') and endf_obj.isotope else 'Unknown'
+                if include_uncertainties and 34 in endf_obj.mf and mt in endf_obj.mf[34].mt:
+                    if uncertainty_sigma == 1.0:
+                        base_label = f"{isotope_symbol} - $a_{{{order}}} \\pm 1\\sigma$"
+                    else:
+                        base_label = f"{isotope_symbol} - $a_{{{order}}} \\pm {uncertainty_sigma}\\sigma$"
                 else:
-                    label = f"$a_{{{order}}} \\pm {uncertainty_sigma}\\sigma$"
-            else:
-                label = f"$a_{{{order}}}$"
-            
-            # Plot the main line
-            if marker:
-                ax.plot(energy_values, coeff_values, '-', color=color,
-                    label=label, linewidth=2, marker='o', markersize=2)
-            else:
-                ax.plot(energy_values, coeff_values, '-', color=color,
-                        label=label, linewidth=2)
-            
-            # Add uncertainty bands if available and requested
-            if include_uncertainties and 34 in endf.mf and mt in endf.mf[34].mt:
-                # Get the MF34 covariance matrix data
-                mf34_mt = endf.mf[34].mt[mt]
-                mf34_covmat = mf34_mt.to_ang_covmat()
-                isotope_id = int(mf4_data.zaid) if hasattr(mf4_data, 'zaid') else 0
+                    base_label = f"{isotope_symbol} - $a_{{{order}}}$"
                 
-                # Use the helper function to plot uncertainty bands
-                _plot_uncertainty_bands(ax, energy_values, coeff_values, mf34_covmat, 
-                                       isotope_id, mt, order, uncertainty_sigma, color)
+                # Add library identifier if multiple ENDFs
+                if endf_label is not None:
+                    label = f"{base_label} ({endf_label})"
+                else:
+                    label = base_label
+                
+                # Plot the main line
+                line_style = '-'
+                if marker:
+                    ax.plot(energy_values, coeff_values, line_style, color=color,
+                        label=label, linewidth=2, marker='o', markersize=2)
+                else:
+                    ax.plot(energy_values, coeff_values, line_style, color=color,
+                            label=label, linewidth=2)
+                
+                # Add uncertainty bands if available and requested
+                if include_uncertainties and 34 in endf_obj.mf and mt in endf_obj.mf[34].mt:
+                    # Get the MF34 covariance matrix data
+                    mf34_mt = endf_obj.mf[34].mt[mt]
+                    mf34_covmat = mf34_mt.to_ang_covmat()
+                    isotope_id = int(mf4_data.zaid) if hasattr(mf4_data, 'zaid') else 0
+                    
+                    # Use the helper function to plot uncertainty bands
+                    _plot_uncertainty_bands(ax, energy_values, coeff_values, mf34_covmat, 
+                                           isotope_id, mt, order, uncertainty_sigma, color)
     
     # Create an improved title with isotope and reaction information
     title_parts = []
-    
-    # Add isotope information if available
-    isotope_symbol = endf.isotope
-    if isotope_symbol:
-        title_parts.append(f"{isotope_symbol}")
     
     # Add reaction information
     from mcnpy._constants import MT_TO_REACTION
@@ -324,8 +409,8 @@ def plot_legendre_coefficients_from_endf(
     )
     
     # Apply energy range limits if specified
-    if energy_range is not None:
-        data_min, data_max = min(energies), max(energies)
+    if energy_range is not None and all_energies:
+        data_min, data_max = min(all_energies), max(all_energies)
         e_min = max(energy_range[0], data_min)
         e_max = min(energy_range[1], data_max)
         ax.set_xlim(e_min, e_max)
@@ -334,7 +419,7 @@ def plot_legendre_coefficients_from_endf(
 
 
 def plot_legendre_coefficient_uncertainties_from_endf(
-    endf,
+    endf: Union[object, List[object]],
     mt: int,
     orders: Optional[Union[int, List[int]]] = None,
     energy_range: Optional[Tuple[float, float]] = None,
@@ -342,18 +427,20 @@ def plot_legendre_coefficient_uncertainties_from_endf(
     figsize: Tuple[float, float] = (8, 5),
     legend_loc: str = 'best',
     uncertainty_type: str = 'relative',
+    labels: Optional[Union[str, List[str]]] = None,
     **kwargs
 ) -> plt.Figure:
     """
-    Plot uncertainties of Legendre coefficients as a function of energy from an ENDF object.
+    Plot uncertainties of Legendre coefficients as a function of energy from one or more ENDF objects.
     
     This function specifically plots the uncertainty values (not the coefficients themselves)
     extracted from MF34 covariance data.
     
     Parameters
     ----------
-    endf : ENDF
-        ENDF data object containing MF4 and MF34 files
+    endf : ENDF or list of ENDF
+        ENDF data object(s) containing MF4 and MF34 files.
+        If a list is provided, all ENDF objects will be plotted on the same figure.
     mt : int
         MT reaction number to plot (e.g., 2 for elastic scattering)
     orders : int or list of int, optional
@@ -369,6 +456,10 @@ def plot_legendre_coefficient_uncertainties_from_endf(
         Legend location
     uncertainty_type : str
         Type of uncertainty to plot: 'relative' (%) or 'absolute'
+    labels : str or list of str, optional
+        Labels for each ENDF object in the legend. If None, uses isotope symbols
+        or generic labels. If a single string and multiple ENDF objects, uses
+        the string as a prefix with indices.
     **kwargs
         Additional plotting arguments
     
@@ -380,41 +471,53 @@ def plot_legendre_coefficient_uncertainties_from_endf(
     Raises
     ------
     ValueError
-        If the ENDF object doesn't contain MF4 or MF34 data, or the specified MT
+        If any ENDF object doesn't contain MF4 or MF34 data, or the specified MT
     
     Examples
     --------
-    Plot uncertainties for elastic scattering Legendre coefficients:
+    Plot uncertainties for elastic scattering Legendre coefficients from multiple libraries:
     
     >>> from mcnpy.endf.read_endf import read_endf
-    >>> endf = read_endf('path/to/endf_file.txt')
+    >>> endf1 = read_endf('path/to/endf_file1.txt')
+    >>> endf2 = read_endf('path/to/endf_file2.txt')
     >>> fig = plot_legendre_coefficient_uncertainties_from_endf(
-    ...     endf, mt=2, orders=[1, 2, 3], uncertainty_type='relative'
+    ...     [endf1, endf2], mt=2, orders=[1, 2, 3], 
+    ...     labels=['Library A', 'Library B'],
+    ...     uncertainty_type='relative'
     ... )
     >>> fig.show()
     """
-    # Check if ENDF object has MF4 data
-    if 4 not in endf.mf:
-        raise ValueError(f"ENDF object does not contain MF4 (angular distribution) data")
+    # Convert single ENDF object to list for uniform processing
+    if not isinstance(endf, list):
+        endf_list = [endf]
+    else:
+        endf_list = endf
     
-    # Check if ENDF object has MF34 data
-    if 34 not in endf.mf:
-        raise ValueError(f"ENDF object does not contain MF34 (covariance) data")
+    # Handle labels
+    endf_labels = _generate_unique_labels(endf_list, labels)
     
-    mf4 = endf.mf[4]
-    mf34 = endf.mf[34]
-    
-    # Check if the specified MT exists in MF4
-    if mt not in mf4.mt:
-        available_mts = list(mf4.mt.keys())
-        raise ValueError(f"MT{mt} not found in MF4. Available MTs: {available_mts}")
-    
-    # Check if the specified MT exists in MF34
-    if mt not in mf34.mt:
-        available_mts = list(mf34.mt.keys())
-        raise ValueError(f"MT{mt} not found in MF34. Available MTs: {available_mts}")
-    
-    mf4_data = mf4.mt[mt]
+    # Validate all ENDF objects first
+    for i, endf_obj in enumerate(endf_list):
+        # Check if ENDF object has MF4 data
+        if 4 not in endf_obj.mf:
+            raise ValueError(f"ENDF object {i+1} ({endf_labels[i]}) does not contain MF4 (angular distribution) data")
+        
+        # Check if ENDF object has MF34 data
+        if 34 not in endf_obj.mf:
+            raise ValueError(f"ENDF object {i+1} ({endf_labels[i]}) does not contain MF34 (covariance) data")
+        
+        mf4 = endf_obj.mf[4]
+        mf34 = endf_obj.mf[34]
+        
+        # Check if the specified MT exists in MF4
+        if mt not in mf4.mt:
+            available_mts = list(mf4.mt.keys())
+            raise ValueError(f"MT{mt} not found in MF4 for ENDF object {i+1} ({endf_labels[i]}). Available MTs: {available_mts}")
+        
+        # Check if the specified MT exists in MF34
+        if mt not in mf34.mt:
+            available_mts = list(mf34.mt.keys())
+            raise ValueError(f"MT{mt} not found in MF34 for ENDF object {i+1} ({endf_labels[i]}). Available MTs: {available_mts}")
     
     # Setup plot style
     plot_kwargs = setup_plot_style(style=style, figsize=figsize, **kwargs)
@@ -422,12 +525,16 @@ def plot_legendre_coefficient_uncertainties_from_endf(
     ax = plot_kwargs['ax']
     colors = plot_kwargs['_colors']
     
-    # Check if the object has Legendre coefficients
-    if not hasattr(mf4_data, 'legendre_energies') or not hasattr(mf4_data, 'legendre_coefficients'):
+    # Get the first valid ENDF object to determine available orders
+    first_endf = endf_list[0]
+    first_mf4_data = first_endf.mf[4].mt[mt]
+    
+    # Check if the first object has Legendre coefficients
+    if not hasattr(first_mf4_data, 'legendre_energies') or not hasattr(first_mf4_data, 'legendre_coefficients'):
         # Provide helpful error message for unsupported types
-        obj_class_name = type(mf4_data).__name__
-        if hasattr(mf4_data, 'distribution_type'):
-            dist_type = mf4_data.distribution_type
+        obj_class_name = type(first_mf4_data).__name__
+        if hasattr(first_mf4_data, 'distribution_type'):
+            dist_type = first_mf4_data.distribution_type
             error_msg = f"Cannot plot Legendre coefficient uncertainties for {obj_class_name} object.\n" \
                        f"This object contains {dist_type} angular distributions,\n" \
                        f"which do not have Legendre coefficients.\n\n" \
@@ -442,189 +549,206 @@ def plot_legendre_coefficient_uncertainties_from_endf(
         ax.set_title("Unsupported Data Type")
         return fig
     
-    # Get data from MF4
-    energies = mf4_data.legendre_energies
-    coeffs_list = mf4_data.legendre_coefficients
-    
-    if not energies or not coeffs_list:
-        ax.text(0.5, 0.5, 'No Legendre coefficient data available', 
-                ha='center', va='center', transform=ax.transAxes)
-        return fig
-    
-    # Determine which orders to plot
+    # Determine which orders to plot based on first ENDF object
     if orders is None:
-        # Plot all available orders
-        max_available = max(len(coeffs) for coeffs in coeffs_list)
-        orders = list(range(max_available))
+        # Plot all available orders from first object
+        first_coeffs_list = first_mf4_data.legendre_coefficients
+        if first_coeffs_list:
+            max_available = max(len(coeffs) for coeffs in first_coeffs_list)
+            orders = list(range(max_available))
+        else:
+            ax.text(0.5, 0.5, 'No Legendre coefficient data available', 
+                    ha='center', va='center', transform=ax.transAxes)
+            return fig
     elif isinstance(orders, int):
         orders = [orders]
     elif not isinstance(orders, list):
         orders = list(orders)  # Convert other iterables to list
     
-    # Extract uncertainties from MF34 data
-    uncertainties = {}
-    try:
-        # Use the existing to_ang_covmat method to convert MF34MT to MF34CovMat
-        mf34_mt = mf34.mt[mt]
-        mf34_covmat = mf34_mt.to_ang_covmat()
-        
-        # Get the isotope ID from mf4_data
-        isotope_id = int(mf4_data.zaid) if hasattr(mf4_data, 'zaid') else 0
-        
-        # Extract uncertainties for each requested Legendre order
-        uncertainties_data = mf34_covmat.get_uncertainties_for_legendre_coefficient(
-            isotope=isotope_id, 
-            mt=mt, 
-            l_coefficient=orders
-        )
-        
-        # Convert to the format expected by the plotting code
-        if isinstance(uncertainties_data, dict):
-            # Handle both single coefficient (dict) and multiple coefficients (dict of dicts)
-            if 'energies' in uncertainties_data:  # Single coefficient result
-                # This shouldn't happen when passing a list, but handle it just in case
-                uncertainties[orders[0]] = uncertainties_data
-            else:  # Multiple coefficients result
-                for l_order, unc_data in uncertainties_data.items():
-                    if unc_data is not None:
-                        uncertainties[l_order] = unc_data
-                        
-    except Exception as e:
-        error_msg = f"Could not extract uncertainties from MF34: {e}"
-        ax.text(0.5, 0.5, error_msg, ha='center', va='center', 
-               transform=ax.transAxes, fontsize=10, bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral"))
-        ax.set_title("Error Extracting Uncertainties")
-        return fig
+    # Track all energies for setting x-axis limits later
+    all_energies = []
     
-    if not uncertainties:
-        ax.text(0.5, 0.5, 'No uncertainty data available for the requested orders', 
-                ha='center', va='center', transform=ax.transAxes)
-        return fig
-    
-    # Plot uncertainties for each order
-    for i, order in enumerate(orders):
-        if order not in uncertainties:
-            print(f"Warning: No uncertainty data available for order {order}")
+    # Plot each ENDF object
+    for endf_idx, (endf_obj, endf_label) in enumerate(zip(endf_list, endf_labels)):
+        mf4_data = endf_obj.mf[4].mt[mt]
+        
+        # Skip if this object doesn't have Legendre coefficients
+        if not hasattr(mf4_data, 'legendre_energies') or not hasattr(mf4_data, 'legendre_coefficients'):
+            print(f"Warning: {endf_label} does not have Legendre coefficients, skipping")
             continue
             
-        color = colors[i % len(colors)]
-        unc_data = uncertainties[order]
-        unc_energies = unc_data['energies']
-        unc_values = unc_data['uncertainties']
+        # Get data from MF4
+        energies = mf4_data.legendre_energies
+        coeffs_list = mf4_data.legendre_coefficients
         
-        if len(unc_energies) > 0 and len(unc_values) > 0:
-            # Determine what to plot based on uncertainty_type
-            if uncertainty_type == 'relative':
-                # Plot relative uncertainties as percentages
-                plot_values = np.array(unc_values) * 100  # Convert to percentage
-                label = f"σ$_{{a_{{{order}}}}}$ (%)"
-            elif uncertainty_type == 'absolute':
-                # For absolute uncertainties, we need the coefficient values
-                # Extract coefficient values for this order across all energies
-                coeff_values = []
-                energy_values = []
+        if not energies or not coeffs_list:
+            print(f"Warning: {endf_label} has no Legendre coefficient data, skipping")
+            continue
+            
+        all_energies.extend(energies)
+        
+        # Extract uncertainties from MF34 data
+        uncertainties = {}
+        try:
+            # Use the existing to_ang_covmat method to convert MF34MT to MF34CovMat
+            mf34_mt = endf_obj.mf[34].mt[mt]
+            mf34_covmat = mf34_mt.to_ang_covmat()
+            
+            # Get the isotope ID from mf4_data
+            isotope_id = int(mf4_data.zaid) if hasattr(mf4_data, 'zaid') else 0
+            
+            # Extract uncertainties for each requested Legendre order
+            uncertainties_data = mf34_covmat.get_uncertainties_for_legendre_coefficient(
+                isotope=isotope_id, 
+                mt=mt, 
+                l_coefficient=orders
+            )
+            
+            # Convert to the format expected by the plotting code
+            if isinstance(uncertainties_data, dict):
+                # Handle both single coefficient (dict) and multiple coefficients (dict of dicts)
+                if 'energies' in uncertainties_data:  # Single coefficient result
+                    # This shouldn't happen when passing a list, but handle it just in case
+                    uncertainties[orders[0]] = uncertainties_data
+                else:  # Multiple coefficients result
+                    for l_order, unc_data in uncertainties_data.items():
+                        if unc_data is not None:
+                            uncertainties[l_order] = unc_data
+                            
+        except Exception as e:
+            print(f"Warning: Could not extract uncertainties from MF34 for {endf_label}: {e}")
+            continue
+        
+        if not uncertainties:
+            print(f"Warning: No uncertainty data available for {endf_label}, skipping")
+            continue
+        
+        # Plot uncertainties for each order for this ENDF object
+        for order_idx, order in enumerate(orders):
+            if order not in uncertainties:
+                continue
                 
-                for j, coeffs in enumerate(coeffs_list):
-                    if order == 0:
-                        # a_0 is always 1 (implicit in ENDF format)
-                        coeff_values.append(1.0)
-                        energy_values.append(energies[j])
-                    elif order - 1 < len(coeffs):  # order 1 -> coeffs[0], order 2 -> coeffs[1], etc.
-                        coeff_values.append(coeffs[order - 1])
-                        energy_values.append(energies[j])
-                
-                # Interpolate coefficient values to uncertainty energy grid for calculation
-                if energy_values and coeff_values:
-                    # Simple approach: use step-wise values as in the main function
-                    interpolated_coeffs = []
-                    for unc_energy in unc_energies:
-                        # Find closest energy in coefficient data
-                        closest_idx = min(range(len(energy_values)), 
-                                        key=lambda k: abs(energy_values[k] - unc_energy))
-                        interpolated_coeffs.append(abs(coeff_values[closest_idx]))
-                    
-                    # Convert relative to absolute uncertainties
-                    plot_values = np.array(unc_values) * np.array(interpolated_coeffs)
-                    label = f"σ$_{{a_{{{order}}}}}$ (absolute)"
-                else:
-                    print(f"Warning: Could not calculate absolute uncertainties for order {order}")
-                    continue
-            else:
-                raise ValueError(f"uncertainty_type must be 'relative' or 'absolute', got '{uncertainty_type}'")
+            # Calculate color index: different base colors for each ENDF, 
+            # but cycle through orders within each ENDF
+            color_idx = (endf_idx * len(orders) + order_idx) % len(colors)
+            color = colors[color_idx]
             
-            # Plot the uncertainty values using step plot since uncertainties are constant within energy bins
-            # Get the actual energy bin boundaries from the covariance matrix's energy_grids attribute
-            bin_boundaries = None
+            unc_data = uncertainties[order]
+            unc_energies = unc_data['energies']
+            unc_values = unc_data['uncertainties']
             
-            # Find the energy grid that corresponds to this (isotope, mt, order) combination
-            for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
-                mf34_covmat.isotope_rows, mf34_covmat.reaction_rows, mf34_covmat.l_rows,
-                mf34_covmat.isotope_cols, mf34_covmat.reaction_cols, mf34_covmat.l_cols
-            )):
-                # Look for diagonal variance matrix (L = L) for the specified parameters
-                if (iso_r == isotope_id and iso_c == isotope_id and 
-                    mt_r == mt and mt_c == mt and 
-                    l_r == order and l_c == order):
+            if len(unc_energies) > 0 and len(unc_values) > 0:
+                # Determine what to plot based on uncertainty_type
+                if uncertainty_type == 'relative':
+                    # Plot relative uncertainties as percentages
+                    plot_values = np.array(unc_values) * 100  # Convert to percentage
+                    isotope_symbol = endf_obj.isotope if hasattr(endf_obj, 'isotope') and endf_obj.isotope else 'Unknown'
+                    base_label = f"{isotope_symbol} - σ$_{{a_{{{order}}}}}$ (%)"
+                    label = f"{base_label} ({endf_label})" if endf_label is not None else base_label
+                elif uncertainty_type == 'absolute':
+                    # For absolute uncertainties, we need the coefficient values
+                    # Extract coefficient values for this order across all energies
+                    coeff_values = []
+                    energy_values = []
                     
-                    bin_boundaries = np.array(mf34_covmat.energy_grids[i])
-                    break
-            
-            if len(unc_energies) == 1:
-                # Single point - plot as horizontal line across entire range
-                ax.axhline(y=plot_values[0], color=color, label=label, linewidth=2)
-            else:
-                if bin_boundaries is not None and len(bin_boundaries) == len(unc_energies) + 1:
-                    # We have the actual bin boundaries - use them for proper step plot
-                    step_energies = bin_boundaries
-                    step_values = np.append(plot_values, plot_values[-1])  # Extend last value for step plot
+                    for j, coeffs in enumerate(coeffs_list):
+                        if order == 0:
+                            # a_0 is always 1 (implicit in ENDF format)
+                            coeff_values.append(1.0)
+                            energy_values.append(energies[j])
+                        elif order - 1 < len(coeffs):  # order 1 -> coeffs[0], order 2 -> coeffs[1], etc.
+                            coeff_values.append(coeffs[order - 1])
+                            energy_values.append(energies[j])
                     
-                    # Plot as step function
-                    ax.step(step_energies[:-1], step_values[:-1], where='post', color=color, 
-                           label=label, linewidth=2)
-                    
-                    # Extend the last step to the final boundary
-                    ax.hlines(step_values[-1], step_energies[-2], step_energies[-1], 
-                             colors=color, linewidth=2)
-                             
-                else:
-                    # Fallback: estimate bin boundaries from bin centers
-                    # This approach may not be accurate for actual energy bin structure
-                    step_energies = []
-                    step_values = []
-                    
-                    # Add first boundary (extrapolated)
-                    if len(unc_energies) > 1:
-                        first_boundary = unc_energies[0] - (unc_energies[1] - unc_energies[0]) / 2
-                        step_energies.append(max(first_boundary, 1e-5))  # Don't go below 1e-5 eV
+                    # Interpolate coefficient values to uncertainty energy grid for calculation
+                    if energy_values and coeff_values:
+                        # Simple approach: use step-wise values as in the main function
+                        interpolated_coeffs = []
+                        for unc_energy in unc_energies:
+                            # Find closest energy in coefficient data
+                            closest_idx = min(range(len(energy_values)), 
+                                            key=lambda k: abs(energy_values[k] - unc_energy))
+                            interpolated_coeffs.append(abs(coeff_values[closest_idx]))
+                        
+                        # Convert relative to absolute uncertainties
+                        plot_values = np.array(unc_values) * np.array(interpolated_coeffs)
+                        isotope_symbol = endf_obj.isotope if hasattr(endf_obj, 'isotope') and endf_obj.isotope else 'Unknown'
+                        base_label = f"{isotope_symbol} - σ$_{{a_{{{order}}}}}$ (absolute)"
+                        label = f"{base_label} ({endf_label})" if endf_label is not None else base_label
                     else:
-                        step_energies.append(unc_energies[0] / 2)
-                    step_values.append(plot_values[0])
-                    
-                    # Add boundaries between consecutive points
-                    for i in range(len(unc_energies) - 1):
-                        boundary = (unc_energies[i] + unc_energies[i + 1]) / 2
-                        step_energies.append(boundary)
-                        step_values.append(plot_values[i])
-                    
-                    # Add the last bin
-                    step_energies.append(unc_energies[-1] + (unc_energies[-1] - unc_energies[-2]) / 2)
-                    step_values.append(plot_values[-1])
-                    
-                    # Plot as step function with 'post' positioning
-                    ax.step(step_energies[:-1], step_values[:-1], where='post', color=color, 
-                           label=label, linewidth=2)
-                    
-                    # Extend the last step to the final boundary
-                    ax.hlines(step_values[-1], step_energies[-2], step_energies[-1], 
-                             colors=color, linewidth=2)
+                        print(f"Warning: Could not calculate absolute uncertainties for order {order} in {endf_label}")
+                        continue
+                else:
+                    raise ValueError(f"uncertainty_type must be 'relative' or 'absolute', got '{uncertainty_type}'")
+                
+                # Plot the uncertainty values using step plot since uncertainties are constant within energy bins
+                # Get the actual energy bin boundaries from the covariance matrix's energy_grids attribute
+                bin_boundaries = None
+                
+                # Find the energy grid that corresponds to this (isotope, mt, order) combination
+                for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
+                    mf34_covmat.isotope_rows, mf34_covmat.reaction_rows, mf34_covmat.l_rows,
+                    mf34_covmat.isotope_cols, mf34_covmat.reaction_cols, mf34_covmat.l_cols
+                )):
+                    # Look for diagonal variance matrix (L = L) for the specified parameters
+                    if (iso_r == isotope_id and iso_c == isotope_id and 
+                        mt_r == mt and mt_c == mt and 
+                        l_r == order and l_c == order):
+                        
+                        bin_boundaries = np.array(mf34_covmat.energy_grids[i])
+                        break
+                
+                if len(unc_energies) == 1:
+                    # Single point - plot as horizontal line across entire range
+                    ax.axhline(y=plot_values[0], color=color, label=label, linewidth=2)
+                else:
+                    if bin_boundaries is not None and len(bin_boundaries) == len(unc_energies) + 1:
+                        # We have the actual bin boundaries - use them for proper step plot
+                        step_energies = bin_boundaries
+                        step_values = np.append(plot_values, plot_values[-1])  # Extend last value for step plot
+                        
+                        # Plot as step function
+                        ax.step(step_energies[:-1], step_values[:-1], where='post', color=color, 
+                               label=label, linewidth=2)
+                        
+                        # Extend the last step to the final boundary
+                        ax.hlines(step_values[-1], step_energies[-2], step_energies[-1], 
+                                 colors=color, linewidth=2)
+                                 
+                    else:
+                        # Fallback: estimate bin boundaries from bin centers
+                        # This approach may not be accurate for actual energy bin structure
+                        step_energies = []
+                        step_values = []
+                        
+                        # Add first boundary (extrapolated)
+                        if len(unc_energies) > 1:
+                            first_boundary = unc_energies[0] - (unc_energies[1] - unc_energies[0]) / 2
+                            step_energies.append(max(first_boundary, 1e-5))  # Don't go below 1e-5 eV
+                        else:
+                            step_energies.append(unc_energies[0] / 2)
+                        step_values.append(plot_values[0])
+                        
+                        # Add boundaries between consecutive points
+                        for i in range(len(unc_energies) - 1):
+                            boundary = (unc_energies[i] + unc_energies[i + 1]) / 2
+                            step_energies.append(boundary)
+                            step_values.append(plot_values[i])
+                        
+                        # Add the last bin
+                        step_energies.append(unc_energies[-1] + (unc_energies[-1] - unc_energies[-2]) / 2)
+                        step_values.append(plot_values[-1])
+                        
+                        # Plot as step function with 'post' positioning
+                        ax.step(step_energies[:-1], step_values[:-1], where='post', color=color, 
+                               label=label, linewidth=2)
+                        
+                        # Extend the last step to the final boundary
+                        ax.hlines(step_values[-1], step_energies[-2], step_energies[-1], 
+                                 colors=color, linewidth=2)
     
     # Create title with isotope and reaction information
     title_parts = []
-    
-    # Add isotope information if available
-    isotope_symbol = endf.isotope
-    if isotope_symbol:
-        title_parts.append(f"{isotope_symbol}")
     
     # Add reaction information
     from mcnpy._constants import MT_TO_REACTION
@@ -656,17 +780,9 @@ def plot_legendre_coefficient_uncertainties_from_endf(
     
     # Apply energy range limits if specified
     if energy_range is not None:
-        # Get the energy range from uncertainty data
-        all_energies = []
-        for order in orders:
-            if order in uncertainties:
-                all_energies.extend(uncertainties[order]['energies'])
-        
-        if all_energies:
-            data_min, data_max = min(all_energies), max(all_energies)
-            e_min = max(energy_range[0], data_min)
-            e_max = min(energy_range[1], data_max)
-            ax.set_xlim(e_min, e_max)
+        # Use user-specified energy range directly, allowing extension beyond data range
+        e_min, e_max = energy_range
+        ax.set_xlim(e_min, e_max)
 
     return fig
 

@@ -141,7 +141,14 @@ MT_TO_REACTION = {
     114: "(z,d2α)",
     115: "(z,pd)",
     116: "(z,pt)",
-    117: "(z,dα)"
+    117: "(z,dα)",
+    # Legendre coefficients for elastic angular distributions (custom extension)
+    4001: "(z,z0)P1",
+    4002: "(z,z0)P2", 
+    4003: "(z,z0)P3",
+    4004: "(z,z0)P4",
+    4005: "(z,z0)P5",
+    4006: "(z,z0)P6"
 }
 
 

@@ -6,5 +6,20 @@ in Monte Carlo neutron transport calculations.
 """
 
 from .fastTMC import fastTMC, create_summary_table
+from .sandwich import (
+    sandwich_uncertainty_propagation,
+    UncertaintyResult,
+    UncertaintyContribution,
+    filter_reactions_by_nuclide,
+    filter_reactions_by_type
+)
 
-__all__ = ['fastTMC', 'create_summary_table']
+__all__ = [
+    'fastTMC', 
+    'create_summary_table',
+    'sandwich_uncertainty_propagation',
+    'UncertaintyResult',
+    'UncertaintyContribution', 
+    'filter_reactions_by_nuclide',
+    'filter_reactions_by_type'
+]

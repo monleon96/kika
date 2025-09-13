@@ -10,6 +10,7 @@ version that created new ACE files, this version:
 3. Replaces files in-place without creating new directories
 4. Skips samples where ACE files don't exist
 5. Does not create XSDIR files (assumes they already exist)
+6. Generates only parquet files with perturbation data (no text summaries)
 
 Key Changes from Original:
 - Function signature changed to take root_dir, temperatures, zaids instead of ace_files
@@ -17,6 +18,7 @@ Key Changes from Original:
 - Directory structure follows: root_dir/ace/tempK/zaid/sample_num/
 - No XSDIR file generation
 - Enhanced logging for missing files and skipped samples
+- Only parquet output files are generated (no text summary files)
 
 Usage:
     from mcnpy.sampling.ace_perturbation_separate import perturb_seprate_ACE_files
@@ -757,11 +759,7 @@ def perturb_seprate_ACE_files(
             # For dry run, create summary for all samples across all temperatures
             processed_samples_by_temp_dry = {temp: list(range(num_samples)) for temp in temperatures}
             
-            # Copy summary files to temperature directories
-            _copy_files_to_temperature_directories(
-                root_dir, temperatures, zaid, factors, mt_perturb_final, energy_grid, 
-                base, num_samples, processed_samples_by_temp_dry, dry_run, verbose
-            )
+            # Note: Summary text files are no longer generated - parquet file contains all data
             
             _logger.info(f"\n{separator}\n")
             print(f"[INFO] Completed dry run for ZAID {zaid}")
@@ -851,11 +849,8 @@ def perturb_seprate_ACE_files(
         _logger.info(f"[ACE] [COMPLETED] ZAID {zaid} ({len(tasks)} samples processed)")
         _logger.info(f"{separator}\n")
 
-        # Copy summary files and parquet data to each temperature directory
-        _copy_files_to_temperature_directories(
-            root_dir, temperatures, zaid, factors, mt_perturb_final, energy_grid, 
-            base, num_samples, processed_samples_by_temp, dry_run, verbose
-        )
+        # Copy parquet data to each temperature directory (summary files generation removed)
+        # Note: Summary text files are no longer generated - parquet file contains all data
 
     # =====================================================================
     #  Print final summary for all isotopes TO LOG FILE
@@ -1022,99 +1017,6 @@ def perturb_seprate_ACE_files(
         except Exception as e:
             # Silently ignore cleanup errors
             pass
-
-
-def _copy_files_to_temperature_directories(
-    root_dir: str,
-    temperatures: List[float],
-    zaid: int,
-    factors: np.ndarray,
-    mt_numbers: List[int],
-    energy_grid: List[float],
-    base_filename: str,
-    num_samples: int,
-    processed_samples_by_temp: Dict[float, List[int]],
-    dry_run: bool,
-    verbose: bool = True
-):
-    """
-    Copy summary files to each temperature directory for the current ZAID.
-    
-    Parameters
-    ----------
-    root_dir : str
-        Root directory
-    temperatures : List[float]
-        List of temperatures
-    zaid : int
-        ZAID being processed
-    factors : np.ndarray
-        Perturbation factors
-    mt_numbers : List[int]
-        MT numbers that were perturbed
-    energy_grid : List[float]
-        Energy grid boundaries
-    base_filename : str
-        Base filename for outputs
-    num_samples : int
-        Total number of samples
-    processed_samples_by_temp : Dict[float, List[int]]
-        Dictionary mapping temperature to list of processed sample indices
-    dry_run : bool
-        Whether this was a dry run
-    verbose : bool
-        Whether to log progress
-    """
-    logger = _get_logger()
-    
-    if verbose and logger:
-        logger.info(f"[COPY] Copying summary files to temperature directories for ZAID {zaid}")
-    
-    for temp in temperatures:
-        # Use exact temperature formatting to match ENDF perturbation directory structure
-        temp_str = str(temp).rstrip('0').rstrip('.') if '.' in str(temp) else str(temp)
-        temp_ace_dir = os.path.join(root_dir, "ace", temp_str)
-        
-        # Create ZAID-specific directory in this temperature
-        zaid_temp_dir = os.path.join(temp_ace_dir, str(zaid))
-        os.makedirs(zaid_temp_dir, exist_ok=True)
-        
-        # Create summary file for this temperature/ZAID combination
-        summary_file = os.path.join(zaid_temp_dir, f"{base_filename}_perturbation_summary_{temp_str}.txt")
-        
-        processed_samples = processed_samples_by_temp[temp]
-        
-        with open(summary_file, 'w') as f:
-            f.write(f"# ACE Perturbation Summary for ZAID {zaid} at {temp_str}\n")
-            f.write(f"# Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"# Mode: {'Dry run' if dry_run else 'Full processing'}\n")
-            f.write(f"# Perturbed MT numbers: {', '.join(map(str, mt_numbers))}\n")
-            f.write(f"# Total samples requested: {num_samples}\n")
-            f.write(f"# Samples processed at this temperature: {len(processed_samples)}\n")
-            f.write(f"# Energy groups: {len(energy_grid) - 1}\n")
-            f.write(f"#\n")
-            f.write(f"# Format: Sample_ID  MT  Energy_Low  Energy_High  Factor\n")
-            f.write(f"#\n")
-            
-            n_groups = len(energy_grid) - 1
-            boundaries = np.asarray(energy_grid, dtype=np.float32)
-            
-            for sample_idx in processed_samples:
-                sample = factors[sample_idx].astype(np.float32)
-                f.write(f"\n# Sample {sample_idx+1:04d}\n")
-                
-                for mt_idx, mt in enumerate(mt_numbers):
-                    start = mt_idx * n_groups
-                    end = start + n_groups
-                    grp_facs = sample[start:end]
-                    
-                    for grp in range(n_groups):
-                        low, high = boundaries[grp], boundaries[grp+1]
-                        fac = grp_facs[grp]
-                        f.write(f"{sample_idx+1:04d}  {mt:<3}  {low:.6e}  {high:.6e}  {fac:.6e}\n")
-        
-        if verbose and logger:
-            logger.info(f"  Created summary for {temp_str}: {len(processed_samples)} samples")
 
 
 def _copy_master_files_to_temperature_directories(

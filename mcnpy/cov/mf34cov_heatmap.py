@@ -6,6 +6,297 @@ from matplotlib.colors import TwoSlopeNorm
 from matplotlib.gridspec import GridSpec
 from mcnpy.cov.mf34_covmat import MF34CovMat
 from mcnpy._utils import zaid_to_symbol
+from mcnpy._plot_settings import setup_plot_style, format_axes
+
+
+def plot_mf34_uncertainties(
+    mf34_covmat: MF34CovMat,
+    isotope: int,
+    mt: int,
+    legendre_coeffs: Union[int, List[int]],
+    *,
+    ax: plt.Axes | None = None,
+    uncertainty_type: str = "relative",
+    style: str = "default",
+    figsize: Tuple[float, float] = (8, 5),
+    dpi: int = 300,
+    font_family: str = "serif",
+    legend_loc: str = "best",
+    energy_range: Optional[Tuple[float, float]] = None,
+    **kwargs,
+) -> plt.Figure:
+    """
+    Plot uncertainties for MF34 angular distribution data for specific Legendre coefficients.
+    
+    This function extracts and plots the diagonal uncertainties from the covariance matrix
+    for the specified isotope, MT reaction, and Legendre coefficients.
+    
+    Parameters
+    ----------
+    mf34_covmat : MF34CovMat
+        The MF34 covariance matrix object
+    isotope : int
+        Isotope ID
+    mt : int
+        Reaction MT number
+    legendre_coeffs : int or list of int
+        Legendre coefficient(s) to plot uncertainties for.
+        Can be a single int or a list of ints.
+    ax : plt.Axes, optional
+        Matplotlib axes to draw into. If None, creates new figure.
+    uncertainty_type : str, default "relative"
+        Type of uncertainty to plot: "relative" (%) or "absolute"
+    style : str, default "default"
+        Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
+    figsize : tuple, default (8, 5)
+        Figure size in inches (width, height)
+    dpi : int, default 300
+        Dots per inch for figure resolution
+    font_family : str, default "serif"
+        Font family for text elements
+    legend_loc : str, default "best"
+        Legend location
+    energy_range : tuple of float, optional
+        Energy range (min, max) for x-axis. If None, uses the full data range.
+        Values are used directly without clamping to data range.
+    **kwargs
+        Additional arguments passed to matplotlib plot functions
+    
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure containing the uncertainty plots
+    
+    Raises
+    ------
+    ValueError
+        If no matrices found for the specified isotope/MT combination,
+        or if requested Legendre coefficients are not available
+    
+    Examples
+    --------
+    Plot relative uncertainties for Legendre coefficients L=1,2,3:
+    
+    >>> fig = plot_mf34_uncertainties(mf34_covmat, isotope=92235, mt=2, 
+    ...                              legendre_coeffs=[1, 2, 3])
+    >>> fig.show()
+    
+    Plot absolute uncertainties for a single Legendre coefficient:
+    
+    >>> fig = plot_mf34_uncertainties(mf34_covmat, isotope=92235, mt=2,
+    ...                              legendre_coeffs=1, uncertainty_type="absolute")
+    >>> fig.show()
+    """
+    
+    # Validate uncertainty_type parameter
+    if uncertainty_type not in ["relative", "absolute"]:
+        raise ValueError(f"uncertainty_type must be 'relative' or 'absolute', got '{uncertainty_type}'")
+    
+    # 1. Filter and locate the sub-matrix for the specified isotope and MT
+    filtered_mf34 = mf34_covmat.filter_by_isotope_reaction(isotope, mt)
+    
+    if filtered_mf34.num_matrices == 0:
+        raise ValueError(f"No matrices found for isotope={isotope}, MT={mt}")
+
+    # Get all available Legendre coefficients for this isotope/MT combination
+    all_triplets = filtered_mf34._get_param_triplets()
+    available_legendre = sorted(list(set(t[2] for t in all_triplets if t[0] == isotope and t[1] == mt)))
+    
+    if not available_legendre:
+        raise ValueError(f"No Legendre coefficients found for isotope={isotope}, MT={mt}")
+    
+    # Handle Legendre coefficient input format
+    if isinstance(legendre_coeffs, int):
+        legendre_list = [legendre_coeffs]
+    else:
+        legendre_list = list(legendre_coeffs)
+        if not legendre_list:
+            # Use all available Legendre coefficients
+            legendre_list = available_legendre
+    
+    # Validate requested Legendre coefficients
+    for l_val in legendre_list:
+        if l_val not in available_legendre:
+            raise ValueError(f"Legendre coefficient L={l_val} not available for isotope={isotope}, MT={mt}")
+    
+    legendre_coeffs_sorted = sorted(list(set(legendre_list)))
+    
+    # Find the energy group size (assume all matrices have the same size)
+    G = filtered_mf34.matrices[0].shape[0] if filtered_mf34.matrices else 0
+    if G == 0:
+        raise ValueError("Number of energy groups (G) cannot be zero.")
+    
+    # 2. Setup plot style and create figure/axes
+    plot_settings = setup_plot_style(
+        style=style,
+        figsize=figsize,
+        dpi=dpi,
+        font_family=font_family,
+        ax=ax,
+        **kwargs
+    )
+    
+    ax = plot_settings['ax']
+    fig = plot_settings['_fig']
+    colors = plot_settings['_colors']
+    
+    # 3. Setup energy grid
+    energy_grid = None
+    if filtered_mf34.energy_grids:
+        energy_grid = filtered_mf34.energy_grids[0]
+    
+    if energy_grid is not None and len(energy_grid) == G + 1:
+        energy_grid_mids = [(energy_grid[i] + energy_grid[i+1]) / 2 for i in range(G)]
+        xs = energy_grid_mids
+        use_log_scale = True
+    else:
+        xs = list(range(1, G+1))
+        use_log_scale = False
+    
+    # 4. Get diagonal uncertainties from the filtered covariance matrix
+    diag_sqrt = np.sqrt(np.diag(filtered_mf34.covariance_matrix))
+    
+    # 5. Plot uncertainties for each Legendre coefficient
+    for i, l_val in enumerate(legendre_coeffs_sorted):
+        # Find the index of this Legendre coefficient
+        triplet_idx = all_triplets.index((isotope, mt, l_val))
+        sigma = diag_sqrt[triplet_idx*G : (triplet_idx+1)*G]
+        
+        if uncertainty_type == "relative":
+            # Convert to percentage
+            plot_values = sigma * 100
+            y_label = "Relative uncertainty (%)"
+        else:  # absolute
+            plot_values = sigma
+            y_label = "Absolute uncertainty"
+        
+        # Create label
+        isotope_symbol = zaid_to_symbol(isotope)
+        label = f"{isotope_symbol} - σ$_{{a_{{{l_val}}}}}$"
+        if uncertainty_type == "relative":
+            label += " (%)"
+        else:
+            label += " (absolute)"
+        
+        # Plot as step function (uncertainties are constant within energy bins)
+        color = colors[i % len(colors)]
+        
+        # Filter out step-related kwargs that should not be passed to step()
+        step_kwargs = {k: v for k, v in kwargs.items() 
+                       if k not in ['ax', '_fig', '_colors', '_linestyles', '_style', 
+                                    '_notebook_mode', '_interactive', '_backend_info']}
+        
+        # Get the actual energy bin boundaries from the covariance matrix's energy_grids attribute
+        bin_boundaries = None
+        
+        # Find the energy grid that corresponds to this (isotope, mt, l_val) combination
+        for j, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
+            filtered_mf34.isotope_rows, filtered_mf34.reaction_rows, filtered_mf34.l_rows,
+            filtered_mf34.isotope_cols, filtered_mf34.reaction_cols, filtered_mf34.l_cols
+        )):
+            # Look for diagonal variance matrix (L = L) for the specified parameters
+            if (iso_r == isotope and iso_c == isotope and 
+                mt_r == mt and mt_c == mt and 
+                l_r == l_val and l_c == l_val):
+                
+                bin_boundaries = np.array(filtered_mf34.energy_grids[j])
+                break
+        
+        if len(plot_values) == 1:
+            # Single point - plot as horizontal line across entire range
+            ax.axhline(y=plot_values[0], color=color, label=label, linewidth=2.0)
+        else:
+            if bin_boundaries is not None and len(bin_boundaries) == len(plot_values) + 1:
+                # We have the actual bin boundaries - use them for proper step plot
+                step_energies = bin_boundaries
+                step_values = np.append(plot_values, plot_values[-1])  # Extend last value for step plot
+                
+                # Plot as step function
+                ax.step(step_energies[:-1], step_values[:-1], where='post', color=color, 
+                       label=label, linewidth=2.0, **step_kwargs)
+                
+                # Extend the last step to the final boundary
+                ax.hlines(step_values[-1], step_energies[-2], step_energies[-1], 
+                         colors=color, linewidth=2.0)
+                         
+            else:
+                # Fallback: estimate bin boundaries from bin centers (xs)
+                # This approach may not be accurate for actual energy bin structure
+                step_energies = []
+                step_values = []
+                
+                # Add first boundary (extrapolated)
+                if len(xs) > 1:
+                    first_boundary = xs[0] - (xs[1] - xs[0]) / 2
+                    step_energies.append(max(first_boundary, 1e-5))  # Don't go below 1e-5 eV
+                else:
+                    step_energies.append(xs[0] / 2)
+                step_values.append(plot_values[0])
+                
+                # Add boundaries between consecutive points
+                for j in range(len(xs) - 1):
+                    boundary = (xs[j] + xs[j + 1]) / 2
+                    step_energies.append(boundary)
+                    step_values.append(plot_values[j])
+                
+                # Add the last bin
+                if len(xs) > 1:
+                    step_energies.append(xs[-1] + (xs[-1] - xs[-2]) / 2)
+                else:
+                    step_energies.append(xs[-1] * 2)
+                step_values.append(plot_values[-1])
+                
+                # Plot as step function with 'post' positioning
+                ax.step(step_energies[:-1], step_values[:-1], where='post', color=color, 
+                       label=label, linewidth=2.0, **step_kwargs)
+                
+                # Extend the last step to the final boundary
+                ax.hlines(step_values[-1], step_energies[-2], step_energies[-1], 
+                         colors=color, linewidth=2.0)
+    
+    # 6. Set up plot title
+    l_labels = [str(l_val) for l_val in legendre_coeffs_sorted]
+    title_text = f"{zaid_to_symbol(isotope)} MT:{mt}   L: {', '.join(l_labels)} Uncertainties"
+    
+    # 7. Calculate y-axis limits
+    y_min = None
+    y_max = None
+    if len(diag_sqrt) > 0:
+        all_plot_values = []
+        for l_val in legendre_coeffs_sorted:
+            triplet_idx = all_triplets.index((isotope, mt, l_val))
+            sigma = diag_sqrt[triplet_idx*G : (triplet_idx+1)*G]
+            if uncertainty_type == "relative":
+                all_plot_values.extend(sigma * 100)
+            else:
+                all_plot_values.extend(sigma)
+        
+        if all_plot_values:
+            y_min = 0 if uncertainty_type == "relative" else min(all_plot_values)
+            y_max = max(all_plot_values)
+    
+    # 8. Format axes using the centralized function
+    format_axes(
+        ax=ax,
+        style=style,
+        use_log_scale=use_log_scale,
+        is_energy_axis=use_log_scale,  # True if we have actual energy values
+        x_label="Energy (eV)" if use_log_scale else "Energy-group index",
+        y_label=y_label,
+        title=title_text if style not in {"paper", "publication"} else None,
+        legend_loc=legend_loc if len(legendre_coeffs_sorted) > 1 else None,
+        y_min=y_min,
+        y_max=y_max,
+        use_y_log_scale=False,
+    )
+    
+    # Apply energy range limits if specified
+    if energy_range is not None:
+        # Use user-specified energy range directly, allowing extension beyond data range
+        e_min, e_max = energy_range
+        ax.set_xlim(e_min, e_max)
+    
+    return fig
 
 
 def plot_mf34_covariance_heatmap(

@@ -340,7 +340,7 @@ def create_sdf_data(
     :param response_values: Optional tuple of (r0, e0) to override the reference values from sensitivity data.
                            This allows combining data from different sources that might have different base values.
                            r0 is the unperturbed tally result (reference response value),
-                           e0 is the error of the unperturbed tally result.
+                           e0 is the absolute error of the unperturbed tally result (not relative).
                            Use this to ensure consistency when merging sensitivity data from different calculations.
     :type response_values: Tuple[float, float], optional
     :returns: SDFData object containing the combined sensitivity data
@@ -450,3 +450,286 @@ def create_sdf_data(
             sdf_data.data.append(reaction_data)
     
     return sdf_data
+
+
+def create_sdf_from_serpent(
+    serpent_file: Union['SensitivityFile', List['SensitivityFile']],
+    response_name: Union[str, List[str]],
+    title: str,
+    material_filter: Union[str, List[str]] = None,
+    nuclide_filter: Union[int, List[int]] = None,
+    mt_filter: Union[int, List[int]] = None,
+    response_values: Tuple[float, float] = None
+) -> SDFData:
+    """Create a SDFData object from SERPENT sensitivity results.
+    
+    Note: SERPENT provides relative errors (σ/μ) which are converted to absolute errors (σ)
+    to maintain consistency with MCNP processing and SDF format standards.
+    
+    :param serpent_file: SERPENT sensitivity file object(s). Can be a single file or list of files.
+    :type serpent_file: Union[SensitivityFile, List[SensitivityFile]]
+    :param response_name: Name(s) of the response to extract. Can be a single response name 
+                         (used for all files) or a list matching the number of files.
+                         Examples: 'sens_ratio_BIN_2' or ['sens_ratio_BIN_1', 'sens_ratio_BIN_2']
+    :type response_name: Union[str, List[str]]
+    :param title: Title for the SDF dataset
+    :type title: str
+    :param material_filter: Material name(s) to include. If None, uses all materials.
+    :type material_filter: Union[str, List[str]], optional
+    :param nuclide_filter: Nuclide ZAI(s) to include. If None, uses all nuclides.
+    :type nuclide_filter: Union[int, List[int]], optional
+    :param mt_filter: MT reaction number(s) to include. If None, uses all MT reactions (including Legendre coefficients MT=4001+).
+    :type mt_filter: Union[int, List[int]], optional
+    :param response_values: Tuple of (r0, e0) reference response values. If None, uses (1.0, 0.01).
+                           r0 is the unperturbed tally result (reference response value),
+                           e0 is the relative error of the unperturbed tally result (e.g., 0.01 for 1%).
+                           Note: e0 will be converted to absolute error for SDF format compliance.
+    :type response_values: Tuple[float, float], optional
+    :returns: SDFData object containing the SERPENT sensitivity data
+    :rtype: SDFData
+    :raises ValueError: If the specified response is not found or file lists don't match
+    """
+    from mcnpy.serpent.sens import SensitivityFile
+    import numpy as np
+    
+    # Normalize inputs to lists for uniform processing
+    if not isinstance(serpent_file, list):
+        serpent_files = [serpent_file]
+    else:
+        serpent_files = serpent_file
+    
+    if not isinstance(response_name, list):
+        response_names = [response_name] * len(serpent_files)
+    else:
+        response_names = response_name
+        if len(response_names) != len(serpent_files):
+            raise ValueError(f"Number of response names ({len(response_names)}) must match number of files ({len(serpent_files)})")
+    
+    if not serpent_files:
+        raise ValueError("At least one SERPENT file must be provided")
+    
+    # Validate energy grids match across all files
+    first_energies = serpent_files[0].energy_edges
+    for i, sfile in enumerate(serpent_files[1:], 1):
+        if not np.allclose(sfile.energy_edges, first_energies):
+            raise ValueError(f"Energy grids don't match between files. File {i+1} has different energy grid than file 1.")
+    
+    # Set default response values
+    if response_values is None:
+        response_values = (1.0, 0.01)  # Default: r0=1.0, e0=1% relative error
+    
+    r0, e0_relative = response_values
+    
+    # Convert relative error to absolute error for SDF format consistency
+    # SDF format expects absolute errors (σ) not relative errors (σ/μ)
+    e0_absolute = r0 * e0_relative
+    
+    # Convert energy edges to perturbation energies (SDF format expects MeV)
+    pert_energies = first_energies.tolist()
+    
+    # Create energy string for SDF including response name(s)
+    # For single response, use response name
+    # For multiple responses, use "MultiResponse"
+    if len(set(response_names)) == 1:
+        # Single unique response name
+        response_part = response_names[0]
+    else:
+        # Multiple different response names
+        response_part = "MultiResponse"
+    
+    energy_str = f"{response_part}"
+    
+    # Create SDFData object
+    sdf_data = SDFData(
+        title=title,
+        energy=energy_str,
+        pert_energies=pert_energies,
+        r0=r0,
+        e0=e0_absolute,  # Use absolute error
+        data=[]
+    )
+    
+    # Process each SERPENT file
+    for file_idx, (sfile, resp_name) in enumerate(zip(serpent_files, response_names)):
+        print(f"Processing file {file_idx+1}/{len(serpent_files)} with response '{resp_name}'...")
+        
+        # Validate response exists in this file
+        available_base_names = list(sfile.data.keys())
+        available_full_names = sfile.available_responses
+        
+        # If resp_name is a full name (like "sens_ratio_BIN_2"), extract the base name
+        if resp_name in available_full_names:
+            # It's a full response name, extract the base name
+            base_name = resp_name.split('_BIN_')[0] if '_BIN_' in resp_name else resp_name
+            current_response_name = resp_name
+        elif resp_name in available_base_names:
+            # It's already a base name
+            base_name = resp_name
+            current_response_name = available_full_names[0]  # Use first available full name
+        else:
+            raise ValueError(f"Response '{resp_name}' not found in file {file_idx+1}. Available responses: {available_full_names}")
+        
+        # Process this file using the existing single-file logic
+        file_data = _process_single_serpent_file(
+            sfile, current_response_name, material_filter, nuclide_filter, mt_filter
+        )
+        
+        # Add reaction data to combined SDF
+        sdf_data.data.extend(file_data)
+    
+    print(f"Combined SDF contains {len(sdf_data.data)} sensitivity profiles from {len(serpent_files)} files")
+    
+    return sdf_data
+
+
+def _process_single_serpent_file(
+    serpent_file: 'SensitivityFile',
+    response_name: str,
+    material_filter: Union[str, List[str]] = None,
+    nuclide_filter: Union[int, List[int]] = None,
+    mt_filter: Union[int, List[int]] = None
+) -> List['SDFReactionData']:
+    """Process a single SERPENT file and return list of SDFReactionData objects."""
+    from mcnpy.serpent.sens import SensitivityFile
+    import numpy as np
+    
+    # Prepare filters (existing logic)
+    if material_filter is not None:
+        if isinstance(material_filter, str):
+            material_filter = [material_filter]
+        try:
+            material_indices = [serpent_file._material_index(mat) for mat in material_filter]
+        except KeyError as e:
+            print(f"Warning: {e}. Skipping material filter for this file.")
+            material_indices = list(range(serpent_file.n_materials))
+    else:
+        material_indices = list(range(serpent_file.n_materials))
+    
+    if nuclide_filter is not None:
+        if isinstance(nuclide_filter, int):
+            nuclide_filter = [nuclide_filter]
+        try:
+            nuclide_indices = [serpent_file._nuclide_index(nuc) for nuc in nuclide_filter]
+        except KeyError as e:
+            print(f"Warning: {e}. Skipping nuclide filter for this file.")
+            nuclide_indices = list(range(serpent_file.n_nuclides))
+    else:
+        nuclide_indices = list(range(serpent_file.n_nuclides))
+    
+    # Filter perturbations - include all MT reactions by default (including Legendre coefficients)
+    if mt_filter is not None:
+        if isinstance(mt_filter, int):
+            mt_filter = [mt_filter]
+        perturbation_indices = serpent_file._collect_perturbations(mt=mt_filter)
+    else:
+        # Include all MT reactions by default (both standard reactions and Legendre coefficients)
+        perturbation_indices = [
+            p.index for p in serpent_file.perturbations 
+            if p.mt is not None
+        ]
+    
+    reaction_data_list = []
+    
+    # Process each combination of material, nuclide, and perturbation (existing logic)
+    for mat_idx in material_indices:
+        for nuc_idx in nuclide_indices:
+            # Get nuclide ZAI
+            nuclide = serpent_file.nuclides[nuc_idx]
+            zaid = nuclide.zai
+            
+            # Group perturbations by MT number for this nuclide
+            # Note: Legendre moments are stored as MT 4001, 4002, 4003, ... (L=1, L=2, L=3, ...)
+            mt_groups = {}
+            for pert_idx in perturbation_indices:
+                pert = serpent_file.perturbations[pert_idx]
+                if pert.mt is not None:
+                    if pert.mt not in mt_groups:
+                        mt_groups[pert.mt] = []
+                    mt_groups[pert.mt].append(pert_idx)
+            
+            # Create SDFReactionData for each MT number (including Legendre coefficients if enabled)
+            for mt, pert_indices in mt_groups.items():
+                # For multiple perturbations with same MT, we need to decide how to combine them
+                # For now, let's take the first one or average if there are multiple
+                if len(pert_indices) == 1:
+                    pert_idx = pert_indices[0]
+                    
+                    try:
+                        # Get energy-dependent sensitivity data
+                        values, rel_errors = serpent_file.get_energy_dependent(
+                            response_name, 
+                            mat=mat_idx, 
+                            zai=nuc_idx, 
+                            mt=mt
+                        )
+                        
+                        # Extract 1D arrays (remove any singleton dimensions)
+                        sens_values = np.squeeze(values).tolist()
+                        rel_errors_raw = np.squeeze(rel_errors).tolist()
+                        
+                        # Convert relative errors to absolute errors to be consistent with MCNP approach
+                        # SERPENT provides relative errors (σ/μ), but SDF format expects absolute errors (σ)
+                        sens_errors = [abs(sens_val * rel_err) for sens_val, rel_err in zip(sens_values, rel_errors_raw)]
+                        
+                        # Skip if all sensitivity coefficients are zero
+                        if all(abs(v) < 1e-15 for v in sens_values):
+                            continue
+                        
+                        # Create SDFReactionData
+                        reaction_data = SDFReactionData(
+                            zaid=zaid,
+                            mt=mt,
+                            sensitivity=sens_values,
+                            error=sens_errors
+                        )
+                        
+                        reaction_data_list.append(reaction_data)
+                        
+                    except Exception as e:
+                        # Skip reactions that cause errors (e.g., not available in this file)
+                        print(f"Warning: Skipping MT={mt} for ZAID={zaid}: {e}")
+                        continue
+                        
+                else:
+                    # Multiple perturbations for same MT - average them
+                    print(f"Warning: Multiple perturbations found for MT={mt}, ZAI={zaid}. Taking average.")
+                    
+                    try:
+                        all_values = []
+                        all_errors = []
+                        
+                        for pert_idx in pert_indices:
+                            values, rel_errors = serpent_file.get_energy_dependent(
+                                response_name, 
+                                mat=mat_idx, 
+                                zai=nuc_idx, 
+                                mt=mt
+                            )
+                            all_values.append(np.squeeze(values))
+                            all_errors.append(np.squeeze(rel_errors))
+                        
+                        # Average the values and relative errors (properly handling relative error averaging)
+                        avg_values = np.mean(all_values, axis=0).tolist()
+                        avg_rel_errors = np.sqrt(np.mean(np.array(all_errors)**2, axis=0)).tolist()
+                        
+                        # Convert relative errors to absolute errors
+                        avg_abs_errors = [abs(sens_val * rel_err) for sens_val, rel_err in zip(avg_values, avg_rel_errors)]
+                        
+                        # Skip if all sensitivity coefficients are zero
+                        if all(abs(v) < 1e-15 for v in avg_values):
+                            continue
+                        
+                        reaction_data = SDFReactionData(
+                            zaid=zaid,
+                            mt=mt,
+                            sensitivity=avg_values,
+                            error=avg_abs_errors
+                        )
+                        
+                        reaction_data_list.append(reaction_data)
+                        
+                    except Exception as e:
+                        print(f"Warning: Skipping averaged MT={mt} for ZAID={zaid}: {e}")
+                        continue
+    
+    return reaction_data_list

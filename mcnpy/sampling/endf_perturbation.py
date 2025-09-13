@@ -660,6 +660,7 @@ def perturb_ENDF_files(
                 'perturbed_l_coeffs': [],
                 'num_samples': num_samples,
                 'warnings': [],
+                'sampling_diagnostics': None,  # Will be populated if diagnostics are available
                 'ace_generation': {
                     'enabled': generate_ace,
                     'successful_samples': 0,
@@ -700,7 +701,7 @@ def perturb_ENDF_files(
             _logger.info(f"[ENDF] File {i+1}: Generating {num_samples} perturbation samples...")
             
             try:
-                factors, _ = generate_endf_samples(
+                factors, _, diagnostic_results = generate_endf_samples(
                     filtered_cov,
                     num_samples,
                     space=space,
@@ -712,6 +713,10 @@ def perturb_ENDF_files(
                 )
                 
                 _logger.info(f"[ENDF] File {i+1}: Successfully generated perturbation factors: shape {factors.shape}")
+                
+                # Store diagnostic results in summary data for later reporting
+                if diagnostic_results:
+                    summary_data[file_key]['sampling_diagnostics'] = diagnostic_results
                 
             except Exception as e:
                 _logger.error(f"[ENDF] File {i+1}: Failed to generate perturbation factors: {e}")
@@ -859,6 +864,25 @@ def perturb_ENDF_files(
                     _logger.info(f"  ► Perturbed Legendre coefficients: {', '.join(map(str, sorted(data['perturbed_l_coeffs'])))}")
                 
                 _logger.info(f"  ► Number of samples generated: {data['num_samples']}")
+                
+                # Sampling quality assessment
+                diagnostics = data.get('sampling_diagnostics')
+                if diagnostics and 'overall_status' in diagnostics:
+                    status = diagnostics['overall_status']
+                    if status in ['CRITICAL', 'POOR']:
+                        status_emoji = "🛑" if status == 'CRITICAL' else "❌"
+                        _logger.info(f"  ► Sampling Quality: {status_emoji} {status} (check detailed log for more information)")
+                    elif status == 'ACCEPTABLE':
+                        _logger.info(f"  ► Sampling Quality: ⚠️  {status}")
+                    elif status in ['GOOD', 'PASS']:
+                        _logger.info(f"  ► Sampling Quality: ✅ {status}")
+                    elif status in ['EXCELLENT']:
+                        _logger.info(f"  ► Sampling Quality: 🌟 {status}")
+                    elif status in ['WARN', 'FAIL']:
+                        status_emoji = "⚠️" if status == 'WARN' else "❌"
+                        _logger.info(f"  ► Sampling Quality: {status_emoji} {status} (check detailed log for more information)")
+                else:
+                    _logger.info(f"  ► Sampling Quality: ℹ️  Not available (diagnostics disabled)")
                 
                 # ACE generation information
                 ace_info = data['ace_generation']

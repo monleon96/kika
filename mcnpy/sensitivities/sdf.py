@@ -292,9 +292,37 @@ class SDFData:
         block += "      0      0\n"
         block += "  0.000000E+00  0.000000E+00      0      0\n"
         
-        # Use 0.0 for total sensitivity instead of calculating it incorrectly
-            
-        block += f"  0.000000E+00  0.000000E+00  0.000000E+00  0.000000E+00  0.000000E+00\n"
+        # Calculate the 5 scalar values according to SDF specification
+        # 1. Energy-integrated sensitivity coefficient (sum of groupwise sensitivities)
+        s_int = sum(reaction.sensitivity)
+        
+        # 2. Standard deviation of S_int (error propagation for sum)
+        # For absolute errors: σ_total = sqrt(Σ σ_i²)
+        s_int_std = (sum(err**2 for err in reaction.error))**0.5
+        
+        # 3. Sum of absolute values of groupwise sensitivities
+        sum_abs = sum(abs(s) for s in reaction.sensitivity)
+        
+        # 4. "osc" = sum of sensitivities with sign opposite to S_int
+        if s_int == 0:
+            # If S_int is zero, all terms contribute to oscillation
+            osc = sum_abs
+        else:
+            # Collect terms with opposite sign to S_int
+            s_int_sign = 1 if s_int >= 0 else -1
+            osc = sum(s for s in reaction.sensitivity if (s >= 0) != (s_int_sign > 0))
+        
+        # 5. Standard deviation of "osc" (error propagation for the oscillating terms)
+        if s_int == 0:
+            # If S_int is zero, all errors contribute to osc uncertainty
+            osc_std = s_int_std
+        else:
+            # Only include errors for terms that contribute to osc
+            s_int_sign = 1 if s_int >= 0 else -1
+            osc_std = (sum(err**2 for s, err in zip(reaction.sensitivity, reaction.error) 
+                          if (s >= 0) != (s_int_sign > 0)))**0.5
+        
+        block += f"{s_int:>14.6E}{s_int_std:>14.6E}{sum_abs:>14.6E}{osc:>14.6E}{osc_std:>14.6E}\n"
         
         # Reverse sensitivity and error arrays to match the descending energy order
         reversed_sensitivity = list(reversed(reaction.sensitivity))
@@ -304,14 +332,14 @@ class SDFData:
         for idx, sens in enumerate(reversed_sensitivity):
             if idx > 0 and idx % 5 == 0:
                 block += "\n"
-            block += f"{sens: >14.6E}"
+            block += f"{sens:>14.6E}"
         block += "\n"
         
         # Write standard deviations with 5 per line (in reversed order)
         for idx, err in enumerate(reversed_error):
             if idx > 0 and idx % 5 == 0:
                 block += "\n"
-            block += f"{err: >14.6E}"
+            block += f"{err:>14.6E}"
         block += "\n"
         return block
 

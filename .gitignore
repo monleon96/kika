@@ -18,7 +18,7 @@ mcnpy/cov/files/
 mcnpy/sampling/perturbed_ace_files/
 mcnpy/sampling/new_perturbed_ace_files/
 mcnpy/sampling/new_perturbed_ace_files2/
-mcnpy/sampling/test_legendre/
+mcnpy/sampling/test_endf_pert/
 mcnpy/sampling/test_ace_pert/
 mcnpy/sampling/testing/
 mcnpy/endf/files/

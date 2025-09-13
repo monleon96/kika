@@ -290,6 +290,138 @@ class MF34CovMat:
             **imshow_kwargs
         )
 
+    def plot_uncertainties(
+        self,
+        isotope: int,
+        mt: int,
+        legendre_coeffs: Union[int, List[int]],
+        ax: Optional['plt.Axes'] = None,
+        *,
+        uncertainty_type: str = "relative",
+        style: str = "default",
+        figsize: Tuple[float, float] = (8, 5),
+        dpi: int = 100,
+        font_family: str = "serif",
+        legend_loc: str = "best",
+        energy_range: Optional[Tuple[float, float]] = None,
+        **kwargs,
+    ) -> 'plt.Figure':
+        """
+        Plot uncertainties for MF34 angular distribution data for specific Legendre coefficients.
+        
+        This method extracts and plots the diagonal uncertainties from the covariance matrix
+        for the specified isotope, MT reaction, and Legendre coefficients.
+        
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID
+        mt : int
+            Reaction MT number
+        legendre_coeffs : int or list of int
+            Legendre coefficient(s) to plot uncertainties for.
+            Can be a single int or a list of ints.
+        ax : plt.Axes, optional
+            Matplotlib axes to draw into. If None, creates new figure.
+        uncertainty_type : str, default "relative"
+            Type of uncertainty to plot: "relative" (%) or "absolute"
+        style : str, default "default"
+            Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
+        figsize : tuple, default (8, 5)
+            Figure size in inches (width, height)
+        dpi : int, default 100
+            Dots per inch for figure resolution
+        font_family : str, default "serif"
+            Font family for text elements
+        legend_loc : str, default "best"
+            Legend location
+        energy_range : tuple of float, optional
+            Energy range (min, max) for x-axis. If None, uses the full data range.
+            Values are used directly without clamping to data range.
+        **kwargs
+            Additional arguments passed to matplotlib plot functions
+        
+        Returns
+        -------
+        plt.Figure
+            The matplotlib figure containing the uncertainty plots
+        
+        Examples
+        --------
+        Plot relative uncertainties for Legendre coefficients L=1,2,3:
+        
+        >>> fig = mf34_covmat.plot_uncertainties(isotope=92235, mt=2, 
+        ...                                     legendre_coeffs=[1, 2, 3])
+        >>> fig.show()
+        
+        Plot absolute uncertainties for a single Legendre coefficient:
+        
+        >>> fig = mf34_covmat.plot_uncertainties(isotope=92235, mt=2,
+        ...                                     legendre_coeffs=1, 
+        ...                                     uncertainty_type="absolute")
+        >>> fig.show()
+        """
+        from mcnpy.cov.mf34cov_heatmap import plot_mf34_uncertainties
+
+        return plot_mf34_uncertainties(
+            mf34_covmat=self,
+            isotope=isotope,
+            mt=mt,
+            legendre_coeffs=legendre_coeffs,
+            ax=ax,
+            uncertainty_type=uncertainty_type,
+            style=style,
+            figsize=figsize,
+            dpi=dpi,
+            font_family=font_family,
+            legend_loc=legend_loc,
+            energy_range=energy_range,
+            **kwargs
+        )
+
+    def filter_by_isotope_reaction(self, isotope: int, mt: int) -> "MF34CovMat":
+        """
+        Return a new MF34CovMat containing only matrices for the specified isotope and MT reaction.
+        
+        This method filters the covariance matrices to include only those where both
+        row and column parameters match the specified isotope and MT reaction.
+        
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID to filter by
+        mt : int
+            Reaction MT number to filter by
+            
+        Returns
+        -------
+        MF34CovMat
+            New MF34CovMat object containing only the filtered matrices
+        """
+        # Find indices where both row and column match the specified isotope and MT
+        matching_indices = []
+        for i, (iso_r, mt_r, iso_c, mt_c) in enumerate(zip(
+            self.isotope_rows, self.reaction_rows, 
+            self.isotope_cols, self.reaction_cols
+        )):
+            if iso_r == isotope and mt_r == mt and iso_c == isotope and mt_c == mt:
+                matching_indices.append(i)
+        
+        # Create new MF34CovMat with filtered data
+        filtered_mf34 = MF34CovMat()
+        
+        for i in matching_indices:
+            filtered_mf34.isotope_rows.append(self.isotope_rows[i])
+            filtered_mf34.reaction_rows.append(self.reaction_rows[i])
+            filtered_mf34.l_rows.append(self.l_rows[i])
+            filtered_mf34.isotope_cols.append(self.isotope_cols[i])
+            filtered_mf34.reaction_cols.append(self.reaction_cols[i])
+            filtered_mf34.l_cols.append(self.l_cols[i])
+            filtered_mf34.energy_grids.append(self.energy_grids[i])
+            filtered_mf34.matrices.append(self.matrices[i])
+        
+        return filtered_mf34
+
     def get_uncertainties_for_legendre_coefficient(
         self, 
         isotope: int, 

@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from scipy import stats
 from scipy.stats import qmc
@@ -12,16 +13,20 @@ from mcnpy.cov.decomposition import (
     verify_svd_decomposition,
     verify_pca_decomposition
 )
+from .diagnostics import (
+    _diagnostics_samples_linear,
+    _diagnostics_samples_log,
+    _diagnostics_covariance,
+    _diagnostics_endf_covariance,
+    _diagnostics_endf_samples_linear,
+    _diagnostics_endf_samples_log,
+)
 
 
-
+ 
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
-def _empirical_cov(X: np.ndarray) -> np.ndarray:
-    Xc = X - X.mean(axis=0, keepdims=True)
-    return (Xc.T @ Xc) / (X.shape[0] - 1)
-
 def _uncorrelated(
     dim: int,
     n: int,
@@ -120,301 +125,8 @@ def _pca_decomposition_sampling(
 
 
 # ----------------------------------------------------------------------
-#  Linear-space sample diagnostics
+#  Custom Exceptions
 # ----------------------------------------------------------------------
-def _diagnostics_samples_linear(
-    samples: np.ndarray,
-    cov_lin: np.ndarray,
-    param_pairs: List[Tuple[int, int]],
-    num_groups: int,
-    bins: Optional[np.ndarray],
-    z_limit: float = 3.0,
-    verbose: bool = True,
-) -> None:
-
-    if not verbose:
-        return
-
-    # Try to get logger from ace_perturbation module
-    try:
-        from mcnpy.sampling.ace_perturbation import _get_logger
-        logger = _get_logger()
-    except:
-        logger = None
-
-    separator = "-" * 60
-    log_msg = f"\n[SAMPLING] [LINEAR DIAGNOSTICS]\n{separator}"
-    
-    if logger:
-        logger.info(log_msg)
-    else:
-        print(log_msg)
-
-    warnings = []
-    means_f = samples.mean(axis=0)
-    p, n = cov_lin.shape[0], samples.shape[0]
-
-    # ---1) negatives ------------------------------------------------------
-    neg_mask = samples < 0
-    if np.any(neg_mask):
-        frac_neg = np.mean(neg_mask, axis=0)
-        for dim, frac in enumerate(frac_neg):
-            if frac == 0.0:
-                continue
-            pair_idx, grp_idx = divmod(dim, num_groups)
-            zaid, mt = param_pairs[pair_idx]
-
-            if bins is not None:
-                lo, hi = bins[grp_idx], bins[grp_idx + 1]
-                primary = (f"(ZAID={zaid}, MT={mt}), "
-                           f"G={grp_idx} [{lo:.2e},{hi:.2e}]")
-            else:
-                primary = f"(ZAID={zaid}, MT={mt}), G={grp_idx}"
-
-            warnings.append(
-                f"  [WARNING] Negative values in {primary}: {frac:.2%} of samples"
-            )
-
-    # ---2) mean significantly off 1 --------------------------------------
-    for dim in range(p):
-        var_lin = cov_lin[dim, dim]
-        if var_lin == 0.0:
-            continue                      # nothing to test
-        
-        se_f = np.sqrt(var_lin / n)
-        z = (means_f[dim] - 1.0) / se_f
-        if abs(z) <= z_limit:
-            continue
-
-        pair_idx, grp_idx = divmod(dim, num_groups)
-        zaid, mt = param_pairs[pair_idx]
-
-        if bins is not None:
-            lo, hi = bins[grp_idx], bins[grp_idx + 1]
-            primary = (f"(ZAID={zaid}, MT={mt}), "
-                       f"G={grp_idx} [{lo:.2e},{hi:.2e}]")
-        else:
-            primary = f"(ZAID={zaid}, MT={mt}), G={grp_idx}"
-
-        warnings.append(
-            f"  [WARNING] Mean deviation in {primary}: |z|={abs(z):.2f}>{z_limit} "
-            f"(mean={means_f[dim]:+.3e})"
-        )
-
-    # ---3) full-matrix reproduction --------------------------------------
-    emp_cov = _empirical_cov(samples)
-    frob_rel = (np.linalg.norm(emp_cov - cov_lin, ord='fro')
-                / np.linalg.norm(cov_lin, ord='fro')) * 100.0
-    
-    result_msg = f"  Relative linear-cov error (Frobenius): {frob_rel:.2f}%"
-    
-    if logger:
-        logger.info(result_msg)
-    else:
-        print(result_msg)
-
-    # ---final report ------------------------------------------------------
-    if warnings:
-        warning_msg = "\n  Issues detected:"
-        if logger:
-            logger.info(warning_msg)
-        else:
-            print(warning_msg)
-        for w in warnings:
-            if logger:
-                logger.info(w)
-            else:
-                print(w)
-    else:
-        ok_msg = "  All sample dimensions within thresholds."
-        if logger:
-            logger.info(ok_msg)
-        else:
-            print(ok_msg)
-    
-    end_msg = f"{separator}"
-    if logger:
-        logger.info(end_msg)
-    else:
-        print(end_msg)
-
-
-def _diagnostics_samples_log(
-    samples: np.ndarray,
-    cov_log: np.ndarray,
-    param_pairs: List[Tuple[int, int]],
-    num_groups: int,
-    bins: Optional[np.ndarray],
-    z_limit: float = 3.0,
-    verbose: bool = True,
-) -> None:
-
-    if not verbose:
-        return
-
-    # Try to get logger from ace_perturbation module
-    try:
-        from mcnpy.sampling.ace_perturbation import _get_logger
-        logger = _get_logger()
-    except:
-        logger = None
-
-    separator = "-" * 60
-    log_msg = f"\n[SAMPLING] [LOG DIAGNOSTICS]\n{separator}"
-    
-    if logger:
-        logger.info(log_msg)
-    else:
-        print(log_msg)
-
-    warnings = []
-    means_f = samples.mean(axis=0)
-    p, n = cov_log.shape[0], samples.shape[0]
-
-    for dim in range(p):
-        var_log = cov_log[dim, dim]
-        if var_log == 0.0:
-            continue
-
-        mean_th = 1.0
-        se_f = np.sqrt((np.exp(var_log) - 1.0) / n)
-        z = (means_f[dim] - mean_th) / se_f
-        if abs(z) <= z_limit:
-            continue
-
-        pair_idx, grp_idx = divmod(dim, num_groups)
-        zaid, mt = param_pairs[pair_idx]
-
-        if bins is not None:
-            lo, hi = bins[grp_idx], bins[grp_idx + 1]
-            primary = (f"(ZAID={zaid}, MT={mt}), "
-                       f"G={grp_idx} [{lo:.2e},{hi:.2e}]")
-        else:
-            primary = f"(ZAID={zaid}, MT={mt}), G={grp_idx}"
-
-        warnings.append(
-            f"  [WARNING] Mean deviation in {primary}: |z|={abs(z):.2f}>{z_limit} "
-            f"(mean={means_f[dim]:+.3e})"
-        )
-
-    emp_cov = _empirical_cov(np.log(samples))
-    frob_rel = (np.linalg.norm(emp_cov - cov_log, ord='fro')
-                / np.linalg.norm(cov_log, ord='fro')) * 100.0
-    
-    result_msg = f"  Relative log-cov error (Frobenius): {frob_rel:.2f}%"
-    
-    if logger:
-        logger.info(result_msg)
-    else:
-        print(result_msg)
-
-    if warnings:
-        warning_msg = "\n  Issues detected:"
-        if logger:
-            logger.info(warning_msg)
-        else:
-            print(warning_msg)
-        for w in warnings:
-            if logger:
-                logger.info(w)
-            else:
-                print(w)
-    else:
-        ok_msg = "  All sample dimensions within thresholds."
-        if logger:
-            logger.info(ok_msg)
-        else:
-            print(ok_msg)
-    
-    end_msg = f"{separator}"
-    if logger:
-        logger.info(end_msg)
-    else:
-        print(end_msg)
-
-
-def _diagnostics_covariance(
-    cov_lin: np.ndarray,
-    param_pairs: List[Tuple[int, int]],
-    num_groups: int,
-    bins: Optional[np.ndarray],
-    high_var_thr: float = 2.0,
-    check_spd: bool = False,
-    verbose: bool = True,
-) -> None:
-    if not verbose:
-        return
-
-    # Try to get logger from ace_perturbation module
-    try:
-        from mcnpy.sampling.ace_perturbation import _get_logger
-        logger = _get_logger()
-    except:
-        logger = None
-
-    separator = "-" * 60
-    log_msg = f"\n[COVARIANCE] [DIAGNOSTICS]\n{separator}"
-    
-    if logger:
-        logger.info(log_msg)
-    else:
-        print(log_msg)
-
-    warnings = []
-    diag = np.diag(cov_lin)
-    p = cov_lin.shape[0]
-
-    # ---1) large variances ------------------------------------------------
-    for dim, var in enumerate(diag):
-        if var <= high_var_thr:
-            continue
-        pair_idx, grp_idx = divmod(dim, num_groups)
-        zaid, mt = param_pairs[pair_idx]
-
-        if bins is not None:
-            lo, hi = bins[grp_idx], bins[grp_idx + 1]
-            primary = (f"(ZAID={zaid}, MT={mt}), "
-                       f"G={grp_idx} [{lo:.2e},{hi:.2e}]")
-        else:
-            primary = f"(ZAID={zaid}, MT={mt}), G={grp_idx}"
-
-        warnings.append(
-            f"  [WARNING] High variance in {primary}: σ²={var:.2f}>{high_var_thr}"
-        )
-
-    # ---2) SPD test (optional) --------------------------------------------
-    if check_spd:
-        lam_min = np.linalg.eigvalsh(cov_lin).min()
-        if lam_min <= 0.0:
-            warnings.append(
-                f"  [WARNING] Covariance matrix is not SPD (λ_min={lam_min:.3e})"
-            )
-
-    # ---print outcome -----------------------------------------------------
-    if warnings:
-        warning_msg = "  Issues detected:"
-        if logger:
-            logger.info(warning_msg)
-        else:
-            print(warning_msg)
-        for w in warnings:
-            if logger:
-                logger.info(w)
-            else:
-                print(w)
-    else:
-        ok_msg = "  No covariance issues detected."
-        if logger:
-            logger.info(ok_msg)
-        else:
-            print(ok_msg)
-    
-    end_msg = f"{separator}"
-    if logger:
-        logger.info(end_msg)
-    else:
-        print(end_msg)
-
 class CovarianceFixError(Exception):
     """Exception raised when covariance matrix cannot be fixed to meet eigenvalue threshold."""
     pass
@@ -571,12 +283,12 @@ def generate_samples(
     bins = np.asarray(energy_grid)
 
     # separate diagnostic for the input covariance
-    _diagnostics_covariance(
+    cov_diagnostic_results = _diagnostics_covariance(
         cov_lin, param_pairs, num_groups, bins,
         HIGH_VAR_LIN if space == "linear" else HIGH_VAR_LOG,
         check_spd=False,
         verbose=verbose
-    )        
+    )
 
     # ------------------------------------------------------------------
     # 2. Decide which covariance to impose on the Gaussian draw
@@ -596,7 +308,7 @@ def generate_samples(
     # 4. Impose correlation (any of the four decompositions)
     try:
         if method == "pca":
-            Y = _pca_decomposition_sampling(
+            Y, _, _, _ = _pca_decomposition_sampling(
                 cov_mat, n_samples, sampling_method, seed,
                 TRUNC_THRESHOLD, verbose, space, logger
             )
@@ -677,14 +389,14 @@ def generate_samples(
     # 6. Diagnostics of the *samples* (same code you had, now renamed)
 
     if space == "linear":
-        _diagnostics_samples_linear(
+        sampling_diagnostic_results = _diagnostics_samples_linear(
             factors, cov_mat,
             param_pairs, num_groups,
             bins,
             Z_LIMIT, verbose
         )
     else:
-        _diagnostics_samples_log(
+        sampling_diagnostic_results = _diagnostics_samples_log(
             factors, cov_mat,
             param_pairs, num_groups,
             bins,
@@ -738,7 +450,7 @@ def generate_endf_samples(
     decomposition_method : str
         Method for matrix decomposition: "svd", "cholesky", "eigen", or "pca"
     sampling_method : str
-        Method for generating uncorrelated samples: "sobol", "random", "halton"
+        Method for generating uncorrelated samples: "sobol", "random", "lhs"
     seed : Optional[int]
         Random seed for reproducibility
     mt_numbers : Optional[Sequence[int]]
@@ -779,7 +491,7 @@ def generate_endf_samples(
     # For MF34 data, create parameter triplets and simplified param_pairs for diagnostics
     param_triplets = mf34_cov._get_param_triplets()  # List of (isotope, mt, legendre) triplets
     
-    # Create param_pairs for diagnostics by converting triplets to (mt, legendre) pairs
+    # Create param_pairs for diagnostics by converting triplets to (mt, l) pairs
     param_pairs = [(mt, l) for (iso, mt, l) in param_triplets]
     param_pairs = sorted(list(set(param_pairs)))
     
@@ -790,11 +502,13 @@ def generate_endf_samples(
 
     # Separate diagnostic for the input covariance
     if verbose:
-        _diagnostics_endf_covariance(
+        endf_cov_diagnostic_results = _diagnostics_endf_covariance(
             cov_lin, param_triplets, num_groups, bins,
             HIGH_VAR_LIN if space == "linear" else HIGH_VAR_LOG,
             verbose=verbose, logger=logger
         )
+    else:
+        endf_cov_diagnostic_results = None
 
     # ------------------------------------------------------------------
     # 2. Decide which covariance to impose on the Gaussian draw
@@ -813,7 +527,7 @@ def generate_endf_samples(
     # ------------------------------------------------------------------
     # 4. Impose correlation using matrix decomposition
     if method == "pca":
-        Y = _pca_decomposition_sampling(
+        Y, _, _, _ = _pca_decomposition_sampling(
             cov_mat, n_samples, sampling_method, seed,
             TRUNC_THRESHOLD, verbose, space, logger
         )
@@ -884,291 +598,16 @@ def generate_endf_samples(
     # 6. Diagnostics of the samples
     if verbose:
         if space == "linear":
-            _diagnostics_endf_samples_linear(
+            endf_sampling_diagnostic_results = _diagnostics_endf_samples_linear(
                 factors, cov_mat, param_triplets, num_groups,
                 bins, Z_LIMIT, verbose=verbose, logger=logger
             )
         else:
-            _diagnostics_endf_samples_log(
+            endf_sampling_diagnostic_results = _diagnostics_endf_samples_log(
                 factors, cov_mat, param_triplets, num_groups,
                 bins, Z_LIMIT, verbose=verbose, logger=logger
             )
+    else:
+        endf_sampling_diagnostic_results = None
         
-    return factors, mt_numbers
-
-
-def _diagnostics_endf_covariance(
-    cov_lin: np.ndarray,
-    param_triplets: List[Tuple[int, int, int]],
-    num_groups: int,
-    bins: Optional[np.ndarray],
-    high_var_thr: float = 2.0,
-    verbose: bool = True,
-    logger = None,
-) -> None:
-    """Diagnostic function for ENDF covariance matrices."""
-    if not verbose:
-        return
-
-    separator = "-" * 60
-    log_msg = f"\n[ENDF COVARIANCE] [DIAGNOSTICS]\n{separator}"
-    
-    if logger:
-        logger.info(log_msg)
-    else:
-        print(log_msg)
-
-    warnings = []
-    diag = np.diag(cov_lin)
-    p = cov_lin.shape[0]
-
-    # Check for large variances
-    for dim, var in enumerate(diag):
-        if var <= high_var_thr:
-            continue
-        
-        # For MF34, calculate triplet and group indices differently
-        triplet_idx = dim // num_groups
-        grp_idx = dim % num_groups
-        
-        if triplet_idx < len(param_triplets):
-            isotope, mt, legendre = param_triplets[triplet_idx]
-            
-            if bins is not None and grp_idx < len(bins) - 1:
-                lo, hi = bins[grp_idx], bins[grp_idx + 1]
-                primary = (f"(ISO={isotope}, MT={mt}, L={legendre}), "
-                          f"G={grp_idx} [{lo:.2e},{hi:.2e}]")
-            else:
-                primary = f"(ISO={isotope}, MT={mt}, L={legendre}), G={grp_idx}"
-        else:
-            primary = f"Parameter {dim}"
-
-        warnings.append(
-            f"  [WARNING] High variance in {primary}: σ²={var:.2f}>{high_var_thr}"
-        )
-
-    # Check if matrix is positive semi-definite
-    try:
-        lam_min = np.linalg.eigvalsh(cov_lin).min()
-        if lam_min <= 0.0:
-            warnings.append(
-                f"  [WARNING] Covariance matrix is not SPD (λ_min={lam_min:.3e})"
-            )
-    except Exception as e:
-        warnings.append(f"  [WARNING] Could not check eigenvalues: {e}")
-
-    # Print outcome
-    if warnings:
-        warning_msg = "  Issues detected:"
-        if logger:
-            logger.info(warning_msg)
-        else:
-            print(warning_msg)
-        for w in warnings:
-            if logger:
-                logger.info(w)
-            else:
-                print(w)
-    else:
-        ok_msg = "  No covariance issues detected."
-        if logger:
-            logger.info(ok_msg)
-        else:
-            print(ok_msg)
-    
-    end_msg = f"{separator}"
-    if logger:
-        logger.info(end_msg)
-    else:
-        print(end_msg)
-
-
-def _diagnostics_endf_samples_linear(
-    samples: np.ndarray,
-    cov_lin: np.ndarray,
-    param_triplets: List[Tuple[int, int, int]],
-    num_groups: int,
-    bins: Optional[np.ndarray],
-    z_limit: float = 3.0,
-    verbose: bool = True,
-    logger = None,
-) -> None:
-    """Linear space sample diagnostics for ENDF data."""
-    if not verbose:
-        return
-
-    separator = "-" * 60
-    log_msg = f"\n[ENDF SAMPLING] [LINEAR DIAGNOSTICS]\n{separator}"
-    
-    if logger:
-        logger.info(log_msg)
-    else:
-        print(log_msg)
-
-    warnings = []
-    means_f = samples.mean(axis=0)
-    p, n = cov_lin.shape[0], samples.shape[0]
-
-    # NOTE: For ENDF Legendre coefficients, negative factors are physically valid
-    # so we skip the negative factor check that is used for cross-sections
-
-    # Check means significantly off 1
-    for dim in range(p):
-        var_lin = cov_lin[dim, dim]
-        if var_lin == 0.0:
-            continue
-        
-        se_f = np.sqrt(var_lin / n)
-        z = (means_f[dim] - 1.0) / se_f
-        if abs(z) <= z_limit:
-            continue
-
-        triplet_idx = dim // num_groups
-        grp_idx = dim % num_groups
-        
-        if triplet_idx < len(param_triplets):
-            isotope, mt, legendre = param_triplets[triplet_idx]
-            
-            if bins is not None and grp_idx < len(bins) - 1:
-                lo, hi = bins[grp_idx], bins[grp_idx + 1]
-                primary = (f"(ISO={isotope}, MT={mt}, L={legendre}), "
-                          f"G={grp_idx} [{lo:.2e},{hi:.2e}]")
-            else:
-                primary = f"(ISO={isotope}, MT={mt}, L={legendre}), G={grp_idx}"
-        else:
-            primary = f"Parameter {dim}"
-
-        warnings.append(
-            f"  [WARNING] Mean deviation in {primary}: |z|={abs(z):.2f}>{z_limit} "
-            f"(mean={means_f[dim]:+.3e})"
-        )
-
-    # Full-matrix reproduction check
-    emp_cov = _empirical_cov(samples)
-    frob_rel = (np.linalg.norm(emp_cov - cov_lin, ord='fro')
-                / np.linalg.norm(cov_lin, ord='fro')) * 100.0
-    
-    result_msg = f"  Relative linear-cov error (Frobenius): {frob_rel:.2f}%"
-    
-    if logger:
-        logger.info(result_msg)
-    else:
-        print(result_msg)
-
-    # Final report
-    if warnings:
-        warning_msg = "\n  Issues detected:"
-        if logger:
-            logger.info(warning_msg)
-        else:
-            print(warning_msg)
-        for w in warnings:
-            if logger:
-                logger.info(w)
-            else:
-                print(w)
-    else:
-        ok_msg = "  All sample dimensions within thresholds."
-        if logger:
-            logger.info(ok_msg)
-        else:
-            print(ok_msg)
-    
-    end_msg = f"{separator}"
-    if logger:
-        logger.info(end_msg)
-    else:
-        print(end_msg)
-
-
-def _diagnostics_endf_samples_log(
-    samples: np.ndarray,
-    cov_log: np.ndarray,
-    param_triplets: List[Tuple[int, int, int]],
-    num_groups: int,
-    bins: Optional[np.ndarray],
-    z_limit: float = 3.0,
-    verbose: bool = True,
-    logger = None,
-) -> None:
-    """Log space sample diagnostics for ENDF data."""
-    if not verbose:
-        return
-
-    separator = "-" * 60
-    log_msg = f"\n[ENDF SAMPLING] [LOG DIAGNOSTICS]\n{separator}"
-    
-    if logger:
-        logger.info(log_msg)
-    else:
-        print(log_msg)
-
-    warnings = []
-    means_f = samples.mean(axis=0)
-    p, n = cov_log.shape[0], samples.shape[0]
-
-    for dim in range(p):
-        var_log = cov_log[dim, dim]
-        if var_log == 0.0:
-            continue
-
-        mean_th = 1.0
-        se_f = np.sqrt((np.exp(var_log) - 1.0) / n)
-        z = (means_f[dim] - mean_th) / se_f
-        if abs(z) <= z_limit:
-            continue
-
-        triplet_idx = dim // num_groups
-        grp_idx = dim % num_groups
-        
-        if triplet_idx < len(param_triplets):
-            isotope, mt, legendre = param_triplets[triplet_idx]
-            
-            if bins is not None and grp_idx < len(bins) - 1:
-                lo, hi = bins[grp_idx], bins[grp_idx + 1]
-                primary = (f"(ISO={isotope}, MT={mt}, L={legendre}), "
-                          f"G={grp_idx} [{lo:.2e},{hi:.2e}]")
-            else:
-                primary = f"(ISO={isotope}, MT={mt}, L={legendre}), G={grp_idx}"
-        else:
-            primary = f"Parameter {dim}"
-
-        warnings.append(
-            f"  [WARNING] Mean deviation in {primary}: |z|={abs(z):.2f}>{z_limit} "
-            f"(mean={means_f[dim]:+.3e})"
-        )
-
-    emp_cov = _empirical_cov(np.log(samples))
-    frob_rel = (np.linalg.norm(emp_cov - cov_log, ord='fro')
-                / np.linalg.norm(cov_log, ord='fro')) * 100.0
-    
-    result_msg = f"  Relative log-cov error (Frobenius): {frob_rel:.2f}%"
-    
-    if logger:
-        logger.info(result_msg)
-    else:
-        print(result_msg)
-
-    if warnings:
-        warning_msg = "\n  Issues detected:"
-        if logger:
-            logger.info(warning_msg)
-        else:
-            print(warning_msg)
-        for w in warnings:
-            if logger:
-                logger.info(w)
-            else:
-                print(w)
-    else:
-        ok_msg = "  All sample dimensions within thresholds."
-        if logger:
-            logger.info(ok_msg)
-        else:
-            print(ok_msg)
-    
-    end_msg = f"{separator}"
-    if logger:
-        logger.info(end_msg)
-    else:
-        print(end_msg)
+    return factors, mt_numbers, endf_sampling_diagnostic_results
