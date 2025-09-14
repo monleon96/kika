@@ -29,6 +29,14 @@ class MF34CovMat:
         List of energy grids for each covariance matrix
     matrices : List[np.ndarray]
         List of covariance matrices
+    is_relative : List[bool]
+        List of flags indicating if matrix values are relative (True) or absolute (False)
+        False only when LB=0 is present
+    frame : List[str]
+        List of reference frames for each matrix:
+        - "same-as-MF4" when LCT=0
+        - "LAB" when LCT=1  
+        - "CM" when LCT=2
     """
     isotope_rows: List[int] = field(default_factory=list)
     reaction_rows: List[int] = field(default_factory=list)
@@ -39,7 +47,9 @@ class MF34CovMat:
     energy_grids: List[List[float]] = field(default_factory=list)
     matrices: List[np.ndarray] = field(default_factory=list)
 
-
+    # Metadata fields
+    is_relative: List[bool] = field(default_factory=list)
+    frame: List[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------
     # Basic methods
@@ -53,7 +63,9 @@ class MF34CovMat:
                   reaction_col: int,
                   l_col: int,
                   matrix: np.ndarray,
-                  energy_grid: List[float]) -> None:
+                  energy_grid: List[float],
+                  is_relative: bool,
+                  frame: str):
         """
         Add an angular covariance matrix to the collection.
         
@@ -75,6 +87,10 @@ class MF34CovMat:
             Covariance matrix 
         energy_grid : List[float]
             Energy grid for this covariance matrix
+        is_relative : bool
+            True if matrix values are relative, False if absolute (LB=0 present)
+        frame : str
+            Reference frame: "same-as-MF4", "LAB", "CM", or "unknown LCT=X"
         """
         # No validation on matrix shape as each matrix can have a different size
         
@@ -86,8 +102,70 @@ class MF34CovMat:
         self.l_cols.append(l_col)
         self.energy_grids.append(energy_grid)
         self.matrices.append(matrix)
+        
+        # Store metadata
+        self.is_relative.append(is_relative)
+        self.frame.append(frame)
+        
 
+    # ------------------------------------------------------------------
+    # User-friendly methods
+    # ------------------------------------------------------------------
 
+    def summary(self) -> 'pd.DataFrame':
+        """
+        Create a summary DataFrame with one row per matrix.
+        
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with columns: isotope_row, reaction_row, L_row, isotope_col, 
+            reaction_col, L_col, NE (len(energy_grid)), M (NE-1), is_relative, frame
+        """
+        
+        data = {
+            "isotope_row": self.isotope_rows,
+            "MT_row": self.reaction_rows, 
+            "L_row": self.l_rows,
+            "isotope_col": self.isotope_cols,
+            "MT_col": self.reaction_cols,
+            "L_col": self.l_cols,
+            "NE": [len(grid) for grid in self.energy_grids],
+            "is_relative": self.is_relative,
+            "frame": self.frame
+        }
+        
+        return pd.DataFrame(data)
+
+    def describe(self, i: int) -> str:
+        """
+        Pretty single-matrix summary in plain text.
+        
+        Parameters
+        ----------
+        i : int
+            Index of the matrix to describe
+            
+        Returns
+        -------
+        str
+            Human-readable description of the matrix
+        """
+        if i < 0 or i >= len(self.matrices):
+            return f"Matrix index {i} out of range [0, {len(self.matrices)-1}]"
+        
+        matrix = self.matrices[i]
+        energy_grid = self.energy_grids[i]
+        
+        desc = [
+            f"Matrix {i}:",
+            f"  Reaction: {self.isotope_rows[i]} MT{self.reaction_rows[i]} (L={self.l_rows[i]}) ↔ {self.isotope_cols[i]} MT{self.reaction_cols[i]} (L={self.l_cols[i]})",
+            f"  Shape: {matrix.shape}, Energy grid: {len(energy_grid)} points ({len(energy_grid)-1} intervals)",
+            f"  Type: {'Relative' if self.is_relative[i] else 'Absolute'}",
+            f"  Reference frame: {self.frame[i]}",
+        ]
+        
+        return '\n'.join(desc)
 
 
 
@@ -173,8 +251,6 @@ class MF34CovMat:
         cov_rel = self.covariance_matrix
         Sigma_log = np.log1p(cov_rel)
         return Sigma_log
-
-
 
 
 

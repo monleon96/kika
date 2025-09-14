@@ -35,7 +35,7 @@ class MF4MT(MT):
         return self._awr
     
     @property
-    def distribution_type(self) -> str:
+    def type(self) -> str:
         """Angular distribution format flag"""
         dist_type = ''
         if self._ltt == 0: dist_type = 'Isotropic'
@@ -57,7 +57,7 @@ class MF4MT(MT):
             raise ValueError(f"Invalid value for LI: {self._li}. Expected 0 or 1.")
     
     @property
-    def reference_frame(self) -> str:
+    def frame(self) -> str:
         """Frame of reference (1=LAB system, 2=CM system)"""
         if self._lct == 1: 
             return "LAB"
@@ -66,15 +66,6 @@ class MF4MT(MT):
         else:
             raise ValueError(f"Invalid value for LCT: {self._lct}. Expected 1 or 2.")
     
-    @property
-    def all_isotropic(self) -> bool:
-        """Whether all angular distributions are isotropic"""
-        return self._li == 1
-    
-    @property
-    def reference_frame(self) -> str:
-        """Reference frame used for angular distributions (LAB or CM)"""
-        return "LAB" if self._lct == 1 else "CM" if self._lct == 2 else "UNKNOWN"
     
     def __str__(self) -> str:
         """

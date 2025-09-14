@@ -99,7 +99,8 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
         _awr=awr, 
         _ltt=ltt,
         _nmt1=nmt1,
-        _mat=mat
+        _mat=mat,
+        _mf=mf
     )
     
     # Parse each subsection
@@ -150,7 +151,7 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
             # C1 and C2 are 0.0 (unused)
             l = sub_header.get("C3")
             l1 = sub_header.get("C4")
-            lct = sub_header.get("C5")
+            lct = sub_header.get("C5")  # System frame (0=same as MF4, 1=LAB, 2=CM)
             ni = sub_header.get("C6")  # Number of LIST records
             
             logger.debug(f"Parsing sub-subsection {sub_idx+1}/{nss} with L={l}, L1={l1}, LCT={lct}, NI={ni}")
@@ -172,63 +173,107 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                 list_header = parse_line(lines[current_line])
                 current_line += 1
                 
+                # For LB=5: C1=0.0, C2=0.0, C3=LS, C4=LB, C5=NT, C6=NE
+                # For LB=0,1,2: C1=0.0, C2=0.0, C3=LT, C4=LB, C5=NT, C6=NP
+                # For LB=6: C1=0.0, C2=0.0, C3=0, C4=LB, C5=NT, C6=NER
                 # C1 and C2 are 0.0 (unused)
-                ls = list_header.get("C3")
+                c3 = list_header.get("C3")  # Flag LS for LB=5, LT for LB=0..2, 0 for LB=6
                 lb = list_header.get("C4")
-                nt = list_header.get("C5")
-                ne_field = list_header.get("C6")
-
-                logger.debug(f"Parsing LIST record {list_idx+1}/{ni} with LS={ls}, LB={lb}, NT={nt}, NE={ne_field}")
+                nt = list_header.get("C5")  # Total number of items in the LIST 
+                                            #   - for LB=0,1,2: NT=NP*2 
+                                            #   - for LB=5: if LS=0 (asymmetric) NT=NE*(NE+1)+1, if LS=1 (symmetric) NT=[NE*(NE+1)]/2
+                                            #   - for LB=6: NT=1 + NER*NEC  (NER=row energies, NEC=col energies)
+                c6 = list_header.get("C6")  # Total number of items in the arrays
+                                            #   - for LB=0,1,2: c6=NP, number of (E,F) pairs
+                                            #   - for LB=5: c6=NE, number of energy entries (defining NE-1 intervals)
+                                            #   - for LB=6: c6=NER, number of row energies, hence NEC=(NT-1)/NER
+                
+                # Determine what C3 and C6 represent based on LB
+                if lb in (0, 1, 2):
+                    lt = c3     # if LT=0, table contains a single (E,F) table;
+                                # if LT>0, table contains two (E,F) tables, the first array has (NP-LT) pairs (only for LB=3,4 - not in MF34)
+                    np = c6  # Number of (E,F) pairs
+                    logger.debug(f"Parsing LIST record {list_idx+1}/{ni} with LT={lt}, LB={lb}, NT={nt}, NP={np}")
+                elif lb == 5:
+                    ls = c3  # Flag for symmetric matrix for LB=5 (1=symmetric, 0=asymmetric)
+                    ne = c6  # Number of energy entries
+                    logger.debug(f"Parsing LIST record {list_idx+1}/{ni} with LS={ls}, LB={lb}, NT={nt}, NE={ne}")
+                elif lb == 6:
+                    # C3 should be 0 for LB=6
+                    ner = c6  # Number of row energies
+                    logger.debug(f"Parsing LIST record {list_idx+1}/{ni} with LB={lb}, NT={nt}, NER={ner} (NEC={nec})")
+                else:
+                    logger.debug(f"Parsing LIST record {list_idx+1}/{ni} with LB={lb}, NT={nt}")
 
                 # Create LIST record
-                list_record = SubSubsectionRecord(ls=ls, lb=lb, nt=nt)
+                list_record = SubSubsectionRecord(lb=lb, nt=nt)
 
                 if lb in (0, 1, 2):
-                    # one (E,F) table: NT=2*NE
-                    list_record.ne = ne_field
-                    list_record.lt = 0
-                    list_record.np = list_record.ne
+                    # Header fields for LB=0..2 (LIST):
+                    # C3=LT, C4=LB, C5=NT (#floats to follow), C6=NP (#(E,F) pairs across table[s])
+                    list_record.lt = lt 
+                    list_record.lb = lb
+                    list_record.nt = nt
+                    list_record.np = np
+
                     values_to_read = nt
                     all_values = []
                     while len(all_values) < values_to_read and current_line < len(lines):
                         vl = parse_line(lines[current_line]); current_line += 1
-                        for i in range(1,7):
+                        for i in range(1, 7):
                             if len(all_values) < values_to_read:
                                 v = vl.get(f"C{i}")
                                 if v is not None:
                                     all_values.append(v)
-                    # distribute into E_k, F_k
-                    for i in range(list_record.ne):
-                        list_record.e_table_k.append(all_values[2*i])
-                        list_record.f_table_k.append(all_values[2*i+1])
-                    logger.debug(f"Parsed LB={lb} one-table record with NE={list_record.ne}")
+                    # Preserve raw floats exactly for round-trip
+                    list_record.raw_list_values = all_values[:]
+
+                    # Decode only the common LT==0 case (single [E,F] table)
+                    if (list_record.lt or 0) == 0:
+                        # one (E_k, F_k) table; NP==NE
+                        ne = int(list_record.np or 0)
+                        list_record.ne = ne
+                        for i in range(ne):
+                            list_record.e_table_k.append(all_values[2*i])
+                            list_record.f_table_k.append(all_values[2*i+1])
+                    else:
+                        # LT>0 rare two-table variant: we keep raw values for exact __str__ output
+                        # and skip decoding until support is implemented.
+                        logger.info(f"LB={lb} with LT={list_record.lt}>0 encountered: preserving raw LIST values for exact round-trip; skipping decode.")
+
 
                 elif lb == 5:
-                    # For LB=5 (original implementation)
-                    ne = list_header.get("C6")  # Number of energy entries
+                    # For LB=5: LS in C3, NE in C6
+                    list_record.ls = ls
                     list_record.ne = ne
                     
-                    logger.debug(f"LB=5 processing: NE={ne}")
+                    logger.debug(f"LB=5 processing: LS={ls}, NE={ne}")
                     
                     # Calculate number of matrix elements based on LS and NE for LB=5
                     # Matrix is (NE-1) x (NE-1) for intervals
                     m = ne - 1  # Number of intervals = matrix dimension
+                    if ne < 2:
+                        raise ValueError(f"LB=5 requires NE >= 2 to define intervals, got NE={ne}")
+                    
                     if ls == 0:  # Asymmetric matrix
                         num_matrix_elements = m * m  # (NE-1)²
+                        expected_nt = ne + num_matrix_elements
                         logger.debug(f"LB=5 asymmetric matrix: {m}x{m} = {num_matrix_elements} elements")
                     elif ls == 1:  # Symmetric matrix - upper triangle including diagonal
                         num_matrix_elements = m * (m + 1) // 2  # (NE-1)(NE-1+1)/2
+                        expected_nt = ne + num_matrix_elements
                         logger.debug(f"LB=5 symmetric matrix: {m}x{m}, upper triangle = {num_matrix_elements} elements")
                     else:
-                        raise ValueError(f"Unknown LS value: {ls}. Should be 0 or 1")
-                    
+                        raise ValueError(f"LB=5 unknown LS value: {ls}. Should be 0 or 1")
+
                     # Total values to read: energy grid + matrix elements
                     values_to_read = ne + num_matrix_elements
                     logger.debug(f"LB=5 total values to read: {ne} (energies) + {num_matrix_elements} (matrix) = {values_to_read}")
                     
-                    # Check NT field
-                    if nt != values_to_read:
-                        logger.warning(f"LB=5 NT mismatch! Expected {values_to_read}, got {nt}")
+                    # Validate NT field
+                    if nt != expected_nt:
+                        logger.warning(f"LB=5 NT mismatch! Expected {expected_nt}, got {nt}. Proceeding with NT={nt}")
+                        values_to_read = nt  # Use actual NT for reading
                     
                     # Read all the data values following the LIST header
                     all_values = []
@@ -262,11 +307,29 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                     list_record.matrix = matrix_values
                     
                     logger.debug(f"LB=5 stored {len(list_record.energies)} energies and {len(list_record.matrix)} matrix values")
+                
                 elif lb == 6:
-                    # rectangular matrix: NT=1+NER*NEC
-                    ner = ne_field
-                    nec = (nt - 1) // ner
+                    # Rectangular matrix: NT = 1 + NER*NEC = NER + NEC + (NER-1)*(NEC-1)
                     list_record.ne = ner
+                    
+                    # Strict validation: (NT - 1) must be divisible by NER
+                    if (nt - 1) % ner != 0:
+                        raise ValueError(f"LB=6 invalid NT={nt} for NER={ner}: (NT-1)={nt-1} must be divisible by NER")
+                    
+                    nec = (nt - 1) // ner
+                    
+                    if ner < 2 or nec < 2:
+                        raise ValueError(f"LB=6 requires NER >= 2 and NEC >= 2 to define intervals, got NER={ner}, NEC={nec}")
+                    
+                    # Calculate expected matrix size
+                    r = ner - 1  # Number of row intervals
+                    c = nec - 1  # Number of column intervals
+                    expected_matrix_size = r * c
+                    expected_total_size = ner + nec + expected_matrix_size
+                    
+                    if nt != expected_total_size:
+                        logger.warning(f"LB=6 NT mismatch! Expected {expected_total_size} (NER={ner} + NEC={nec} + matrix={expected_matrix_size}), got {nt}")
+                    
                     values_to_read = nt
                     all_values = []
                     while len(all_values) < values_to_read and current_line < len(lines):
@@ -276,11 +339,17 @@ def parse_mf34_mt(lines: List[str], mt: int) -> MF34MT:
                                 v = vl.get(f"C{i}")
                                 if v is not None:
                                     all_values.append(v)
-                    # split row energies, col energies, matrix
+                    
+                    # Split row energies, col energies, matrix
                     list_record.row_energies = all_values[:ner]
                     list_record.col_energies = all_values[ner:ner+nec]
                     list_record.rect_matrix   = all_values[ner+nec:]
-                    logger.debug(f"Parsed LB=6 record with NER={ner}, NEC={nec}")
+                    
+                    # Validate matrix size
+                    if len(list_record.rect_matrix) != expected_matrix_size:
+                        raise ValueError(f"LB=6 rect_matrix size mismatch! Expected {expected_matrix_size} elements for (NER-1)*(NEC-1)=({ner}-1)*({nec}-1), got {len(list_record.rect_matrix)}")
+                    
+                    logger.debug(f"Parsed LB=6 record with NER={ner}, NEC={nec}, matrix size={len(list_record.rect_matrix)}")
 
                 else:
                     raise ValueError(f"Unsupported LB value: {lb}")

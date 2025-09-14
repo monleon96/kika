@@ -21,13 +21,17 @@ class SubSubsectionRecord:
     nt: int = None       # Total number of items in the list
     ne: int = None       # Number of energy entries
     
+    lt: int = None                    # for LB=0..2: LT lives in C3
+    np: int = None                    # for LB=0..2: number of (E,F) pairs across table(s)
+
+    # Preserve original LIST floats for round-trip in rare cases (e.g., LT>0)
+    raw_list_values: List[float] = field(default_factory=list)
+
     # For LB=5 (original format)
     energies: List[float] = field(default_factory=list)   # Energy grid
     matrix: List[float] = field(default_factory=list)     # Fk,k' covariance matrix values
     
     # For LB=0-4
-    lt: int = None       # Number of pairs in the second array
-    np: int = None       # Total number of pairs
     e_table_k: List[float] = field(default_factory=list)  # Energies in first table
     f_table_k: List[float] = field(default_factory=list)  # F-values in first table
     e_table_l: List[float] = field(default_factory=list)  # Energies in second table (when LT > 0)
@@ -69,6 +73,7 @@ class MF34MT(MT):
     _ltt: int = None
     _nmt1: int = None
     _mat: int = None
+    _mf: int = 34
     _subsections: List[Subsection] = field(default_factory=list)
     num_lines: int = 0
 
@@ -84,15 +89,19 @@ class MF34MT(MT):
     
     @property
     def representation_flag(self) -> str:
-        """Flag indicating which Legendre representation is used"""
-        if self._ltt == 1:
+        """Legendre representation used in MF4/MF34."""
+        ltt = None if self._ltt is None else int(self._ltt)
+        if ltt in (None, 0):
+            # MF4 isotropic / unspecified case can propagate here; don't raise
+            return "isotropic or unspecified (MF4 conventions)"
+        if ltt == 1:
             return "Legendre coefficients starting with a1"
-        elif self._ltt == 2:
+        if ltt == 2:
             return "Legendre coefficients starting with a0"
-        elif self._ltt == 3:
-            return "Either L or L1 = 0"
-        else:
-            raise ValueError(f"Invalid LTT value: {self._ltt}. Expected 1, 2, or 3.")
+        if ltt == 3:
+            return "either L or L1 may be 0"
+        # Be tolerant: some files use extensions—surface as text instead of raising
+        return f"unknown (LTT={ltt})"
     
     @property
     def num_subsections(self) -> int:
@@ -181,33 +190,55 @@ class MF34MT(MT):
                         )
                         lines.append(blank_line_number(record_header))
                         
-                        # one (E_k,F_k) table only
-                        all_values = []
-                        for i in range(len(record.e_table_k)):
-                            all_values.append(record.e_table_k[i])
-                            all_values.append(record.f_table_k[i])
-                        
-                        # Format in blocks of 6
-                        current_values = []
-                        for val in all_values:
-                            current_values.append(val)
-                            if len(current_values) == 6:
-                                value_line = format_endf_data_line(current_values, mat, mf, mt, 0)
+
+                        # data lines
+                        if record.lt in (None, 0):
+
+                            # one (E_k,F_k) table only
+                            all_values = []
+                            for i in range(len(record.e_table_k)):
+                                all_values.append(record.e_table_k[i])
+                                all_values.append(record.f_table_k[i])
+                            
+                            # Format in blocks of 6
+                            current_values = []
+                            for val in all_values:
+                                current_values.append(val)
+                                if len(current_values) == 6:
+                                    value_line = format_endf_data_line(current_values, mat, mf, mt, 0)
+                                    lines.append(blank_line_number(value_line))
+                                    current_values = []
+                            
+                            # Add any remaining values
+                            if current_values:
+                                # Pad with None for blanks
+                                while len(current_values) < 6:
+                                    current_values.append(None)
+                                value_line = format_endf_data_line(
+                                    current_values, 
+                                    mat, mf, mt, 0,
+                                    formats=[ENDF_FORMAT_FLOAT] * len(current_values) + [ENDF_FORMAT_BLANK] * (6 - len(current_values))
+                                )
                                 lines.append(blank_line_number(value_line))
-                                current_values = []
-                        
-                        # Add any remaining values
-                        if current_values:
-                            # Pad with None for blanks
-                            while len(current_values) < 6:
-                                current_values.append(None)
-                            value_line = format_endf_data_line(
-                                current_values, 
-                                mat, mf, mt, 0,
-                                formats=[ENDF_FORMAT_FLOAT] * len(current_values) + [ENDF_FORMAT_BLANK] * (6 - len(current_values))
-                            )
-                            lines.append(blank_line_number(value_line))
-                    
+
+                        else:
+                            # LT>0: write back the raw floats exactly as read (6 per ENDF line)
+                            buf = []
+                            for val in record.raw_list_values:
+                                buf.append(val)
+                                if len(buf) == 6:
+                                    ln = format_endf_data_line(buf, mat, mf, mt, 0)
+                                    lines.append(blank_line_number(ln))
+                                    buf = []
+                            if buf:
+                                while len(buf) < 6:
+                                    buf.append(None)
+                                ln = format_endf_data_line(
+                                    buf, mat, mf, mt, 0,
+                                    formats=[ENDF_FORMAT_FLOAT]*len(buf) + [ENDF_FORMAT_BLANK]*(6-len(buf))
+                                )
+                                lines.append(blank_line_number(ln))
+
                     elif record.lb == 5:
                         # Format LIST record header for LB=5 (original format)
                         record_header = format_endf_data_line(
@@ -337,16 +368,20 @@ class MF34MT(MT):
         logger.debug(f"Native grid NE={ne}, Matrix size M={m}x{m}, Raw values count={len(raw_values)}")
 
 
-        # Check data size consistency
+        # Check data size consistency with strict validation
         expected_size = 0
         if ls == 1: # Symmetric upper triangle M(M+1)/2
             expected_size = m * (m + 1) // 2
         else: # Asymmetric M*M (based on ENDF manual, differs from recipe's (M-1)^2)
              expected_size = m * m
+        
         if len(raw_values) != expected_size:
-             # Allow flexibility if NT calculation was different but data seems present
-             logger.warning(f"LB=5 LS={ls}: Data size {len(raw_values)} != expected {expected_size} for M={m}. Proceeding cautiously.")
-             # raise ValueError(f"LB=5 LS={ls}: Incorrect number of matrix values. Expected {expected_size} for M={m}, got {len(raw_values)}.")
+             # Log clear error pointing to the issue
+             logger.error(f"LB=5 LS={ls} matrix size mismatch for M={m}:")
+             logger.error(f"  Expected: {expected_size} elements")
+             logger.error(f"  Got: {len(raw_values)} elements")
+             logger.error(f"  Formula: LS={ls} → {'M*(M+1)/2' if ls == 1 else 'M*M'} = {expected_size}")
+             raise ValueError(f"LB=5 LS={ls}: Incorrect number of matrix values. Expected {expected_size} for M={m}, got {len(raw_values)}.")
 
         idx = 0
         start_fill = time.time()
@@ -367,8 +402,10 @@ class MF34MT(MT):
         end_fill = time.time()
         logger.debug(f"Matrix fill time: {end_fill - start_fill:.4f}s")
 
+        # Final validation that we used all data
         if idx != len(raw_values):
-             logger.warning(f"LB=5 LS={ls}: Filled {idx} elements, but expected to use {len(raw_values)}. Check indexing.")
+             logger.error(f"LB=5 LS={ls}: Used {idx} elements but had {len(raw_values)} available. Internal indexing error.")
+             raise ValueError(f"LB=5 internal error: indexing mismatch")
 
         logger.debug(f"Finished decoding LB=5.")
         return matrix, energies # Return MxM matrix and NE point grid
@@ -392,24 +429,15 @@ class MF34MT(MT):
         logger.debug(f"Row grid NER={ner}, Col grid NEC={nec}, Matrix size R={r}x C={c}, Raw values count={len(raw_values)}")
 
 
-        # Check data size consistency: NT = 1 + NER * NEC (from parser)
-        # Number of matrix elements = R * C = (NER-1)*(NEC-1)
-        # The raw_values should have R*C elements based on recipe. Let's check parser logic.
-        # Parser: nec = (nt - 1) // ner. rect_matrix = all_values[ner+nec:]. NT = ner+nec+len(rect_matrix) ? No.
-        # This might need revision if interval interpretation is strict.
-
+        # Strict validation: exactly R*C elements expected
         expected_size = r * c
         if len(raw_values) != expected_size:
-            # Check if parser logic based on NT leads to this size
-            nt_based_size = record.nt - ner - nec
-            if len(raw_values) == nt_based_size:
-                 logger.warning(f"LB=6 matrix value count {len(raw_values)} matches NT-NER-NEC ({nt_based_size}) but differs from recipe's R*C ({expected_size}). Using data as read.")
-                 # If this happens, the matrix filling logic might be wrong if data isn't R*C.
-                 # Let's proceed assuming the data IS R*C as read by parser, even if count seems off vs recipe.
-                 pass # Keep matrix shape R*C
-            else:
-                 raise ValueError(f"LB=6: Inconsistent number of matrix values. Expected {expected_size} (R*C) or {nt_based_size} (NT-NER-NEC), got {len(raw_values)}.")
-
+             logger.error(f"LB=6 matrix size mismatch for R={r}, C={c}:")
+             logger.error(f"  Expected: {expected_size} elements (R*C)")
+             logger.error(f"  Got: {len(raw_values)} elements")
+             logger.error(f"  Row intervals (NER-1): {r}")
+             logger.error(f"  Column intervals (NEC-1): {c}")
+             raise ValueError(f"LB=6: Incorrect number of matrix values. Expected {expected_size} for R={r}*C={c}, got {len(raw_values)}.")
 
         idx = 0
         start_fill = time.time()
@@ -421,8 +449,10 @@ class MF34MT(MT):
         end_fill = time.time()
         logger.debug(f"Matrix fill time: {end_fill - start_fill:.4f}s")
 
+        # Final validation that we used all data
         if idx != len(raw_values):
-             logger.warning(f"LB=6: Filled {idx} elements, but expected to use {len(raw_values)}. Check indexing.")
+             logger.error(f"LB=6: Used {idx} elements but had {len(raw_values)} available. Internal indexing error.")
+             raise ValueError(f"LB=6 internal error: indexing mismatch")
 
         logger.debug(f"Finished decoding LB=6.")
         return matrix, row_energies, col_energies # Return RxC matrix and NER, NEC point grids
@@ -571,6 +601,7 @@ class MF34MT(MT):
             # Process each sub-subsection (L, L1 pair)
             logger.debug(f"Found {len(subsection.sub_subsections)} sub-subsections (L,L1).")
             for subsub_idx, sub_subsec in enumerate(subsection.sub_subsections):
+                encountered_lbs: Set[int] = set()
                 l = sub_subsec.l
                 l1 = sub_subsec.l1
                 is_variance_matrix = (l == l1)  # Only same L coefficients represent variances
@@ -584,7 +615,7 @@ class MF34MT(MT):
                     logger.debug("Skipping sub-subsection - No LIST records.")
                     continue
 
-                                # 1. Determine Union Point Grid for this sub-subsection
+                # 1. Determine Union Point Grid for this sub-subsection
                 start_grid = time.time()
                 all_energies_set: Set[float] = set()
                 native_grids_map = {} # Store native grids for projection
@@ -592,12 +623,16 @@ class MF34MT(MT):
 
                 logger.debug(f"Found {len(sub_subsec.records)} LIST records. Determining union grid...")
                 for idx, record in enumerate(sub_subsec.records):
+                    encountered_lbs.add(record.lb)
                     native_grid = None
                     native_col_grid = None
                     component_matrix = None
                     is_lb6 = False
 
                     try:
+                        # Track this LB type
+                        encountered_lbs.add(record.lb)
+                        
                         if record.lb in (0, 1, 2):
                             component_matrix, native_grid = self._decode_lb012_matrix(record)
                             if record.lb == 0:
@@ -787,14 +822,34 @@ class MF34MT(MT):
                         logger.debug(f"Final covariance matrix (L={l}, L1={l1}) has no negative diagonals")
                         logger.debug(f"Diagonal range: [{np.min(final_diag):.2e}, {np.max(final_diag):.2e}]")
 
+
+                # Determine metadata for this sub-subsection
+                # is_relative: False only when LB=0 is present
+                is_relative = 0 not in encountered_lbs
+                
+                # frame: based on LCT value
+                raw_lct = sub_subsec.lct
+                lct = int(raw_lct) if raw_lct is not None else 0  # normalize to int
+                if lct == 0:
+                    frame = "same-as-MF4"
+                elif lct == 1:
+                    frame = "LAB"
+                elif lct == 2:
+                    frame = "CM"
+                else:
+                    frame = f"unknown LCT={lct}"
+
                 # Add the final aggregated MxM matrix for this sub-subsection (L, L1)
                 logger.debug(f"Adding final matrix for L={l}, L1={l1} to MF34CovMat.")
+                logger.debug(f"Matrix metadata: is_relative={is_relative}, frame={frame}")
                 ang_covmat.add_matrix(
                     isotope, reaction, l,
                     isotope, mt1, l1,
-                    total_cov_matrix, # The M_union x M_union matrix
-                    union_point_grid  # The NE_union point grid
+                    total_cov_matrix,
+                    union_point_grid,
+                    is_relative=is_relative,
+                    frame=frame
                 )
 
-        logger.debug(f"Finished to_ang_covmat for MF34 MT={self.number}")
+
         return ang_covmat

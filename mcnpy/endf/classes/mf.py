@@ -135,7 +135,9 @@ class MF:
                         mt_ang_covmat.reaction_cols[i],
                         mt_ang_covmat.l_cols[i],
                         mt_ang_covmat.matrices[i],
-                        mt_ang_covmat.energy_grids[i]  # Pass the corresponding energy grid
+                        mt_ang_covmat.energy_grids[i],
+                        mt_ang_covmat.is_relative[i],
+                        mt_ang_covmat.frame[i]
                     )
             except (AttributeError, ValueError) as e:
                 # Catch potential errors if a section isn't a valid MF34MT or conversion fails
