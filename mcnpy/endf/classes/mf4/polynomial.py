@@ -1,7 +1,12 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Union
+import numpy as np
 
 from .base import MF4MT
+from ....endf.utils import (
+    get_interpolation_scheme_name, interpolate_1d_endf,
+)
+
 
 @dataclass
 class MF4MTLegendre(MF4MT):
@@ -75,6 +80,79 @@ class MF4MTLegendre(MF4MT):
         """
         return {e: c for e, c in zip(self._energies, self._legendre_coeffs)}
     
+    # --- Main API: interpolated Legendre coefficients at E ---
+    def extract_legendre_coefficients(
+        self,
+        energy: Union[float, np.ndarray],
+        max_legendre_order: int = 10,
+        *,
+        out_of_range: str = "zero"
+    ) -> Dict[int, Union[float, np.ndarray]]:
+        """
+        Return a_ℓ(E) coefficients for ℓ=0..max_legendre_order using ENDF energy interpolation.
+        Missing higher orders at a given energy are treated as zeros (ENDF convention).
+        
+        Parameters
+        ----------
+        energy : float or array
+            Energy point(s) where to evaluate a_ℓ(E)
+        max_legendre_order : int
+            Maximum Legendre order to compute
+        out_of_range : str
+            Behavior outside energy grid: 'zero' or 'hold'
+            
+        Returns
+        -------
+        Dict[int, Union[float, np.ndarray]]
+            Dictionary mapping Legendre order ℓ to coefficient values a_ℓ(E)
+
+        Notes
+        -----
+        * Uses ENDF energy interpolation with regions defined by self._interpolation
+        * Energy interpolation regions (NBT, INT) are taken from self._interpolation
+        * Missing coefficients at any energy are filled with zeros per ENDF convention
+        """
+        energies = np.asarray(self._energies, dtype=float)
+        all_coeffs = self._legendre_coeffs
+        result: Dict[int, Union[float, np.ndarray]] = {}
+
+        # Handle no data
+        if energies.size == 0:
+            is_scalar = np.isscalar(energy)
+            arr = np.array([energy]) if is_scalar else np.asarray(energy, dtype=float)
+            for l in range(max_legendre_order + 1):
+                result[l] = float(0.0) if is_scalar else np.zeros_like(arr, dtype=float)
+            return result
+
+        # Highest available order in the file
+        max_available = 0
+        for row in all_coeffs:
+            if row:
+                max_available = max(max_available, len(row) - 1)
+        Lmax = min(max_legendre_order, max_available)
+
+        x_eval = np.array([energy], dtype=float) if np.isscalar(energy) else np.asarray(energy, dtype=float)
+
+        # Prebuild aligned arrays per order: any missing coefficient at an energy -> 0.0
+        # This guarantees the ENDF energy interpolation law applies uniformly.
+        nE = energies.size
+        for l in range(Lmax + 1):
+            y_l = np.empty(nE, dtype=float)
+            for i in range(nE):
+                coeffs_i = all_coeffs[i]
+                y_l[i] = coeffs_i[l] if l < len(coeffs_i) else 0.0
+
+            # Interpolate this order with ENDF energy interpolation regions
+            y_eval = interpolate_1d_endf(energies, y_l, self._interpolation, x_eval, out_of_range=out_of_range)
+
+            result[l] = float(y_eval[0]) if np.isscalar(energy) else y_eval
+
+        # Fill remaining orders (if user requested higher than available)
+        for l in range(Lmax + 1, max_legendre_order + 1):
+            result[l] = float(0.0) if np.isscalar(energy) else np.zeros_like(x_eval, dtype=float)
+
+        return result
+
     def __str__(self) -> str:
         """
         Convert the MF4MTLegendre object back to ENDF format string.

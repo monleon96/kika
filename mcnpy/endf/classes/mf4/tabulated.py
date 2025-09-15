@@ -1,7 +1,12 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Union, Dict, Sequence, Optional
+import math
+import numpy as np
 
 from .base import MF4MT
+from ....endf.utils import (
+    interpolate_1d_endf, segment_int_codes, interp_energy_values, project_tabulated_to_legendre
+)
 
 
 @dataclass
@@ -72,35 +77,148 @@ class MF4MTTabulated(MF4MT):
         """
         return self._angular_interpolation
     
+
+    # ------------------------- core helpers -------------------------
+    def _energy_panel_code_for_pair(self, upper_index: int) -> int:
+        """
+        Return the ENDF INT code for the interval (E[upper_index-1], E[upper_index]).
+        upper_index runs from 1 to NE-1 (inclusive).
+        """
+        ne = len(self._energies)
+        pairs = self._interpolation if self._interpolation else [(ne, 2)]
+        seg_int = segment_int_codes(ne, pairs)
+        return int(seg_int[upper_index - 1])
+
+    def _f_mu_at_energy(self, E: float, mu_points: np.ndarray, out_of_range: str = "zero") -> np.ndarray:
+        """
+        Evaluate f(μ, E) at requested E using ENDF-correct 2D interpolation:
+          1) within each energy table, interpolate in μ using that table's (NBT,INT),
+          2) then interpolate in E between the bracketing energies using the energy (NBT,INT).
+          
+        Parameters
+        ----------
+        E : float
+            Energy at which to evaluate the distribution
+        mu_points : np.ndarray
+            Cosine values where to evaluate f(μ, E)
+        out_of_range : str
+            Behavior outside energy grid: 'zero' or 'hold'
+        """
+        energies = np.asarray(self._energies, dtype=float)
+        if energies.size == 0:
+            return np.zeros_like(mu_points, dtype=float)
+
+        # locate bracketing energies
+        if E <= energies[0]:
+            idx0, idx1 = 0, 0
+        elif E >= energies[-1]:
+            idx0, idx1 = len(energies) - 1, len(energies) - 1
+        else:
+            idx1 = int(np.searchsorted(energies, E, side="right"))
+            idx0 = idx1 - 1
+
+        def f_at_table(i: int) -> np.ndarray:
+            mu_i = np.asarray(self._cosines[i], dtype=float)
+            f_i = np.asarray(self._probabilities[i], dtype=float)
+            ang_pairs = self._angular_interpolation[i] if (i < len(self._angular_interpolation) and self._angular_interpolation[i]) else [(len(mu_i), 2)]
+            # angular interpolation (μ) using shared utils with consistent out_of_range
+            return interpolate_1d_endf(mu_i, f_i, ang_pairs, mu_points, out_of_range="hold")
+
+        f0 = f_at_table(idx0)
+        if idx1 == idx0:
+            fE = f0
+        else:
+            f1 = f_at_table(idx1)
+            code = self._energy_panel_code_for_pair(idx1)
+            fE = interp_energy_values(energies[idx0], f0, energies[idx1], f1, E, code)
+
+        return fE
+
+    # ------------------------- public API -------------------------
+    def extract_legendre_coefficients(
+        self,
+        energy: Union[float, np.ndarray],
+        max_legendre_order: int = 10,
+        *,
+        quad_order: int = 96,
+        out_of_range: str = "zero"
+    ) -> Dict[int, Union[float, np.ndarray]]:
+        """
+        Compute a_ℓ(E) = (2ℓ+1)/2 ∫_{-1}^{1} P_ℓ(μ) f(μ,E) dμ,
+        honoring ENDF angular and energy interpolation laws.
+        
+        Parameters
+        ----------
+        energy : float or array
+            Energy point(s) where to evaluate a_ℓ(E)
+        max_legendre_order : int
+            Maximum Legendre order to compute
+        quad_order : int  
+            Quadrature order for Gauss-Legendre integration
+        out_of_range : str
+            Behavior outside energy grid: 'zero' or 'hold'
+            
+        Returns
+        -------
+        Dict[int, Union[float, np.ndarray]]
+            Dictionary mapping Legendre order ℓ to coefficient values a_ℓ(E)
+        """
+        # Handle empty data
+        if len(self._energies) == 0:
+            scalar_input = np.isscalar(energy)
+            energy_array = np.array([energy], dtype=float) if scalar_input else np.array(energy, dtype=float)
+            zeros = {ell: (0.0 if scalar_input else np.zeros_like(energy_array)) 
+                    for ell in range(max_legendre_order + 1)}
+            return zeros
+
+        scalar_input = np.isscalar(energy)
+        E_arr = np.array([energy], dtype=float) if scalar_input else np.array(energy, dtype=float)
+
+        # Gauss–Legendre quadrature nodes/weights on [-1,1]
+        mu_q, w_q = np.polynomial.legendre.leggauss(quad_order)
+
+        out = {ell: np.empty(E_arr.shape, dtype=float) for ell in range(max_legendre_order + 1)}
+
+        for k, Ereq in enumerate(E_arr):
+            f_q = self._f_mu_at_energy(Ereq, mu_q, out_of_range)
+
+            # Use the utility function for projection
+            # Note: project_tabulated_to_legendre expects tabulated (mu, f_mu) data,
+            # but we already have f evaluated at quadrature points, so we pass them directly
+            coeffs = project_tabulated_to_legendre(
+                mu=mu_q,
+                fmu=f_q,
+                max_order=max_legendre_order,
+                ang_nbt_int=[(len(mu_q), 2)],  # Linear interpolation (already interpolated)
+                quad_order=quad_order
+            )
+
+            # Store results
+            for ell in range(max_legendre_order + 1):
+                out[ell][k] = coeffs[ell]
+
+        # Return appropriate format
+        if scalar_input:
+            return {ell: float(vals[0]) for ell, vals in out.items()}
+        return out
+
     def get_distribution_at_energy(self, energy: float) -> Tuple[List[float], List[float]]:
         """
-        Get tabulated angular distribution at a specific energy.
-        
-        Args:
-            energy: Energy point to retrieve distribution for
-            
-        Returns:
-            Tuple of (cosines, probabilities) at that energy
+        Return the stored tabulated (μ, f) at an exact grid energy, or ([],[]) if not found.
         """
         try:
-            index = self._energies.index(energy)
-            return (self._cosines[index], self._probabilities[index])
+            i = self._energies.index(energy)
+            return (self._cosines[i], self._probabilities[i])
         except (ValueError, IndexError):
             return ([], [])
-    
+
     def get_distribution_dict(self) -> Dict[float, Tuple[List[float], List[float]]]:
         """
-        Get tabulated data as a dictionary mapping energies to (cosines, probabilities).
-        
-        Returns:
-            Dictionary with energies as keys and (cosines, probabilities) tuples as values
+        Map each grid energy to its (μ, f) table.
         """
-        return {e: (c, p) for e, c, p in zip(
-            self._energies, 
-            self._cosines, 
-            self._probabilities
-        )}
+        return {e: (c, p) for e, c, p in zip(self._energies, self._cosines, self._probabilities)}
     
+
     def __str__(self) -> str:
         """
         Convert the MF4MTTabulated object back to ENDF format string.

@@ -1,8 +1,13 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Union
+import numpy as np
+from scipy import special  # retained in case you need elsewhere
 
 from .base import MF4MT
-from ....endf.utils import get_interpolation_scheme_name, describe_interpolation_region
+from ....endf.utils import (
+    get_interpolation_scheme_name, project_tabulated_to_legendre,
+    interpolate_1d_endf, auto_trim_legendre_tail, pick_mixed_branch,
+)
 
 @dataclass
 class MF4MTMixed(MF4MT):
@@ -108,6 +113,123 @@ class MF4MTMixed(MF4MT):
             return (self._tabulated_cosines[index], self._tabulated_probabilities[index])
         except (ValueError, IndexError):
             return ([], [])
+
+
+    # --- CORE: extract coefficients with auto-trim and ENDF interpolation ---
+
+    def extract_legendre_coefficients(
+        self,
+        energy: Union[float, np.ndarray],
+        max_legendre_order: int = 10,
+        *,
+        trim: bool = True,
+        trim_tol: float = 1e-6,
+        quad_order: int = 64,
+        out_of_range: str = "zero"
+    ) -> Dict[int, Union[float, np.ndarray]]:
+        """
+        Return a_ℓ(E) for ℓ=0..L (L=max_legendre_order initially, then auto-trim optional).
+
+        LTT=3 rules:
+          - use the Legendre branch (LTT=1) below/at its max energy,
+          - use the tabulated branch (LTT=2) above/at its min energy,
+          - if there is a gap, pick the nearest boundary.
+
+        Energy interpolation on each branch respects the declared ENDF (NBT,INT) pairs.
+
+        Parameters
+        ----------
+        energy : float or array
+            Energy point(s) where to evaluate a_ℓ(E)
+        max_legendre_order : int
+            Initial maximum order to compute before optional auto-trim
+        trim : bool
+            If True, auto-trim trailing orders by the tail sum rule ∑_{ℓ>L} |a_ℓ| < trim_tol
+        trim_tol : float
+            Tolerance for auto-trim
+        quad_order : int
+            Quadrature order for projecting tabulated f(μ|E) to Legendre
+        out_of_range : str
+            Behavior outside energy grid: 'zero' or 'hold'
+            
+        Returns
+        -------
+        Dict[int, Union[float, np.ndarray]]
+            Dictionary mapping Legendre order ℓ to coefficient values a_ℓ(E)
+        """
+        # grids
+        E_leg = np.asarray(self._energies, dtype=float) if self._energies else np.array([], dtype=float)
+        E_tab = np.asarray(self._tabulated_energies, dtype=float) if self._tabulated_energies else np.array([], dtype=float)
+
+        # handle scalar vs array
+        scalar = np.isscalar(energy)
+        E_query = np.array([energy], dtype=float) if scalar else np.asarray(energy, dtype=float)
+        nE = E_query.size
+
+        # Precompute padded coefficient arrays on each grid up to max_legendre_order
+        A_leg = None  # shape (n_leg, L+1)
+        if E_leg.size > 0:
+            n_leg = len(self._legendre_coeffs)
+            Lmax = max_legendre_order
+            pad = np.zeros((n_leg, Lmax + 1), dtype=float)
+            for i, coeffs in enumerate(self._legendre_coeffs):
+                m = min(len(coeffs), Lmax + 1)
+                pad[i, :m] = coeffs[:m]
+            A_leg = pad  # (n_leg, L+1)
+
+        A_tab = None  # shape (n_tab, L+1)
+        if E_tab.size > 0:
+            n_tab = len(self._tabulated_energies)
+            Lmax = max_legendre_order
+            pad = np.zeros((n_tab, Lmax + 1), dtype=float)
+            for i in range(n_tab):
+                mu_i = self._tabulated_cosines[i] if i < len(self._tabulated_cosines) else []
+                f_i = self._tabulated_probabilities[i] if i < len(self._tabulated_probabilities) else []
+                ang_interp_i = self._angular_interpolation[i] if i < len(self._angular_interpolation) and self._angular_interpolation[i] else [(len(mu_i), 2)]
+                pad[i, :] = project_tabulated_to_legendre(
+                    mu=np.asarray(mu_i, dtype=float),
+                    fmu=np.asarray(f_i, dtype=float),
+                    max_order=Lmax,
+                    ang_nbt_int=ang_interp_i,
+                    quad_order=quad_order,
+                )
+            A_tab = pad
+
+        # Evaluate coefficients at requested energies
+        # Build result as dict of l → array(E_query)
+        result: Dict[int, np.ndarray] = {l: np.zeros(nE, dtype=float) for l in range(max_legendre_order + 1)}
+
+        for j, E in enumerate(E_query):
+            branch = pick_mixed_branch(float(E), E_leg, E_tab)  # 'leg' / 'tab' / 'none'
+            if branch == "leg" and A_leg is not None and E_leg.size >= 1:
+                for l in range(max_legendre_order + 1):
+                    val = interpolate_1d_endf(
+                        E_leg, A_leg[:, l], self._interpolation or [(len(E_leg), 2)], float(E), out_of_range=out_of_range
+                    )
+                    result[l][j] = float(val)
+            elif branch == "tab" and A_tab is not None and E_tab.size >= 1:
+                for l in range(max_legendre_order + 1):
+                    val = interpolate_1d_endf(
+                        E_tab, A_tab[:, l], self._tab_interpolation or [(len(E_tab), 2)], float(E), out_of_range=out_of_range
+                    )
+                    result[l][j] = float(val)
+            else:
+                # No data available → isotropic fallback
+                result[0][j] = 1.0
+                for l in range(1, max_legendre_order + 1):
+                    result[l][j] = 0.0
+
+        # Cast to expected return types
+        typed: Dict[int, Union[float, np.ndarray]] = {}
+        for l, arr in result.items():
+            typed[l] = float(arr[0]) if scalar else arr
+
+        # Optional auto-trim
+        if trim:
+            typed = auto_trim_legendre_tail(typed, tol=trim_tol, min_order=max_legendre_order)
+
+        return typed
+    
 
     def get_interpolation_summary(self) -> str:
         """

@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Dict, Union
+import numpy as np
 
 from .base import MF4MT
 
@@ -12,6 +13,43 @@ class MF4MTIsotropic(MF4MT):
     For isotropic distributions, the probability is constant (1.0) for all angles.
     """
     _ltt: int = 0
+        
+    def extract_legendre_coefficients(
+        self,
+        energy: Union[float, np.ndarray],
+        max_legendre_order: int = 10,
+        *,
+        out_of_range: str = "zero"
+    ) -> Dict[int, Union[float, np.ndarray]]:
+        """
+        Extract Legendre coefficients for isotropic distribution (LTT=0).
+        
+        For isotropic: a_0(E) = 1, a_l(E) = 0 for l > 0
+        
+        Parameters
+        ----------
+        energy : float or np.ndarray
+            Energy point(s) at which to evaluate coefficients
+        max_legendre_order : int, optional
+            Maximum Legendre order to compute (default: 10)
+        out_of_range : str, optional
+            Ignored for isotropic distributions since they don't depend on energy data tables.
+            Included for API consistency with other MF4 implementations. (default: "zero")
+            
+        Returns
+        -------
+        Dict[int, Union[float, np.ndarray]]
+            Dictionary mapping Legendre indices to coefficients
+        """
+        if isinstance(energy, np.ndarray):
+            result = {0: np.ones_like(energy, dtype=float)}
+            for l in range(1, max_legendre_order + 1):
+                result[l] = np.zeros_like(energy, dtype=float)
+        else:
+            result = {0: 1.0}
+            for l in range(1, max_legendre_order + 1):
+                result[l] = 0.0
+        return result
         
     def __str__(self) -> str:
         """
