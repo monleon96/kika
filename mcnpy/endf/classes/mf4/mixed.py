@@ -167,14 +167,17 @@ class MF4MTMixed(MF4MT):
         nE = E_query.size
 
         # Precompute padded coefficient arrays on each grid up to max_legendre_order
-        A_leg = None  # shape (n_leg, L+1)
+        A_leg = None  # shape (n_leg, L+1), with a0 in column 0
         if E_leg.size > 0:
             n_leg = len(self._legendre_coeffs)
             Lmax = max_legendre_order
             pad = np.zeros((n_leg, Lmax + 1), dtype=float)
             for i, coeffs in enumerate(self._legendre_coeffs):
-                m = min(len(coeffs), Lmax + 1)
-                pad[i, :m] = coeffs[:m]
+                # coeffs from file typically contain a1..aNL (a0 implicit)
+                pad[i, 0] = 1.0  # a0
+                max_from_file = min(len(coeffs), Lmax)
+                if max_from_file > 0:
+                    pad[i, 1:max_from_file + 1] = np.asarray(coeffs[:max_from_file], dtype=float)
             A_leg = pad  # (n_leg, L+1)
 
         A_tab = None  # shape (n_tab, L+1)
@@ -226,7 +229,8 @@ class MF4MTMixed(MF4MT):
 
         # Optional auto-trim
         if trim:
-            typed = auto_trim_legendre_tail(typed, tol=trim_tol, min_order=max_legendre_order)
+            # Allow trimming of trailing coefficients while always keeping at least a0
+            typed = auto_trim_legendre_tail(typed, tol=trim_tol, min_order=0)
 
         return typed
     
@@ -534,4 +538,3 @@ class MF4MTMixed(MF4MT):
         lines.append(end_line)
         
         return "\n".join(lines)
-

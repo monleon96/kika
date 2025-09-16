@@ -113,7 +113,7 @@ class MF4MTLegendre(MF4MT):
         * Missing coefficients at any energy are filled with zeros per ENDF convention
         """
         energies = np.asarray(self._energies, dtype=float)
-        all_coeffs = self._legendre_coeffs
+        coeff_lists = self._legendre_coeffs  # typically a1..a_NL per energy; a0 implicit
         result: Dict[int, Union[float, np.ndarray]] = {}
 
         # Handle no data
@@ -124,30 +124,32 @@ class MF4MTLegendre(MF4MT):
                 result[l] = float(0.0) if is_scalar else np.zeros_like(arr, dtype=float)
             return result
 
-        # Highest available order in the file
+        # Highest available order in file (excluding a0)
         max_available = 0
-        for row in all_coeffs:
+        for row in coeff_lists:
             if row:
-                max_available = max(max_available, len(row) - 1)
+                max_available = max(max_available, len(row))  # row length corresponds to max L present (without a0)
         Lmax = min(max_legendre_order, max_available)
 
         x_eval = np.array([energy], dtype=float) if np.isscalar(energy) else np.asarray(energy, dtype=float)
 
-        # Prebuild aligned arrays per order: any missing coefficient at an energy -> 0.0
-        # This guarantees the ENDF energy interpolation law applies uniformly.
         nE = energies.size
-        for l in range(Lmax + 1):
+
+        # l=0: a0 = 1 (normalized PDF)
+        y0 = np.ones(nE, dtype=float)
+        y0_eval = interpolate_1d_endf(energies, y0, self._interpolation, x_eval, out_of_range=out_of_range)
+        result[0] = float(y0_eval[0]) if np.isscalar(energy) else y0_eval
+
+        # l>=1 from file rows (index l-1)
+        for l in range(1, Lmax + 1):
             y_l = np.empty(nE, dtype=float)
             for i in range(nE):
-                coeffs_i = all_coeffs[i]
-                y_l[i] = coeffs_i[l] if l < len(coeffs_i) else 0.0
-
-            # Interpolate this order with ENDF energy interpolation regions
+                row = coeff_lists[i]
+                y_l[i] = row[l - 1] if (l - 1) < len(row) else 0.0
             y_eval = interpolate_1d_endf(energies, y_l, self._interpolation, x_eval, out_of_range=out_of_range)
-
             result[l] = float(y_eval[0]) if np.isscalar(energy) else y_eval
 
-        # Fill remaining orders (if user requested higher than available)
+        # Fill remaining orders beyond available
         for l in range(Lmax + 1, max_legendre_order + 1):
             result[l] = float(0.0) if np.isscalar(energy) else np.zeros_like(x_eval, dtype=float)
 

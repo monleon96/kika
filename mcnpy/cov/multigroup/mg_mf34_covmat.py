@@ -10,7 +10,7 @@ import pandas as pd
 from dataclasses import dataclass, field
 from typing import List, Tuple, Union, Optional, Dict
 from matplotlib import pyplot as plt
-from .._utils import create_repr_section
+from ..._utils import create_repr_section
 
 
 @dataclass
@@ -331,22 +331,6 @@ class MGMF34CovMat:
         
         return corr_matrix
 
-    @property
-    def energy_grids(self) -> List[List[float]]:
-        """
-        Return energy grids in the format expected by plotting functions.
-        For multigroup data, this returns the energy group boundaries for each matrix.
-        """
-        return [self.energy_grid.tolist() for _ in range(self.num_matrices)]
-
-    @property
-    def matrices(self) -> List[np.ndarray]:
-        """
-        Return matrices in the format expected by plotting functions.
-        For compatibility, this returns the relative matrices.
-        """
-        return self.relative_matrices
-
     def _get_param_triplets(self) -> List[Tuple[int, int, int]]:
         """
         Return a list of all (isotope, reaction, legendre) triplets present,
@@ -356,175 +340,262 @@ class MGMF34CovMat:
                  | set(zip(self.isotope_cols, self.reaction_cols, self.l_cols))
         return sorted(triplets, key=lambda t: (t[0], t[1], t[2]))
 
+    def reactions_by_isotope(self, isotope: Optional[int] = None) -> Union[Dict[int, List[int]], List[int]]:
+        """
+        Get a mapping of isotopes to their available reactions, or list of reactions for a specific isotope.
+        
+        This method provides compatibility with the CovMat interface for the sandwich uncertainty 
+        propagation function.
+
+        Parameters
+        ----------
+        isotope : Optional[int]
+            If provided, return reactions only for this isotope.
+
+        Returns
+        -------
+        Dict[int, List[int]] or List[int]
+            Mapping from isotope IDs to sorted lists of MT numbers, or list of MT numbers for the specified isotope.
+        """
+        result: Dict[int, set] = {}
+
+        # Process all row combinations
+        for i, iso in enumerate(self.isotope_rows):
+            result.setdefault(iso, set()).add(self.reaction_rows[i])
+
+        # Process all column combinations
+        for i, iso in enumerate(self.isotope_cols):
+            result.setdefault(iso, set()).add(self.reaction_cols[i])
+
+        # Convert sets to sorted lists
+        sorted_dict: Dict[int, List[int]] = {iso: sorted(reactions) for iso, reactions in result.items()}
+
+        if isotope is not None:
+            # Return the list for the specified isotope, or empty list if not found
+            return sorted_dict.get(isotope, [])
+
+        return sorted_dict
+
+    def plot_legendre_coefficients(
+        self,
+        isotope: int,
+        mt: int,
+        orders: Optional[Union[int, List[int]]] = None,
+        style: str = 'default',
+        figsize: Tuple[float, float] = (10, 6),
+        legend_loc: str = 'best',
+        marker: bool = False,
+        include_uncertainties: bool = False,
+        uncertainty_sigma: float = 1.0,
+        **kwargs
+    ) -> plt.Figure:
+        """
+        Plot multigroup Legendre coefficients for this covariance matrix object.
+        
+        This is a convenience method that calls the standalone plotting function
+        with this object as input.
+        
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID to plot
+        mt : int
+            Reaction MT number to plot
+        orders : int or list of int, optional
+            Legendre orders to plot. If None, plots all available orders
+        style : str
+            Plot style from _plot_settings
+        figsize : tuple
+            Figure size
+        legend_loc : str
+            Legend location
+        marker : bool
+            Whether to include markers on the plot lines
+        include_uncertainties : bool
+            Whether to include uncertainty bands if available
+        uncertainty_sigma : float
+            Number of sigma levels for uncertainty bands
+        **kwargs
+            Additional plotting arguments
+        
+        Returns
+        -------
+        plt.Figure
+            The matplotlib figure containing the plot
+        """
+        from .plotting_mg import plot_mg_legendre_coefficients
+        
+        return plot_mg_legendre_coefficients(
+            mg_covmat=self,
+            isotope=isotope,
+            mt=mt,
+            orders=orders,
+            style=style,
+            figsize=figsize,
+            legend_loc=legend_loc,
+            marker=marker,
+            include_uncertainties=include_uncertainties,
+            uncertainty_sigma=uncertainty_sigma,
+            **kwargs
+        )
+
+    def plot_vs_endf(
+        self,
+        endf: object,
+        isotope: int,
+        mt: int,
+        orders: Optional[Union[int, List[int]]] = None,
+        energy_range: Optional[Tuple[float, float]] = None,
+        style: str = 'default',
+        figsize: Tuple[float, float] = (12, 8),
+        legend_loc: str = 'best',
+        mg_marker: bool = True,
+        include_uncertainties: bool = False,
+        uncertainty_sigma: float = 1.0,
+        **kwargs
+    ) -> plt.Figure:
+        """
+        Compare multigroup Legendre coefficients with ENDF data.
+        
+        This is a convenience method that calls the comparison plotting function
+        with this object and the provided ENDF object.
+        
+        Parameters
+        ----------
+        endf : ENDF object
+            Original ENDF data object containing MF4 data
+        isotope : int
+            Isotope ID to plot
+        mt : int
+            Reaction MT number to plot
+        orders : int or list of int, optional
+            Legendre orders to plot. If None, plots all available orders
+        energy_range : tuple of float, optional
+            Energy range for plotting ENDF data
+        style : str
+            Plot style from _plot_settings
+        figsize : tuple
+            Figure size
+        legend_loc : str
+            Legend location
+        mg_marker : bool
+            Whether to include markers for multigroup data
+        include_uncertainties : bool
+            If True, display ±σ uncertainty bands for both MG and ENDF (if MF34 present)
+        uncertainty_sigma : float
+            Sigma multiplier for uncertainty bands (default 1.0)
+        **kwargs
+            Additional plotting arguments
+        
+        Returns
+        -------
+        plt.Figure
+            The matplotlib figure containing the plot
+        """
+        from .plotting_mg import plot_mg_vs_endf_comparison
+        
+        return plot_mg_vs_endf_comparison(
+            mg_covmat=self,
+            endf=endf,
+            isotope=isotope,
+            mt=mt,
+            orders=orders,
+            energy_range=energy_range,
+            style=style,
+            figsize=figsize,
+            legend_loc=legend_loc,
+            mg_marker=mg_marker,
+            include_uncertainties=include_uncertainties,
+            uncertainty_sigma=uncertainty_sigma,
+            **kwargs
+        )
+
     def plot_covariance_heatmap(
         self,
         isotope: int,
         mt: int,
-        legendre_coeffs: Union[int, List[int], Tuple[int, int]],
-        ax: Optional['plt.Axes'] = None,
-        *,
-        matrix_type: str = "corr",
-        style: str = "default",
-        figsize: Tuple[float, float] = (6, 6),
-        dpi: int = 300,
-        font_family: str = "serif",
-        vmax: Optional[float] = None,
+        orders: Optional[Union[int, List[int]]] = None,
+        matrix_type: str = 'cov',
+        covariance_type: str = 'rel',
+        style: str = 'default',
+        figsize: Tuple[float, float] = (10, 8),
+        colormap: Optional[str] = None,
+        show_colorbar: bool = True,
+        annotate: bool = False,
         vmin: Optional[float] = None,
-        show_uncertainties: bool = False,
-        cmap: Optional[any] = None,
-        **imshow_kwargs,
-    ) -> 'plt.Figure':
-        """
-        Draw a covariance or correlation matrix heat-map for multigroup MF34 angular distribution data.
-
-        Parameters
-        ----------
-        isotope : int
-            Isotope ID
-        mt : int
-            Reaction MT number
-        legendre_coeffs : int, list of int, or tuple of (row_l, col_l)
-            Legendre coefficient(s). Can be:
-            - Single int: diagonal block for that L
-            - List of ints: diagonal blocks for those L values
-            - Tuple of (row_l, col_l): off-diagonal block between row and column L
-        ax : plt.Axes, optional
-            Matplotlib axes to draw into (only used when show_uncertainties=False)
-        matrix_type : str
-            Type of matrix to plot: "cov" for covariance (uses linear scale) or "corr" for correlation
-        style : str
-            Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
-        figsize : tuple
-            Figure size in inches (width, height)
-        dpi : int
-            Dots per inch for figure resolution
-        font_family : str
-            Font family for text elements
-        vmax, vmin : float, optional
-            Color scale limits
-        show_uncertainties : bool
-            Whether to show uncertainty plots above the heatmap
-        cmap : str or matplotlib.colors.Colormap, optional
-            Colormap to use for the heatmap. Can be a string name of any matplotlib 
-            colormap (e.g., 'viridis', 'plasma', 'RdYlBu', 'coolwarm') or a matplotlib 
-            Colormap object. If None, defaults to 'RdYlGn' for correlation matrices 
-            and 'viridis' for covariance matrices.
-        **imshow_kwargs
-            Additional arguments passed to imshow
-
-        Returns
-        -------
-        plt.Figure
-            The matplotlib figure containing the heatmap and optional uncertainty plots
-        """
-        from mcnpy.cov.mf34cov_heatmap import plot_mf34_covariance_heatmap
-
-        return plot_mf34_covariance_heatmap(
-            mf34_covmat=self,
-            isotope=isotope,
-            mt=mt,
-            legendre_coeffs=legendre_coeffs,
-            ax=ax,
-            matrix_type=matrix_type,
-            style=style,
-            figsize=figsize,
-            dpi=dpi,
-            font_family=font_family,
-            vmax=vmax,
-            vmin=vmin,
-            show_uncertainties=show_uncertainties,
-            cmap=cmap,
-            **imshow_kwargs
-        )
-
-    def plot_uncertainties(
-        self,
-        isotope: int,
-        mt: int,
-        legendre_coeffs: Union[int, List[int]],
-        ax: Optional['plt.Axes'] = None,
-        *,
-        uncertainty_type: str = "relative",
-        style: str = "default",
-        figsize: Tuple[float, float] = (8, 5),
-        dpi: int = 100,
-        font_family: str = "serif",
-        legend_loc: str = "best",
-        energy_range: Optional[Tuple[float, float]] = None,
-        **kwargs,
-    ) -> 'plt.Figure':
-        """
-        Plot uncertainties for multigroup MF34 angular distribution data for specific Legendre coefficients.
-        
-        This method extracts and plots the diagonal uncertainties from the multigroup covariance matrix
-        for the specified isotope, MT reaction, and Legendre coefficients.
-        
-        Parameters
-        ----------
-        isotope : int
-            Isotope ID
-        mt : int
-            Reaction MT number
-        legendre_coeffs : int or list of int
-            Legendre coefficient(s) to plot uncertainties for.
-            Can be a single int or a list of ints.
-        ax : plt.Axes, optional
-            Matplotlib axes to draw into. If None, creates new figure.
-        uncertainty_type : str, default "relative"
-            Type of uncertainty to plot: "relative" (%) or "absolute"
-        style : str, default "default"
-            Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
-        figsize : tuple, default (8, 5)
-            Figure size in inches (width, height)
-        dpi : int, default 100
-            Dots per inch for figure resolution
-        font_family : str, default "serif"
-            Font family for text elements
-        legend_loc : str, default "best"
-            Legend location
-        energy_range : tuple of float, optional
-            Energy range (min, max) for x-axis. If None, uses the full data range.
-            Values are used directly without clamping to data range.
+        vmax: Optional[float] = None,
+        symmetric_scale: bool = True,
+        use_log_scale: bool = None,
         **kwargs
-            Additional arguments passed to matplotlib plot functions
+    ) -> plt.Figure:
+        """
+        Plot a heatmap of the covariance or correlation matrix for specific isotope, MT, and Legendre orders.
+        
+        This is a convenience method that calls the standalone heatmap plotting function
+        with this object as input.
+        
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID to plot
+        mt : int
+            Reaction MT number to plot
+        orders : int or list of int, optional
+            Legendre orders to include. If None, includes all available orders
+        matrix_type : str, default 'cov'
+            Type of matrix to plot: 'cov' for covariance, 'corr' for correlation
+        covariance_type : str, default 'rel'
+            Type of covariance matrix: 'rel' for relative, 'abs' for absolute
+        style : str
+            Plot style from _plot_settings
+        figsize : tuple
+            Figure size
+        colormap : str, optional
+            Matplotlib colormap name. If None, uses 'RdYlGn' for correlation and 'viridis' for covariance
+        show_colorbar : bool
+            Whether to show the colorbar
+        annotate : bool
+            Whether to annotate matrix values on the heatmap
+        vmin : float, optional
+            Minimum value for color scaling
+        vmax : float, optional
+            Maximum value for color scaling  
+        symmetric_scale : bool
+            Whether to use symmetric color scale around zero (for correlation matrices)
+        use_log_scale : bool, optional
+            Whether to use logarithmic color scale. If None, uses linear for correlation and log for covariance
+        **kwargs
+            Additional plotting arguments
         
         Returns
         -------
         plt.Figure
-            The matplotlib figure containing the uncertainty plots
-        
-        Examples
-        --------
-        Plot relative uncertainties for Legendre coefficients L=1,2,3:
-        
-        >>> fig = mg_mf34_covmat.plot_uncertainties(isotope=92235, mt=2, 
-        ...                                        legendre_coeffs=[1, 2, 3])
-        >>> fig.show()
-        
-        Plot absolute uncertainties for a single Legendre coefficient:
-        
-        >>> fig = mg_mf34_covmat.plot_uncertainties(isotope=92235, mt=2,
-        ...                                        legendre_coeffs=1, 
-        ...                                        uncertainty_type="absolute")
-        >>> fig.show()
+            The matplotlib figure containing the heatmap
         """
-        from mcnpy.cov.mf34cov_heatmap import plot_mf34_uncertainties
-
-        return plot_mf34_uncertainties(
-            mf34_covmat=self,
+        from .plotting_mg import plot_mg_covariance_heatmap
+        
+        return plot_mg_covariance_heatmap(
+            mg_covmat=self,
             isotope=isotope,
             mt=mt,
-            legendre_coeffs=legendre_coeffs,
-            ax=ax,
-            uncertainty_type=uncertainty_type,
+            orders=orders,
+            matrix_type=matrix_type,
+            covariance_type=covariance_type,
             style=style,
             figsize=figsize,
-            dpi=dpi,
-            font_family=font_family,
-            legend_loc=legend_loc,
-            energy_range=energy_range,
+            colormap=colormap,
+            show_colorbar=show_colorbar,
+            annotate=annotate,
+            vmin=vmin,
+            vmax=vmax,
+            symmetric_scale=symmetric_scale,
+            use_log_scale=use_log_scale,
             **kwargs
         )
+
+
+
+
 
     def __str__(self) -> str:
         """String representation showing summary information."""
@@ -604,7 +675,11 @@ class MGMF34CovMat:
             ".to_dataframe()": "Convert all multigroup MF34 covariance data to DataFrame",
             ".summary()": "Get summary DataFrame with matrix metadata",
             ".plot_covariance_heatmap()": "Plot covariance/correlation matrix heatmap",
-            ".plot_uncertainties()": "Plot uncertainty curves for Legendre coefficients"
+            ".plot_legendre_coefficients()": "Plot multigroup Legendre coefficients vs energy",
+            ".plot_vs_endf()": "Compare multigroup with continuous ENDF coefficients",
+            ".filter_by_isotope_reaction()": "Filter matrices by isotope and reaction",
+            ".covariance_matrix": "Get full covariance matrix property",
+            ".correlation_matrix": "Get full correlation matrix property"
         }
         
         methods_section = create_repr_section(

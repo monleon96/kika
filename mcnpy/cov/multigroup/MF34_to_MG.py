@@ -13,9 +13,9 @@ from typing import List, Dict, Tuple, Union, Optional, Callable, Any
 from scipy import integrate, interpolate
 import warnings
 
-from .mf34_covmat import MF34CovMat
+from ..mf34_covmat import MF34CovMat
 from .mg_mf34_covmat import MGMF34CovMat
-from ..energy_grids import grids
+from ...energy_grids import grids
 
 
 class WeightingFunction:
@@ -45,6 +45,165 @@ class WeightingFunction:
     def fission_spectrum(energy: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         """Simplified fission spectrum phi(E) = sqrt(E) * exp(-E/1.29e6)."""
         return np.sqrt(energy) * np.exp(-energy / 1.29e6)  # 1.29 MeV average
+
+
+def compute_energy_rebin_operator(coarse_energy_grid: np.ndarray, 
+                                  fine_energy_grid: np.ndarray,
+                                  phi_func: Callable = WeightingFunction.constant,
+                                  phi_antiderivative: Callable = WeightingFunction.constant_antiderivative) -> np.ndarray:
+    """
+    Build the H→T energy-rebin operator M following NJOY methodology.
+    
+    This creates a row-stochastic matrix M where M[g,h] represents the contribution
+    of coarse energy bin h to fine energy bin g, weighted by the spectrum.
+    
+    M_{g,h} = ∫(E∈(g∩h)) w(E) dE / ∫(E∈g) w(E) dE
+    
+    Parameters
+    ----------
+    coarse_energy_grid : np.ndarray
+        Coarse energy grid (H) from MF34 covariance data
+    fine_energy_grid : np.ndarray  
+        Fine target energy grid (T) for multigroup data
+    phi_func : Callable
+        Weighting function w(E)
+    phi_antiderivative : Callable
+        Antiderivative of weighting function
+        
+    Returns
+    -------
+    np.ndarray
+        Row-stochastic rebin matrix M of shape (N_fine, N_coarse)
+    """
+    N_coarse = len(coarse_energy_grid) - 1
+    N_fine = len(fine_energy_grid) - 1
+    
+    M = np.zeros((N_fine, N_coarse))
+    
+    for g in range(N_fine):  # Fine energy bins (target)
+        E_g_low = fine_energy_grid[g]
+        E_g_high = fine_energy_grid[g + 1]
+        
+        # Compute denominator: ∫(E∈g) w(E) dE 
+        if phi_func == WeightingFunction.constant:
+            denom = E_g_high - E_g_low
+        else:
+            denom = phi_antiderivative(E_g_high) - phi_antiderivative(E_g_low)
+        
+        if abs(denom) < 1e-15:
+            continue
+            
+        for h in range(N_coarse):  # Coarse energy bins (source)
+            E_h_low = coarse_energy_grid[h]
+            E_h_high = coarse_energy_grid[h + 1]
+            
+            # Find intersection: (g ∩ h)
+            E_intersect_low = max(E_g_low, E_h_low)
+            E_intersect_high = min(E_g_high, E_h_high)
+            
+            if E_intersect_high > E_intersect_low:
+                # Compute numerator: ∫(E∈(g∩h)) w(E) dE
+                if phi_func == WeightingFunction.constant:
+                    numer = E_intersect_high - E_intersect_low
+                else:
+                    numer = phi_antiderivative(E_intersect_high) - phi_antiderivative(E_intersect_low)
+                
+                M[g, h] = numer / denom
+    
+    return M
+
+
+def map_covariance_matrix(coarse_matrix: np.ndarray,
+                         rebin_operator: np.ndarray) -> np.ndarray:
+    """
+    Map covariance matrix from coarse grid to fine grid using rebin operator.
+    
+    For a single ℓ block: C^(T) = M @ C^(H) @ M.T
+    
+    Parameters
+    ----------
+    coarse_matrix : np.ndarray
+        Covariance matrix on coarse energy grid
+    rebin_operator : np.ndarray
+        Energy rebin operator M (N_fine × N_coarse)
+        
+    Returns
+    -------
+    np.ndarray
+        Covariance matrix on fine energy grid
+    """
+    return rebin_operator @ coarse_matrix @ rebin_operator.T
+
+
+def convert_relative_to_absolute_covariance(relative_matrix: np.ndarray,
+                                          means_row: np.ndarray,
+                                          means_col: np.ndarray) -> np.ndarray:
+    """
+    Convert relative covariance to absolute covariance.
+    
+    C^abs = diag(μ_ℓ) @ R @ diag(μ_ℓ')
+    
+    Parameters
+    ----------
+    relative_matrix : np.ndarray
+        Relative covariance matrix
+    means_row : np.ndarray
+        Row means (μ_ℓ)
+    means_col : np.ndarray
+        Column means (μ_ℓ')
+        
+    Returns
+    -------
+    np.ndarray
+        Absolute covariance matrix
+    """
+    return np.diag(means_row) @ relative_matrix @ np.diag(means_col)
+
+
+def convert_absolute_to_relative_covariance(absolute_matrix: np.ndarray,
+                                          means_row: np.ndarray,
+                                          means_col: np.ndarray,
+                                          epsilon: float = 1e-15) -> np.ndarray:
+    """
+    Convert absolute covariance to relative covariance.
+    
+    R = diag(μ_ℓ)^(-1) @ C^abs @ diag(μ_ℓ')^(-1)
+    
+    Parameters
+    ----------
+    absolute_matrix : np.ndarray
+        Absolute covariance matrix
+    means_row : np.ndarray
+        Row means (μ_ℓ)
+    means_col : np.ndarray
+        Column means (μ_ℓ')
+    epsilon : float
+        Small value to prevent division by zero
+        
+    Returns
+    -------
+    np.ndarray
+        Relative covariance matrix
+    """
+    # Create inverse diagonal matrices with epsilon protection
+    means_row_safe = np.where(np.abs(means_row) > epsilon, means_row, epsilon)
+    means_col_safe = np.where(np.abs(means_col) > epsilon, means_col, epsilon)
+    
+    inv_diag_row = np.diag(1.0 / means_row_safe)
+    inv_diag_col = np.diag(1.0 / means_col_safe)
+    
+    relative = inv_diag_row @ absolute_matrix @ inv_diag_col
+    
+    # Set elements to NaN where original means were too small
+    mask_row = np.abs(means_row) <= epsilon
+    mask_col = np.abs(means_col) <= epsilon
+    
+    for i in range(relative.shape[0]):
+        for j in range(relative.shape[1]):
+            if mask_row[i] or mask_col[j]:
+                relative[i, j] = np.nan
+                
+    return relative
 
 
 def validate_frame_consistency(mf4_frame: str, mf34_frame: str) -> None:
@@ -171,16 +330,22 @@ def compute_base_cell_means(base_energy_grid: np.ndarray,
     
     # Pre-compute coefficients at sample points using MF4 object methods
     max_order = max(legendre_orders) if legendre_orders else 0
-    sample_coeffs = mf4_data.extract_legendre_coefficients(sample_energies, max_order)
+    # Use zero outside the MF4 range so tail averages do not inherit the last value
+    sample_coeffs = mf4_data.extract_legendre_coefficients(sample_energies, max_order, out_of_range="zero")
     
     # Build interpolation functions for each required Legendre order
     coeff_interp_funcs = {}
     for l in legendre_orders:
         if l in sample_coeffs and len(sample_coeffs[l]) > 1:
-            # Create interpolation function
+            # Create interpolation function with boundary hold at the lower end.
+            # For the upper tail assume anisotropy damps to zero (orders > 0) to avoid
+            # spurious constant extrapolation when the MG grid extends beyond MF4 data.
+            left_val = float(sample_coeffs[l][0])
+            right_val = float(sample_coeffs[l][-1])
+            right_fill = right_val if l == 0 else 0.0
             coeff_interp_funcs[l] = interpolate.interp1d(
                 sample_energies, sample_coeffs[l],
-                kind='linear', bounds_error=False, fill_value=0.0
+                kind='linear', bounds_error=False, fill_value=(left_val, right_fill)
             )
         else:
             # Constant or no data available
@@ -211,15 +376,16 @@ def compute_base_cell_means(base_energy_grid: np.ndarray,
             # For constant weighting function, can use analytical approach
             if phi_func == WeightingFunction.constant:
                 # phi(E) = 1, so integral becomes: integral(a_l(E) dE) / (E_{i+1} - E_i)
-                # Use simple numerical integration with pre-computed function
+                # Use higher resolution sampling to properly capture MF4 variations
                 
-                # Sample points within the interval for integration
-                n_quad_points = 20  # Reasonable for most cases
+                # Use at least 50 points per base cell, or higher for wide cells
+                cell_width = E_i_plus_1 - E_i
+                n_quad_points = max(50, int(cell_width / (1e6)))  # At least 1 point per MeV
                 E_quad = np.linspace(E_i, E_i_plus_1, n_quad_points)
                 a_l_values = coeff_func(E_quad)
                 
                 # Simple trapezoidal integration
-                numerator = np.trapz(a_l_values, E_quad)
+                numerator = np.trapezoid(a_l_values, E_quad)
                 means[i] = numerator / (E_i_plus_1 - E_i)
             else:
                 # General case: use numerical integration with optimized integrand
@@ -429,8 +595,7 @@ def MF34_to_MG(endf_object,
                energy_grid: Union[str, List[float], np.ndarray],
                weighting_function: Union[str, Callable] = "constant",
                isotope: Optional[int] = None,
-               mt: Optional[int] = None,
-               max_legendre_order: int = 10) -> MGMF34CovMat:
+               mt: Optional[int] = None) -> MGMF34CovMat:
     """
     Convert MF34 angular distribution covariance data to multigroup format.
     
@@ -456,8 +621,6 @@ def MF34_to_MG(endf_object,
         Specific isotope to process (if None, process all)
     mt : int, optional
         Specific MT reaction to process (if None, process all)
-    max_legendre_order : int, optional
-        Maximum Legendre order to consider (default: 10)
         
     Returns
     -------
@@ -538,8 +701,7 @@ def MF34_to_MG(endf_object,
         if mt is not None and reaction_row != mt:
             continue
         
-        # Get base energy grid and matrix
-        base_energy_grid = np.array(mf34_covmat.energy_grids[i])
+        # Get matrix and metadata
         base_matrix = mf34_covmat.matrices[i]
         is_relative = mf34_covmat.is_relative[i]
         frame = mf34_covmat.frame[i]
@@ -555,74 +717,122 @@ def MF34_to_MG(endf_object,
         mf4_mt_data_row = mf4_data.mt[reaction_row]
         mf4_mt_data_col = mf4_data.mt[reaction_col]
         
+        # Use the MF4 energy grid for base cell computations (where angular distributions are defined)
+        # This provides the correct physics-based averaging, bypassing the coarse MF34 grid
+        if hasattr(mf4_mt_data_row, 'legendre_energies'):
+            physics_energy_grid = np.array(mf4_mt_data_row.legendre_energies)
+        else:
+            # Fallback to MF34 grid if MF4 doesn't have energy grid info
+            physics_energy_grid = np.array(mf34_covmat.energy_grids[i])
+            warnings.warn(f"Using MF34 energy grid as fallback for MT{reaction_row}")
+        
+        # For covariance matrix compatibility, we need to work with the original MF34 grid structure
+        # but we'll compute the multigroup means using the finer physics grid
+        mf34_energy_grid = np.array(mf34_covmat.energy_grids[i])
+        
         # Validate frame consistency for both row and column
         mf4_frame_row = mf4_mt_data_row.frame if hasattr(mf4_mt_data_row, 'frame') else "unknown"
         mf4_frame_col = mf4_mt_data_col.frame if hasattr(mf4_mt_data_col, 'frame') else "unknown"
         validate_frame_consistency(mf4_frame_row, frame)
         validate_frame_consistency(mf4_frame_col, frame)
         
-        # Compute overlap weights
+        # Compute overlap weights using the physics energy grid
         overlap_weights = compute_overlap_weights(
-            base_energy_grid, mg_energy_edges, phi_func, phi_antiderivative
+            physics_energy_grid, mg_energy_edges, phi_func, phi_antiderivative
         )
         
-        # Compute base-cell means for row and column channels separately
+        # Compute base-cell means for row and column channels separately using physics grid
         legendre_orders_row = [l_row]
         legendre_orders_col = [l_col] if l_col != l_row else []
         
-        # Compute base means for row channel
+        # Compute base means for row channel using the physics energy grid
         base_means_row = compute_base_cell_means(
-            base_energy_grid, mf4_mt_data_row, legendre_orders_row, phi_func, phi_antiderivative
+            physics_energy_grid, mf4_mt_data_row, legendre_orders_row, phi_func, phi_antiderivative
         )
         
         # Compute base means for column channel (if different)
         if l_col != l_row or reaction_col != reaction_row:
             base_means_col = compute_base_cell_means(
-                base_energy_grid, mf4_mt_data_col, legendre_orders_col or [l_col], phi_func, phi_antiderivative
+                physics_energy_grid, mf4_mt_data_col, legendre_orders_col or [l_col], phi_func, phi_antiderivative
             )
         else:
             # Same channel, reuse row data
             base_means_col = base_means_row
         
-        # Combine base means for MG calculation
-        all_base_means = base_means_row.copy()
-        all_base_means.update(base_means_col)
-        
-        # Compute MG means
-        mg_means = compute_mg_means(all_base_means, overlap_weights)
-        
-        # Collapse covariance matrix
-        if is_relative:
-            # Input is relative, collapse directly to relative
-            mg_relative = collapse_relative_covariance(
-                base_matrix,
-                all_base_means[l_row],
-                all_base_means[l_col],
-                overlap_weights,
-                mg_means[l_row],
-                mg_means[l_col]
-            )
-            
-            # Convert to absolute for completeness
-            mg_absolute = np.zeros_like(mg_relative)
-            for g in range(len(mg_means[l_row])):
-                for g_prime in range(len(mg_means[l_col])):
-                    if not np.isnan(mg_relative[g, g_prime]):
-                        mg_absolute[g, g_prime] = (mg_relative[g, g_prime] * 
-                                                 mg_means[l_row][g] * mg_means[l_col][g_prime])
+        # Grab convenient references for the row/column base means
+        base_means_row_vals = base_means_row[l_row]
+        if base_means_col is base_means_row:
+            base_means_col_vals = base_means_row_vals
         else:
-            # Input is absolute, collapse to absolute then convert to relative
-            mg_absolute = collapse_absolute_covariance(base_matrix, overlap_weights)
-            
-            # Convert to relative
-            mg_relative = np.zeros_like(mg_absolute)
-            for g in range(len(mg_means[l_row])):
-                for g_prime in range(len(mg_means[l_col])):
-                    denominator = mg_means[l_row][g] * mg_means[l_col][g_prime]
-                    if abs(denominator) > 1e-15:
-                        mg_relative[g, g_prime] = mg_absolute[g, g_prime] / denominator
-                    else:
-                        mg_relative[g, g_prime] = np.nan
+            base_means_col_vals = base_means_col[l_col]
+
+        # Compute multigroup means separately for the row and column channels. Using a
+        # single dictionary keyed only by Legendre order lets cross-reaction data
+        # overwrite each other depending on MF34 matrix ordering, so we evaluate the
+        # two channels independently to preserve their reaction-specific averages.
+        mg_means_row_dict = compute_mg_means(base_means_row, overlap_weights)
+        mg_means_row_vals = mg_means_row_dict[l_row]
+
+        if base_means_col is base_means_row:
+            mg_means_col_vals = mg_means_row_vals
+        else:
+            mg_means_col_dict = compute_mg_means(base_means_col, overlap_weights)
+            mg_means_col_vals = mg_means_col_dict[l_col]
+
+        # Now implement the proper covariance mapping algorithm following NJOY methodology
+        # Step 1: We already have accurate means on target grid T (mg_means_row/col_vals)
+        
+        # Step 2: Compute coarse means on MF34 grid H for covariance conversion
+        mf34_overlap_weights = compute_overlap_weights(
+            mf34_energy_grid, mg_energy_edges, phi_func, phi_antiderivative
+        )
+        
+        mf34_base_means_row = compute_base_cell_means(
+            mf34_energy_grid, mf4_mt_data_row, legendre_orders_row, phi_func, phi_antiderivative
+        )
+        
+        if base_means_col is base_means_row:
+            mf34_base_means_col = mf34_base_means_row
+        else:
+            mf34_base_means_col = compute_base_cell_means(
+                mf34_energy_grid, mf4_mt_data_col, legendre_orders_col or [l_col], phi_func, phi_antiderivative
+            )
+        
+        # These are needed only for MF34 grid covariance conversion
+        mf34_means_row_vals = mf34_base_means_row[l_row]
+        if mf34_base_means_col is mf34_base_means_row:
+            mf34_means_col_vals = mf34_means_row_vals
+        else:
+            mf34_means_col_vals = mf34_base_means_col[l_col]
+        
+        # Step 3: Build energy rebin operator H→T
+        rebin_operator = compute_energy_rebin_operator(
+            mf34_energy_grid, mg_energy_edges, phi_func, phi_antiderivative
+        )
+        
+        # Step 4: Process covariance matrix
+        base_matrix = mf34_covmat.matrices[i]
+        
+        if is_relative:
+            # Step 4a: Convert relative to absolute on H grid using coarse means
+            absolute_coarse = convert_relative_to_absolute_covariance(
+                base_matrix, mf34_means_row_vals, mf34_means_col_vals
+            )
+        else:
+            # Already absolute on H grid
+            absolute_coarse = base_matrix
+        
+        # Step 4b: Map absolute covariance H→T
+        absolute_fine = map_covariance_matrix(absolute_coarse, rebin_operator)
+        
+        # Step 5: Convert back to relative using accurate means on T
+        relative_fine = convert_absolute_to_relative_covariance(
+            absolute_fine, mg_means_row_vals, mg_means_col_vals
+        )
+        
+        # Final matrices
+        mg_absolute = absolute_fine
+        mg_relative = relative_fine
         
         # Apply quality checks
         mg_relative = enforce_matrix_quality(mg_relative, "relative")
@@ -633,7 +843,7 @@ def MF34_to_MG(endf_object,
             isotope_row, reaction_row, l_row,
             isotope_col, reaction_col, l_col,
             mg_relative, mg_absolute,
-            mg_means[l_row], mg_means[l_col],
+            mg_means_row_vals, mg_means_col_vals,
             frame
         )
     

@@ -15,6 +15,7 @@ import logging
 
 from mcnpy.sensitivities.sdf import SDFData, SDFReactionData
 from mcnpy.cov.covmat import CovMat
+from mcnpy.cov.multigroup.mg_mf34_covmat import MGMF34CovMat
 from mcnpy._constants import MT_TO_REACTION, ATOMIC_NUMBER_TO_SYMBOL
 
 # Set up logging
@@ -140,10 +141,35 @@ class UncertaintyResult:
         lines.append("\n" + "=" * 70)
         lines.append("INDIVIDUAL REACTION CONTRIBUTIONS")
         lines.append("=" * 70)
-        lines.append(f"{'Rank':<4} {'Nuclide':<12} {'Reaction':<15} {'Variance':<12} {'% of Total':<10}")
-        lines.append("-" * 70)
         
-        # Sort contributions by magnitude and show all (not just top 10)
+        # Calculate total auto-contributions for percentage calculation
+        total_auto_variance = sum(getattr(c, 'auto_variance_contribution', c.variance_contribution) 
+                                for c in self.contributions)
+        
+        # Show both types of contributions
+        lines.append("WITHOUT CROSS-COVARIANCES (auto-contributions only):")
+        lines.append(f"{'Rank':<4} {'Nuclide':<12} {'Reaction':<15} {'Variance':<12} {'% Auto':<8}")
+        lines.append("-" * 60)
+        
+        # Sort by auto-contributions
+        auto_sorted = sorted(self.contributions, 
+                           key=lambda x: abs(getattr(x, 'auto_variance_contribution', x.variance_contribution)), 
+                           reverse=True)
+        
+        for rank, contrib in enumerate(auto_sorted, 1):
+            auto_var = getattr(contrib, 'auto_variance_contribution', contrib.variance_contribution)
+            auto_pct = abs(auto_var) / abs(total_auto_variance) * 100 if abs(total_auto_variance) > 1e-15 else 0.0
+            lines.append(f"{rank:<4} {contrib.nuclide:<12} {contrib.reaction_name:<15} "
+                        f"{auto_var:.4e} {auto_pct:>6.2f}%")
+        
+        lines.append(f"\nTotal auto-variance: {total_auto_variance:.6e}")
+        lines.append("")
+        
+        lines.append("WITH CROSS-COVARIANCES (total contributions including correlations):")
+        lines.append(f"{'Rank':<4} {'Nuclide':<12} {'Reaction':<15} {'Variance':<12} {'% Total':<8}")
+        lines.append("-" * 60)
+        
+        # Sort contributions by total magnitude
         sorted_contribs = sorted(self.contributions, 
                                key=lambda x: abs(x.variance_contribution), 
                                reverse=True)
@@ -151,7 +177,12 @@ class UncertaintyResult:
         for rank, contrib in enumerate(sorted_contribs, 1):
             pct = contrib.relative_contribution * 100
             lines.append(f"{rank:<4} {contrib.nuclide:<12} {contrib.reaction_name:<15} "
-                        f"{contrib.variance_contribution:.4e} {pct:>8.2f}%")
+                        f"{contrib.variance_contribution:.4e} {pct:>6.2f}%")
+        
+        lines.append(f"\nTotal variance (with correlations): {self.total_variance:.6e}")
+        off_diagonal_contribution = self.total_variance - total_auto_variance
+        off_diagonal_pct = abs(off_diagonal_contribution) / abs(self.total_variance) * 100 if abs(self.total_variance) > 1e-15 else 0.0
+        lines.append(f"Cross-correlation contribution: {off_diagonal_contribution:.6e} ({off_diagonal_pct:.1f}% of total)")
         
         lines.append("=" * 70)
         
@@ -172,7 +203,8 @@ class UncertaintyResult:
 
 def sandwich_uncertainty_propagation(
     sdf_data: SDFData,
-    cov_mat: CovMat,
+    cov_mat: Optional[CovMat] = None,
+    legendre_cov_mat: Optional[MGMF34CovMat] = None,
     reaction_filter: Optional[Dict[int, List[int]]] = None,
     energy_tolerance: float = 1e-6,
     verbose: bool = True
@@ -186,16 +218,28 @@ def sandwich_uncertainty_propagation(
     - Matrix construction and sandwich formula application
     - Individual contribution analysis and cross-correlation effects
     
+    The function supports both cross-section and Legendre moment sensitivities:
+    - Cross-section sensitivities (MT < 1000) use the regular CovMat covariance matrix
+    - Legendre moment sensitivities (MT >= 4000) use the MGMF34CovMat covariance matrix
+    - Both types can be provided simultaneously for mixed propagation
+    
     Parameters
     ----------
     sdf_data : SDFData
-        Sensitivity data containing sensitivity coefficients for various reactions
-    cov_mat : CovMat  
-        Covariance matrix data for nuclear cross sections (in relative form)
+        Sensitivity data containing sensitivity coefficients for various reactions.
+        Can contain both cross-section sensitivities (MT < 1000) and Legendre 
+        moment sensitivities (MT >= 4000, where MT = 4000 + L order).
+    cov_mat : CovMat, optional
+        Covariance matrix data for nuclear cross sections (in relative form).
+        Used for cross-section sensitivities (MT < 1000).
+    legendre_cov_mat : MGMF34CovMat, optional
+        Covariance matrix data for Legendre moments (in relative form).
+        Used for Legendre moment sensitivities (MT >= 4000).
     reaction_filter : Dict[int, List[int]], optional
         Dictionary mapping ZAID to list of MT numbers to include in propagation.
         If None, all matching reactions between sensitivity and covariance data are used.
         Example: {26056: [2, 102]} includes only elastic and (n,γ) for Fe-56
+                 {26056: [4001, 4002]} includes only P1 and P2 Legendre moments
     energy_tolerance : float, optional
         Tolerance for matching energy grid boundaries (default: 1e-6)
     verbose : bool, optional
@@ -210,7 +254,8 @@ def sandwich_uncertainty_propagation(
     Raises
     ------
     ValueError
-        If energy grids don't match or no matching reactions are found
+        If neither covariance matrix is provided, if energy grids don't match, 
+        or if no matching reactions are found
     
     Notes
     -----
@@ -233,46 +278,121 @@ def sandwich_uncertainty_propagation(
     if not sdf_data.data:
         raise ValueError("SDF data contains no sensitivity information")
     
-    if not cov_mat.matrices:
-        raise ValueError("Covariance matrix contains no data")
+    if cov_mat is None and legendre_cov_mat is None:
+        raise ValueError("At least one covariance matrix (cov_mat or legendre_cov_mat) must be provided")
+    
+    # Validate that provided covariance matrices contain data
+    if cov_mat is not None and not cov_mat.matrices:
+        raise ValueError("Cross-section covariance matrix contains no data")
+        
+    if legendre_cov_mat is not None and not legendre_cov_mat.relative_matrices:
+        raise ValueError("Legendre covariance matrix contains no data")
     
     if verbose:
         logger.info("✓ Input validation complete")
+        if cov_mat is not None:
+            logger.info(f"  Cross-section covariances: {len(cov_mat.matrices)} matrices")
+        if legendre_cov_mat is not None:
+            logger.info(f"  Legendre covariances: {len(legendre_cov_mat.relative_matrices)} matrices")
     
-    # Step 2: Match energy grids (with automatic validation)
-    energy_mapping = _match_energy_grids(
-        sdf_data.pert_energies, 
-        cov_mat.energy_grid,
-        energy_tolerance,
-        verbose
-    )
-    
-    if not energy_mapping:
-        raise ValueError("No matching energy groups found between sensitivity and covariance data")
+    # Separate sensitivities by type
+    xs_sensitivities = [r for r in sdf_data.data if r.mt < 4000]  # Cross-section sensitivities
+    leg_sensitivities = [r for r in sdf_data.data if r.mt >= 4000]  # Legendre sensitivities
     
     if verbose:
-        logger.info("✓ Energy grid matching complete")
+        logger.info(f"  Found {len(xs_sensitivities)} cross-section sensitivities")
+        logger.info(f"  Found {len(leg_sensitivities)} Legendre moment sensitivities")
     
-    # Step 3: Find matching reactions
-    matching_reactions = _find_matching_reactions(
-        sdf_data, 
-        cov_mat, 
-        reaction_filter,
-        verbose
-    )
+    # We'll handle each type separately and then combine
+    results = []
     
-    if not matching_reactions:
-        raise ValueError("No matching reactions found between sensitivity and covariance data")
+    # Step 2a: Handle cross-section sensitivities
+    if xs_sensitivities and cov_mat is not None:
+        if verbose:
+            logger.info("Processing cross-section sensitivities...")
+        
+        # Match energy grids for cross-sections
+        xs_energy_mapping = _match_energy_grids(
+            sdf_data.pert_energies, 
+            cov_mat.energy_grid,
+            energy_tolerance,
+            verbose
+        )
+        
+        if not xs_energy_mapping:
+            raise ValueError("No matching energy groups found between sensitivity and cross-section covariance data")
+        
+        # Find matching cross-section reactions
+        xs_matching_reactions = _find_matching_reactions(
+            xs_sensitivities, 
+            cov_mat, 
+            reaction_filter,
+            verbose,
+            "cross-section"
+        )
+        
+        if xs_matching_reactions:
+            # Build matrices for cross-sections
+            xs_result = {
+                'type': 'cross_section',
+                'energy_mapping': xs_energy_mapping,
+                'matching_reactions': xs_matching_reactions,
+                'sdf_data': xs_sensitivities,
+                'cov_mat': cov_mat
+            }
+            results.append(xs_result)
+            
+            if verbose:
+                logger.info(f"✓ Cross-section processing complete: {len(xs_matching_reactions)} reactions")
     
+    # Step 2b: Handle Legendre sensitivities  
+    if leg_sensitivities and legendre_cov_mat is not None:
+        if verbose:
+            logger.info("Processing Legendre moment sensitivities...")
+        
+        # Match energy grids for Legendre coefficients
+        leg_energy_mapping = _match_energy_grids(
+            sdf_data.pert_energies, 
+            legendre_cov_mat.energy_grid,
+            energy_tolerance,
+            verbose
+        )
+        
+        if not leg_energy_mapping:
+            raise ValueError("No matching energy groups found between sensitivity and Legendre covariance data")
+        
+        # Find matching Legendre reactions
+        leg_matching_reactions = _find_matching_legendre_reactions(
+            leg_sensitivities, 
+            legendre_cov_mat, 
+            reaction_filter,
+            verbose
+        )
+        
+        if leg_matching_reactions:
+            # Build matrices for Legendre moments
+            leg_result = {
+                'type': 'legendre',
+                'energy_mapping': leg_energy_mapping,
+                'matching_reactions': leg_matching_reactions,
+                'sdf_data': leg_sensitivities,
+                'cov_mat': legendre_cov_mat
+            }
+            results.append(leg_result)
+            
+            if verbose:
+                logger.info(f"✓ Legendre processing complete: {len(leg_matching_reactions)} reactions")
+    
+    # Check if we have any valid results
+    if not results:
+        raise ValueError("No matching reactions found between sensitivities and any provided covariance data")
+    
+    # Step 3: Build combined matrices
     if verbose:
-        logger.info("✓ Reaction matching complete")
+        logger.info("Building combined sensitivity vector and covariance matrix...")
     
-    # Step 4: Build matrices with proper relative/absolute conversion
-    sensitivity_vector, covariance_matrix, reaction_indices = _build_matrices(
-        sdf_data,
-        cov_mat,
-        matching_reactions,
-        energy_mapping,
+    sensitivity_vector, covariance_matrix, reaction_indices, total_energy_groups = _build_combined_matrices(
+        results,
         verbose
     )
     
@@ -291,12 +411,15 @@ def sandwich_uncertainty_propagation(
     response_error = sdf_data.e0 if sdf_data.e0 else 0.0
     relative_uncertainty = total_uncertainty  # Already relative!
     
+    # Calculate total number of reactions across all types
+    total_reactions = sum(len(result['matching_reactions']) for result in results)
+    
     # Calculate individual contributions
     contributions = _calculate_individual_contributions(
         sensitivity_vector,
         covariance_matrix, 
         reaction_indices,
-        len(energy_mapping),
+        total_energy_groups,
         total_variance,
         verbose
     )
@@ -306,7 +429,7 @@ def sandwich_uncertainty_propagation(
         sensitivity_vector,
         covariance_matrix,
         reaction_indices,
-        len(energy_mapping)
+        total_energy_groups
     )
     
     if verbose:
@@ -319,8 +442,8 @@ def sandwich_uncertainty_propagation(
         response_value=response_value,
         response_error=response_error,
         contributions=contributions,
-        n_reactions=len(matching_reactions),
-        n_energy_groups=len(energy_mapping),
+        n_reactions=total_reactions,
+        n_energy_groups=total_energy_groups,
         correlation_effects=correlation_effects
     )
 
@@ -333,6 +456,10 @@ def _match_energy_grids(
 ) -> Dict[int, int]:
     """Match energy grids between sensitivity and covariance data.
     
+    This function automatically handles unit conversions between MeV and eV.
+    If the energy grids don't match directly, it tries converting the sensitivity
+    grid from MeV to eV (multiply by 1e6) or vice versa.
+    
     Returns mapping from sensitivity group index to covariance group index.
     """
     if cov_energies is None:
@@ -341,29 +468,31 @@ def _match_energy_grids(
     sens_array = np.array(sens_energies)
     cov_array = np.array(cov_energies)
     
-    energy_mapping = {}
+    # First try direct matching
+    energy_mapping = _try_energy_grid_matching(sens_array, cov_array, tolerance)
     
-    # Match energy group boundaries
-    # For multigroup data, we need to match group boundaries
-    n_sens_groups = len(sens_energies) - 1  # Number of groups = boundaries - 1
-    n_cov_groups = len(cov_energies) - 1
-    
-    for i in range(n_sens_groups):
-        # Get sensitivity group boundaries
-        sens_lower = sens_energies[i]
-        sens_upper = sens_energies[i + 1]
+    # If no matches, try unit conversions
+    if not energy_mapping:
+        if verbose:
+            logger.info("No direct energy grid match found, trying unit conversions...")
         
-        for j in range(n_cov_groups):
-            # Get covariance group boundaries  
-            cov_lower = cov_energies[j]
-            cov_upper = cov_energies[j + 1]
-            
-            # Check if boundaries match within tolerance
-            if (abs(sens_lower - cov_lower) < tolerance and 
-                abs(sens_upper - cov_upper) < tolerance):
-                energy_mapping[i] = j
-                break
+        # Try converting sensitivity from MeV to eV (multiply by 1e6)
+        sens_array_eV = sens_array * 1e6
+        energy_mapping = _try_energy_grid_matching(sens_array_eV, cov_array, tolerance)
+        
+        if energy_mapping and verbose:
+            logger.info("✓ Energy grids matched after converting sensitivity MeV → eV")
     
+    # If still no matches, try converting covariance from eV to MeV (divide by 1e6)
+    if not energy_mapping:
+        cov_array_MeV = cov_array / 1e6
+        energy_mapping = _try_energy_grid_matching(sens_array, cov_array_MeV, tolerance)
+        
+        if energy_mapping and verbose:
+            logger.info("✓ Energy grids matched after converting covariance eV → MeV")
+    
+    # Report results
+    n_sens_groups = len(sens_energies) - 1
     if verbose:
         logger.info(f"Matched {len(energy_mapping)}/{n_sens_groups} energy groups")
         if len(energy_mapping) < n_sens_groups:
@@ -372,11 +501,40 @@ def _match_energy_grids(
     return energy_mapping
 
 
+def _try_energy_grid_matching(
+    sens_array: np.ndarray,
+    cov_array: np.ndarray, 
+    tolerance: float
+) -> Dict[int, int]:
+    """Try to match energy grids with given arrays and tolerance."""
+    energy_mapping = {}
+    
+    # For multigroup data, check if the grids are approximately the same
+    if len(sens_array) != len(cov_array):
+        return energy_mapping  # Different number of boundaries, can't match
+    
+    # Check if all boundaries match within tolerance
+    all_match = True
+    for i in range(len(sens_array)):
+        if abs(sens_array[i] - cov_array[i]) > tolerance:
+            all_match = False
+            break
+    
+    if all_match:
+        # If all boundaries match, create 1:1 mapping for energy groups
+        n_groups = len(sens_array) - 1  # Number of groups = boundaries - 1
+        for i in range(n_groups):
+            energy_mapping[i] = i
+    
+    return energy_mapping
+
+
 def _find_matching_reactions(
-    sdf_data: SDFData,
+    sens_data: List[SDFReactionData],
     cov_mat: CovMat,
     reaction_filter: Optional[Dict[int, List[int]]],
-    verbose: bool
+    verbose: bool,
+    description: str = "reactions"
 ) -> List[Tuple[int, int]]:
     """Find reactions that exist in both sensitivity and covariance data."""
     
@@ -388,7 +546,7 @@ def _find_matching_reactions(
             cov_reactions.add((isotope, reaction))
     
     # Get available reactions from sensitivity data
-    sens_reactions = {(r.zaid, r.mt) for r in sdf_data.data}
+    sens_reactions = {(r.zaid, r.mt) for r in sens_data}
     
     # Find intersection
     matching_reactions = list(sens_reactions.intersection(cov_reactions))
@@ -414,16 +572,100 @@ def _find_matching_reactions(
         matching_reactions = filtered_reactions
         
         if verbose:
-            logger.info(f"Applied reaction filter, {len(matching_reactions)} reactions selected")
+            logger.info(f"Applied reaction filter for {description}, {len(matching_reactions)} reactions selected")
     
     if verbose:
-        logger.info(f"Found {len(matching_reactions)} matching reactions")
+        logger.info(f"Found {len(matching_reactions)} matching {description}")
         for zaid, mt in matching_reactions[:5]:  # Show first 5
             z = zaid // 1000
             a = zaid % 1000
             nuclide = f"{ATOMIC_NUMBER_TO_SYMBOL.get(z, f'Z{z}')}-{a}"
             reaction = MT_TO_REACTION.get(mt, f"MT{mt}")
             logger.info(f"  {nuclide} {reaction}")
+        if len(matching_reactions) > 5:
+            logger.info(f"  ... and {len(matching_reactions) - 5} more")
+    
+    return matching_reactions
+
+
+def _find_matching_legendre_reactions(
+    sens_data: List[SDFReactionData],
+    cov_mat: MGMF34CovMat,
+    reaction_filter: Optional[Dict[int, List[int]]],
+    verbose: bool
+) -> List[Tuple[int, int, int]]:
+    """Find Legendre reactions that exist in both sensitivity and covariance data.
+    
+    Returns list of (zaid, mt_base, legendre_order) tuples where:
+    - zaid: isotope identifier
+    - mt_base: base MT number (2 for elastic)
+    - legendre_order: order of Legendre coefficient (1, 2, 3, ...)
+    """
+    
+    # Get available reactions from Legendre covariance matrix
+    # Build reactions_by_isotope directly from the MGMF34CovMat attributes
+    cov_reactions_by_isotope = {}
+    for i, iso in enumerate(cov_mat.isotope_rows):
+        if iso not in cov_reactions_by_isotope:
+            cov_reactions_by_isotope[iso] = set()
+        cov_reactions_by_isotope[iso].add(cov_mat.reaction_rows[i])
+    
+    # Also check column reactions
+    for i, iso in enumerate(cov_mat.isotope_cols):
+        if iso not in cov_reactions_by_isotope:
+            cov_reactions_by_isotope[iso] = set()
+        cov_reactions_by_isotope[iso].add(cov_mat.reaction_cols[i])
+    
+    # Convert to sorted lists
+    cov_reactions_by_isotope = {iso: sorted(reactions) for iso, reactions in cov_reactions_by_isotope.items()}
+    
+    cov_reactions = set()
+    for isotope, reactions in cov_reactions_by_isotope.items():
+        for reaction in reactions:
+            # For each MT and available Legendre orders
+            for l_order in cov_mat.legendre_indices:
+                cov_reactions.add((isotope, reaction, l_order))
+    
+    # Convert sensitivity MTs to (zaid, mt_base, legendre_order)
+    sens_reactions = set()
+    for r in sens_data:
+        if r.mt >= 4000:  # Legendre sensitivity
+            l_order = r.mt - 4000  # Extract Legendre order
+            mt_base = 2  # Only elastic scattering supported for now
+            sens_reactions.add((r.zaid, mt_base, l_order))
+    
+    # Find intersection
+    matching_reactions = list(sens_reactions.intersection(cov_reactions))
+    
+    # Apply reaction filter if provided (convert to MT format for filtering)
+    if reaction_filter:
+        filtered_reactions = []
+        
+        for zaid, mt_base, l_order in matching_reactions:
+            mt_sensitivity = 4000 + l_order  # Convert back to sensitivity MT
+            
+            if "ALL_NUCLIDES" in reaction_filter:
+                allowed_mts = reaction_filter["ALL_NUCLIDES"]
+                if mt_sensitivity in allowed_mts:
+                    filtered_reactions.append((zaid, mt_base, l_order))
+            else:
+                if zaid in reaction_filter:
+                    # If empty list, include all reactions for this nuclide
+                    if not reaction_filter[zaid] or mt_sensitivity in reaction_filter[zaid]:
+                        filtered_reactions.append((zaid, mt_base, l_order))
+        
+        matching_reactions = filtered_reactions
+        
+        if verbose:
+            logger.info(f"Applied reaction filter for Legendre moments, {len(matching_reactions)} reactions selected")
+    
+    if verbose:
+        logger.info(f"Found {len(matching_reactions)} matching Legendre moment reactions")
+        for zaid, mt_base, l_order in matching_reactions[:5]:  # Show first 5
+            z = zaid // 1000
+            a = zaid % 1000
+            nuclide = f"{ATOMIC_NUMBER_TO_SYMBOL.get(z, f'Z{z}')}-{a}"
+            logger.info(f"  {nuclide} P{l_order} (MT={4000+l_order})")
         if len(matching_reactions) > 5:
             logger.info(f"  ... and {len(matching_reactions) - 5} more")
     
@@ -527,21 +769,264 @@ def _build_matrices(
     return sensitivity_vector, covariance_matrix, reaction_indices
 
 
+def _build_combined_matrices(
+    results: List[Dict],
+    verbose: bool
+) -> Tuple[np.ndarray, np.ndarray, Dict[int, Tuple], int]:
+    """Build combined sensitivity vector and covariance matrix for both cross-section and Legendre data.
+    
+    This function combines cross-section and Legendre sensitivities and covariances into unified
+    matrices. The matrices are block-diagonal with no cross-correlations between cross-sections
+    and Legendre moments.
+    
+    Parameters
+    ----------
+    results : List[Dict]
+        List of dictionaries containing processed sensitivity and covariance data for each type
+    verbose : bool
+        Whether to print detailed information
+        
+    Returns
+    -------
+    Tuple containing:
+    - sensitivity_vector : np.ndarray
+        Combined sensitivity vector
+    - covariance_matrix : np.ndarray  
+        Combined block-diagonal covariance matrix
+    - reaction_indices : Dict[int, Tuple]
+        Mapping from index to reaction identifier (format depends on type)
+    - total_energy_groups : int
+        Total number of energy groups used
+    """
+    
+    # Build matrices for each type
+    sub_matrices = []
+    total_size = 0
+    max_energy_groups = 0
+    
+    for result in results:
+        if result['type'] == 'cross_section':
+            # Build cross-section matrices using existing function
+            sens_lookup = {(r.zaid, r.mt): r for r in result['sdf_data']}
+            
+            # Convert to SDFData-like object for compatibility
+            class MockSDFData:
+                def __init__(self, data):
+                    self.data = data
+            mock_sdf = MockSDFData(result['sdf_data'])
+            
+            sens_vec, cov_mat, reaction_idx = _build_matrices(
+                mock_sdf,
+                result['cov_mat'],
+                result['matching_reactions'],
+                result['energy_mapping'],
+                verbose
+            )
+            
+            sub_matrices.append({
+                'type': 'cross_section',
+                'sensitivity_vector': sens_vec,
+                'covariance_matrix': cov_mat,
+                'reaction_indices': reaction_idx,
+                'n_groups': len(result['energy_mapping']),
+                'n_reactions': len(result['matching_reactions'])
+            })
+            
+        elif result['type'] == 'legendre':
+            # Build Legendre matrices
+            sens_vec, cov_mat, reaction_idx = _build_legendre_matrices(
+                result['sdf_data'],
+                result['cov_mat'],
+                result['matching_reactions'],
+                result['energy_mapping'],
+                verbose
+            )
+            
+            sub_matrices.append({
+                'type': 'legendre',
+                'sensitivity_vector': sens_vec,
+                'covariance_matrix': cov_mat,
+                'reaction_indices': reaction_idx,
+                'n_groups': len(result['energy_mapping']),
+                'n_reactions': len(result['matching_reactions'])
+            })
+        
+        # Track sizes
+        total_size += sub_matrices[-1]['sensitivity_vector'].size
+        max_energy_groups = max(max_energy_groups, sub_matrices[-1]['n_groups'])
+    
+    if verbose:
+        logger.info(f"Combining {len(sub_matrices)} matrix blocks, total size: {total_size}")
+    
+    # Create combined matrices
+    combined_sensitivity = np.zeros(total_size)
+    combined_covariance = np.zeros((total_size, total_size))
+    combined_reaction_indices = {}
+    
+    # Fill combined matrices block by block
+    current_offset = 0
+    reaction_counter = 0
+    
+    for sub_mat in sub_matrices:
+        sub_size = sub_mat['sensitivity_vector'].size
+        
+        # Copy sensitivity vector
+        combined_sensitivity[current_offset:current_offset + sub_size] = sub_mat['sensitivity_vector']
+        
+        # Copy covariance matrix
+        combined_covariance[current_offset:current_offset + sub_size, 
+                          current_offset:current_offset + sub_size] = sub_mat['covariance_matrix']
+        
+        # Update reaction indices with offset
+        for idx, reaction in sub_mat['reaction_indices'].items():
+            combined_reaction_indices[reaction_counter + idx] = reaction
+        
+        reaction_counter += sub_mat['n_reactions']
+        current_offset += sub_size
+    
+    if verbose:
+        logger.info(f"Combined matrix construction complete")
+        logger.info(f"  Total sensitivity elements: {np.count_nonzero(combined_sensitivity)}/{total_size}")
+        logger.info(f"  Total covariance elements: {np.count_nonzero(combined_covariance)}/{total_size**2}")
+    
+    return combined_sensitivity, combined_covariance, combined_reaction_indices, max_energy_groups
+
+
+def _build_legendre_matrices(
+    sens_data: List[SDFReactionData],
+    cov_mat: MGMF34CovMat,
+    matching_reactions: List[Tuple[int, int, int]],
+    energy_mapping: Dict[int, int],
+    verbose: bool
+) -> Tuple[np.ndarray, np.ndarray, Dict[int, Tuple[int, int, int]]]:
+    """Build sensitivity vector and covariance matrix for Legendre moment data.
+    
+    Parameters
+    ----------
+    sens_data : List[SDFReactionData]
+        Legendre sensitivity data
+    cov_mat : MGMF34CovMat
+        Legendre covariance matrix
+    matching_reactions : List[Tuple[int, int, int]]
+        List of (zaid, mt_base, legendre_order) tuples
+    energy_mapping : Dict[int, int]
+        Mapping from sensitivity group to covariance group
+    verbose : bool
+        Whether to print detailed information
+        
+    Returns
+    -------
+    Tuple containing:
+    - sensitivity_vector : np.ndarray
+    - covariance_matrix : np.ndarray
+    - reaction_indices : Dict[int, Tuple[int, int, int]]
+    """
+    
+    n_groups = len(energy_mapping)
+    n_reactions = len(matching_reactions)
+    total_size = n_groups * n_reactions
+    
+    if verbose:
+        logger.info(f"Building Legendre matrices: {n_reactions} reactions × {n_groups} groups = {total_size} total elements")
+    
+    # Create reaction index mapping
+    reaction_indices = {i: reaction for i, reaction in enumerate(matching_reactions)}
+    
+    # Build sensitivity vector
+    sensitivity_vector = np.zeros(total_size)
+    
+    # Create lookup for sensitivity data (convert MT back from Legendre order)
+    sens_lookup = {}
+    for r in sens_data:
+        if r.mt >= 4000:
+            l_order = r.mt - 4000
+            mt_base = 2  # Only elastic supported for now
+            sens_lookup[(r.zaid, mt_base, l_order)] = r
+    
+    for i, (zaid, mt_base, l_order) in enumerate(matching_reactions):
+        if (zaid, mt_base, l_order) in sens_lookup:
+            reaction_data = sens_lookup[(zaid, mt_base, l_order)]
+            
+            for sens_group, cov_group in energy_mapping.items():
+                if sens_group < len(reaction_data.sensitivity):
+                    vector_idx = i * n_groups + sens_group
+                    sensitivity_vector[vector_idx] = reaction_data.sensitivity[sens_group]
+    
+    # Build covariance matrix from MGMF34CovMat
+    covariance_matrix = np.zeros((total_size, total_size))
+    
+    # Map covariance matrix blocks
+    nan_matrices_count = 0
+    nan_values_replaced = 0
+    for ir, rr, lr, ic, rc, lc, matrix in zip(
+        cov_mat.isotope_rows, cov_mat.reaction_rows, cov_mat.l_rows,
+        cov_mat.isotope_cols, cov_mat.reaction_cols, cov_mat.l_cols,
+        cov_mat.relative_matrices
+    ):
+        
+        # Check for NaN values in this matrix and replace with zeros
+        if np.isnan(matrix).any():
+            nan_matrices_count += 1
+            nan_count_in_matrix = np.isnan(matrix).sum()
+            if verbose:
+                logger.info(f"Matrix L{lr}×L{lc} has {nan_count_in_matrix} NaN values - replacing with zeros")
+            # Replace NaN values with zeros instead of skipping the matrix
+            matrix = np.nan_to_num(matrix, nan=0.0)
+            nan_values_replaced += nan_count_in_matrix
+        
+        # Find reaction indices in our ordered list
+        try:
+            row_reaction_idx = matching_reactions.index((ir, rr, lr))
+            col_reaction_idx = matching_reactions.index((ic, rc, lc))
+        except ValueError:
+            continue  # Skip if reaction not in our filtered list
+        
+        # Map the covariance matrix block
+        for sens_i, cov_i in energy_mapping.items():
+            for sens_j, cov_j in energy_mapping.items():
+                if cov_i < matrix.shape[0] and cov_j < matrix.shape[1]:
+                    matrix_row = row_reaction_idx * n_groups + sens_i
+                    matrix_col = col_reaction_idx * n_groups + sens_j
+                    value = matrix[cov_i, cov_j]
+                    
+                    # Set both (i,j) and (j,i) to ensure symmetry
+                    covariance_matrix[matrix_row, matrix_col] = value
+                    covariance_matrix[matrix_col, matrix_row] = value
+    
+    if verbose:
+        # Check matrix properties
+        nonzero_sens = np.count_nonzero(sensitivity_vector)
+        nonzero_cov = np.count_nonzero(covariance_matrix)
+        logger.info(f"Legendre sensitivity vector: {nonzero_sens}/{total_size} non-zero elements")
+        logger.info(f"Legendre covariance matrix: {nonzero_cov}/{total_size**2} non-zero elements")
+        if nan_matrices_count > 0:
+            logger.info(f"Processed {nan_matrices_count} matrices with NaN values - replaced {nan_values_replaced} NaN values with zeros")
+        
+        max_sens = np.max(np.abs(sensitivity_vector))
+        logger.info(f"Max Legendre sensitivity coefficient: {max_sens:.6e}")
+    
+    return sensitivity_vector, covariance_matrix, reaction_indices
+
+
 def _calculate_individual_contributions(
     sensitivity_vector: np.ndarray,
     covariance_matrix: np.ndarray,
-    reaction_indices: Dict[int, Tuple[int, int]],
+    reaction_indices: Dict[int, Tuple],
     n_groups: int,
     total_variance: float,
     verbose: bool
 ) -> List[UncertaintyContribution]:
     """Calculate individual reaction contributions to total uncertainty.
     
-    For each reaction i, calculates its total contribution to variance including:
-    1. Auto-correlation: S_i^T Σ_ii S_i (diagonal block)
-    2. Cross-correlations: 2 * Σ_{j≠i} S_i^T Σ_ij S_j (off-diagonal blocks)
+    For each reaction i, calculates two types of contributions:
+    1. Auto-contribution (without cross-covariances): S_i^T Σ_ii S_i (diagonal only)
+    2. Total contribution (with cross-covariances): Σ_j S_i^T Σ_ij S_j (full row)
     
-    The sum of all contributions equals the total variance.
+    Both sets sum to meaningful totals and provide different insights.
+    
+    The reaction_indices can contain either:
+    - (zaid, mt) tuples for cross-section reactions
+    - (zaid, mt_base, l_order) tuples for Legendre moment reactions
     """
     
     contributions = []
@@ -566,53 +1051,67 @@ def _calculate_individual_contributions(
             # Calculate contribution: S_i^T Σ_ij S_j
             contribution_matrix[i, j] = float(sens_i.T @ cov_ij @ sens_j)
     
-    # For each reaction, calculate its total contribution
-    for i, (zaid, mt) in reaction_indices.items():
-        # Auto-correlation (diagonal)
-        auto_contribution = contribution_matrix[i, i]
-        
-        # Cross-correlations (off-diagonal, but only count once per pair)
-        cross_contribution = 0.0
-        for j in range(n_reactions):
-            if i != j:
-                # Add half of the symmetric cross-correlation
-                cross_contribution += 0.5 * contribution_matrix[i, j]
-                cross_contribution += 0.5 * contribution_matrix[j, i]
-        
-        # Total contribution for this reaction
-        total_contribution = auto_contribution + cross_contribution
-        
-        contribution = UncertaintyContribution(
-            zaid=zaid,
-            mt=mt,
-            variance_contribution=total_contribution
-        )
-        
-        contributions.append(contribution)
-    
-    # Calculate relative contributions as percentages
-    # The sum of all contributions should equal total_variance
-    total_contributions_sum = sum(c.variance_contribution for c in contributions)
-    
-    for contribution in contributions:
-        if abs(total_contributions_sum) > 1e-15:
-            contribution.relative_contribution = abs(contribution.variance_contribution) / abs(total_contributions_sum)
-        else:
-            contribution.relative_contribution = 0.0
+    # Calculate total diagonal and off-diagonal contributions for reference
+    total_diagonal = np.sum(np.diag(contribution_matrix))
+    total_off_diagonal = np.sum(contribution_matrix) - total_diagonal
     
     if verbose:
-        # Show top contributors
-        sorted_contribs = sorted(contributions, 
-                               key=lambda x: abs(x.variance_contribution), 
-                               reverse=True)
-        logger.info("Top uncertainty contributors:")
-        for contrib in sorted_contribs[:5]:
-            pct = contrib.relative_contribution * 100
-            logger.info(f"  {contrib.nuclide} {contrib.reaction_name}: {pct:.2f}%")
+        logger.info(f"Contribution matrix analysis:")
+        logger.info(f"  Total variance: {total_variance:.6e}")
+        logger.info(f"  Diagonal contributions: {total_diagonal:.6e} ({100*total_diagonal/total_variance:.1f}%)")
+        logger.info(f"  Off-diagonal contributions: {total_off_diagonal:.6e} ({100*total_off_diagonal/total_variance:.1f}%)")
+    
+    # For each reaction, calculate both types of contributions
+    for i, reaction_info in reaction_indices.items():
+        # Handle both cross-section and Legendre reactions
+        if len(reaction_info) == 2:
+            # Cross-section reaction: (zaid, mt)
+            zaid, mt = reaction_info
+            mt_display = mt
+        elif len(reaction_info) == 3:
+            # Legendre reaction: (zaid, mt_base, l_order)
+            zaid, mt_base, l_order = reaction_info
+            mt_display = 4000 + l_order  # Convert back to sensitivity MT for display
+        else:
+            raise ValueError(f"Unexpected reaction format: {reaction_info}")
         
-        # Verify sum
-        if verbose and abs(total_contributions_sum - total_variance) > abs(total_variance) * 0.01:
-            logger.warning(f"Contribution sum mismatch: {total_contributions_sum:.6e} vs {total_variance:.6e}")
+        # Method 1: Auto-contribution only (diagonal term)
+        auto_contribution = contribution_matrix[i, i]
+        
+        # Method 2: Total contribution including cross-covariances (row sum)
+        total_contribution = np.sum(contribution_matrix[i, :])
+        
+        # Create UncertaintyContribution object with both values
+        contrib = UncertaintyContribution(
+            zaid=zaid,
+            mt=mt_display,
+            variance_contribution=total_contribution  # Primary value (with cross-covariances)
+        )
+        
+        # Set relative contribution after initialization
+        contrib.relative_contribution = total_contribution / total_variance if total_variance > 0 else 0.0
+        
+        # Add custom attributes for the auto-contribution
+        contrib.auto_variance_contribution = auto_contribution
+        contrib.auto_relative_contribution = auto_contribution / total_diagonal if total_diagonal > 0 else 0.0
+        
+        contributions.append(contrib)
+    
+    # Sort contributions by magnitude for display
+    contributions.sort(key=lambda x: abs(x.variance_contribution), reverse=True)
+    
+    if verbose:
+        # Show top contributors with both auto and total contributions
+        logger.info("Top uncertainty contributors:")
+        for i, contrib in enumerate(contributions[:5]):
+            total_pct = contrib.relative_contribution * 100
+            auto_pct = contrib.auto_relative_contribution * 100
+            logger.info(f"  {contrib.nuclide} {contrib.reaction_name}: {total_pct:.2f}% (total), {auto_pct:.2f}% (auto)")
+        
+        # Show diagnostic info
+        total_sum = sum(c.variance_contribution for c in contributions)
+        auto_sum = sum(c.auto_variance_contribution for c in contributions)
+        logger.info(f"Contribution sums: total={total_sum:.6e}, auto={auto_sum:.6e}, expected={total_variance:.6e}")
     
     return contributions
 
@@ -620,7 +1119,7 @@ def _calculate_individual_contributions(
 def _calculate_correlation_effects(
     sensitivity_vector: np.ndarray,
     covariance_matrix: np.ndarray,
-    reaction_indices: Dict[int, Tuple[int, int]],
+    reaction_indices: Dict[int, Tuple],
     n_groups: int
 ) -> float:
     """Calculate the contribution from cross-correlations between reactions."""

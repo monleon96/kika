@@ -11,6 +11,7 @@ from mcnpy.mctal.parse_mctal import read_mctal
 from mcnpy._constants import ATOMIC_NUMBER_TO_SYMBOL, MT_TO_REACTION
 from mcnpy.sensitivities.sensitivity import SensitivityData, Coefficients, TaylorCoefficients
 from mcnpy.sensitivities.sdf import SDFData, SDFReactionData
+from mcnpy.serpent.sens import SensitivityFile
 import math
 import matplotlib.pyplot as plt
 

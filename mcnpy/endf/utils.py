@@ -476,7 +476,10 @@ def project_tabulated_to_legendre(
     """
     Compute Legendre coefficients a_l up to max_order from tabulated f(μ) on μ∈[-1,1].
     Uses Gauss–Legendre quadrature on an ENDF-interpolated f(μ) (respects angular INT codes).
-    a_l = (2l+1)/2 ∫_{-1}^{1} P_l(μ) f(μ) dμ
+
+    Conventions:
+    - Angular PDF is represented as f(μ) = 1/2 Σ_{l=0}^L (2l+1) a_l P_l(μ)
+    - With this convention, coefficients are: a_l = ∫_{-1}^{1} f(μ) P_l(μ) dμ
     """
     mu = np.asarray(mu, dtype=float)
     fmu = np.asarray(fmu, dtype=float)
@@ -493,11 +496,11 @@ def project_tabulated_to_legendre(
     if abs(norm) > 1e-15:
         f_q = f_q / norm
 
-    # Project
+    # Project: a_l = ∫ f(μ) P_l(μ) dμ under the convention used elsewhere (a0 ≈ 1)
     coeffs = np.zeros(max_order + 1, dtype=float)
     for l in range(max_order + 1):
         P_l = np.polynomial.legendre.legval(mu_q, [0] * l + [1])  # evaluate P_l(μ)
-        coeffs[l] = (2 * l + 1) / 2.0 * float(np.sum(P_l * f_q * w_q))
+        coeffs[l] = float(np.sum(P_l * f_q * w_q))
     return coeffs
 
 
