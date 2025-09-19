@@ -195,34 +195,35 @@ class MF34CovMat:
     
     @property
     def covariance_matrix(self) -> np.ndarray:
-        """
-        Return the full covariance matrix of shape (N·G) × (N·G),
-        where N = number of unique (iso, rxn, l) triplets and G = max number of energy groups.
-        """
         param_triplets = self._get_param_triplets()
         idx_map = {p: i for i, p in enumerate(param_triplets)}
-
-        # Find maximum energy grid size across all matrices
-        max_G = max(matrix.shape[0] for matrix in self.matrices) if self.matrices else 0
+        unions = getattr(self, "_union_grids", None) or self.compute_union_energy_grids()
+        # number of bins (not points) per triplet on the union
+        Gmap = {t: len(unions[t]) - 1 for t in param_triplets}
+        max_G = max(Gmap.values()) if Gmap else 0
         N = len(param_triplets) * max_G
         full = np.zeros((N, N), dtype=float)
 
-        for ir, rr, lr, ic, rc, lc, matrix in zip(
+        for ir, rr, lr, ic, rc, lc, matrix, grid in zip(
             self.isotope_rows, self.reaction_rows, self.l_rows,
             self.isotope_cols, self.reaction_cols, self.l_cols,
-            self.matrices
+            self.matrices, self.energy_grids
         ):
-            i = idx_map[(ir, rr, lr)]
-            j = idx_map[(ic, rc, lc)]
-            G = matrix.shape[0]  # Current matrix size
-            r0, r1 = i*max_G, i*max_G + G
-            c0, c1 = j*max_G, j*max_G + G
+            tr = (ir, rr, lr); tc = (ic, rc, lc)
+            i, j = idx_map[tr], idx_map[tc]
+            # lift Σ to (union_r × union_c)
+            Ar = self._lift_matrix(np.asarray(grid), unions[tr])
+            Ac = self._lift_matrix(np.asarray(grid), unions[tc])
+            Sigma = Ar @ matrix @ Ac.T
 
-            full[r0:r1, c0:c1] = matrix
+            Gr, Gc = Gmap[tr], Gmap[tc]
+            r0, r1 = i*max_G, i*max_G + Gr
+            c0, c1 = j*max_G, j*max_G + Gc
+            full[r0:r1, c0:c1] = Sigma
             if i != j:
-                full[c0:c1, r0:r1] = matrix.T
-
+                full[c0:c1, r0:r1] = Sigma.T
         return full
+
 
     @property 
     def correlation_matrix(self) -> np.ndarray:
@@ -252,6 +253,35 @@ class MF34CovMat:
         Sigma_log = np.log1p(cov_rel)
         return Sigma_log
 
+    def has_uniform_energy_grid(self) -> bool:
+        """
+        Check if all matrices have the same energy grid.
+        
+        Returns
+        -------
+        bool
+            True if all energy grids are identical, False otherwise.
+            Returns True for empty collections (vacuous truth).
+        """
+        if not self.energy_grids:
+            return True
+        
+        # Compare all grids to the first one
+        first_grid = self.energy_grids[0]
+        
+        for grid in self.energy_grids[1:]:
+            # Check if lengths are different
+            if len(grid) != len(first_grid):
+                return False
+            
+            # Check if values are different (using numpy for numerical comparison)
+            if not np.allclose(grid, first_grid, rtol=1e-15, atol=1e-15):
+                return False
+        
+        return True
+
+    def get_union_energy_grids(self):
+        return getattr(self, "_union_grids", None) or self.compute_union_energy_grids()
 
 
     # ------------------------------------------------------------------
@@ -589,6 +619,112 @@ class MF34CovMat:
         else:
             raise TypeError(f"l_coefficient must be int or list of int, got {type(l_coefficient)}")
 
+    def compute_union_energy_grids(self, atol: float = 1e-12):
+        """
+        Compute union energy grids for all parameter triplets.
+        
+        This method creates a unified energy grid for each (isotope, reaction, legendre) 
+        triplet by merging all energy grids that involve that triplet, removing duplicates
+        within tolerance.
+        
+        Parameters
+        ----------
+        atol : float, default 1e-12
+            Absolute tolerance for merging energy points
+            
+        Returns
+        -------
+        Dict[Tuple[int, int, int], np.ndarray]
+            Dictionary mapping (isotope, reaction, legendre) triplets to union energy grids
+        """
+        triplets = self._get_param_triplets()
+        unions = {t: [] for t in triplets}
+        for i, grid in enumerate(self.energy_grids):
+            row = (self.isotope_rows[i], self.reaction_rows[i], self.l_rows[i])
+            col = (self.isotope_cols[i], self.reaction_cols[i], self.l_cols[i])
+            unions[row].extend(grid); unions[col].extend(grid)
+        # deduplicate with tolerance
+        for t, g in unions.items():
+            g = np.unique(np.asarray(g, dtype=float))
+            merged = [g[0]]
+            for x in g[1:]:
+                if not np.isclose(x, merged[-1], rtol=0.0, atol=atol):
+                    merged.append(x)
+            unions[t] = np.array(merged, dtype=float)
+        self._union_grids = unions
+        return unions
+
+    def validate_union_grids(self, verbose: bool = True) -> bool:
+        """
+        Validate that union grids are properly constructed and aligned.
+        
+        Parameters
+        ----------
+        verbose : bool, default True
+            Whether to print validation details
+            
+        Returns
+        -------
+        bool
+            True if validation passes, False otherwise
+        """
+        try:
+            param_triplets = self._get_param_triplets()
+            union_grids = self.get_union_energy_grids()
+            
+            if verbose:
+                print(f"Validating union grids for {len(param_triplets)} parameter triplets")
+            
+            # Check that all triplets have union grids
+            missing_grids = [t for t in param_triplets if t not in union_grids]
+            if missing_grids:
+                if verbose:
+                    print(f"ERROR: Missing union grids for {len(missing_grids)} triplets")
+                return False
+            
+            # Check grid properties
+            max_G = 0
+            for triplet, grid in union_grids.items():
+                if len(grid) < 2:
+                    if verbose:
+                        print(f"WARNING: Triplet {triplet} has insufficient grid points: {len(grid)}")
+                    continue
+                
+                num_bins = len(grid) - 1
+                max_G = max(max_G, num_bins)
+                
+                # Check grid is sorted
+                if not np.all(grid[1:] >= grid[:-1]):
+                    if verbose:
+                        print(f"ERROR: Grid for triplet {triplet} is not sorted")
+                    return False
+            
+            # Check covariance matrix dimensions
+            expected_dim = len(param_triplets) * max_G
+            actual_shape = self.covariance_matrix.shape
+            
+            if actual_shape[0] != actual_shape[1]:
+                if verbose:
+                    print(f"ERROR: Covariance matrix is not square: {actual_shape}")
+                return False
+            
+            if actual_shape[0] != expected_dim:
+                if verbose:
+                    print(f"ERROR: Covariance matrix dimension mismatch. "
+                          f"Expected: {expected_dim}, Actual: {actual_shape[0]}")
+                return False
+            
+            if verbose:
+                print(f"Validation PASSED: {len(param_triplets)} triplets, max_G={max_G}, "
+                      f"matrix shape={actual_shape}")
+            
+            return True
+            
+        except Exception as e:
+            if verbose:
+                print(f"ERROR during union grids validation: {e}")
+            return False
+
 
     # ------------------------------------------------------------------
     # Decomposition methods
@@ -831,3 +967,16 @@ class MF34CovMat:
         triplets = set(zip(self.isotope_rows, self.reaction_rows, self.l_rows)) \
                  | set(zip(self.isotope_cols, self.reaction_cols, self.l_cols))
         return sorted(triplets, key=lambda t: (t[0], t[1], t[2]))
+
+    def _lift_matrix(self, src_grid, dst_grid):
+        # src_grid, dst_grid are boundary arrays (NE)
+        Gs, Gd = len(src_grid)-1, len(dst_grid)-1
+        A = np.zeros((Gd, Gs), dtype=float)
+        j = 0
+        for g in range(Gd):
+            eL, eH = dst_grid[g], dst_grid[g+1]
+            while j+1 < len(src_grid) and src_grid[j+1] <= eL + 1e-12:
+                j += 1
+            # assume dst is subset/refinement of src:
+            A[g, j] = 1.0
+        return A

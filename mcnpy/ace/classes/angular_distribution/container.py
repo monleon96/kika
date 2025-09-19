@@ -252,51 +252,45 @@ class AngularDistributionContainer:
         ValueError
             If the particle type is unknown
         """
-        try:
-            import pandas as pd
+        # Special case for elastic scattering (MT=2)
+        if particle_type == 'neutron' and mt == 2 and self.elastic:
+            return self.elastic.to_dataframe(energy, num_points, interpolate)
+        
+        # Get the appropriate distribution container
+        if particle_type == 'neutron':
+            dist_container = self.incident_neutron
+        elif particle_type == 'photon':
+            dist_container = self.photon_production
+        elif particle_type == 'particle':
+            if particle_idx < 0 or particle_idx >= len(self.particle_production):
+                raise ValueError(f"Particle index {particle_idx} out of bounds")
+            dist_container = self.particle_production[particle_idx]
+        else:
+            raise ValueError(f"Unknown particle type: {particle_type}")
+        
+        # Get the angular distribution for this MT number
+        if mt not in dist_container:
+            raise KeyError(f"MT={mt} not found in {particle_type} angular distributions")
+        
+        # Add information about the particle type and MT number to the dataframe
+        distribution = dist_container[mt]
+        df = None
+        
+        # Special handling for Kalbach-Mann distributions
+        if isinstance(distribution, KalbachMannAngularDistribution):
+            df = distribution.to_dataframe(energy, ace, num_points, interpolate=True)
+        else:
+            df = distribution.to_dataframe(energy, num_points, interpolate)
             
-            # Special case for elastic scattering (MT=2)
-            if particle_type == 'neutron' and mt == 2 and self.elastic:
-                return self.elastic.to_dataframe(energy, num_points, interpolate)
+        if df is not None:
+            # Add columns for particle type and MT
+            df['particle_type'] = particle_type
+            df['mt'] = mt
+            if particle_type == 'particle':
+                df['particle_idx'] = particle_idx
             
-            # Get the appropriate distribution container
-            if particle_type == 'neutron':
-                dist_container = self.incident_neutron
-            elif particle_type == 'photon':
-                dist_container = self.photon_production
-            elif particle_type == 'particle':
-                if particle_idx < 0 or particle_idx >= len(self.particle_production):
-                    raise ValueError(f"Particle index {particle_idx} out of bounds")
-                dist_container = self.particle_production[particle_idx]
-            else:
-                raise ValueError(f"Unknown particle type: {particle_type}")
-            
-            # Get the angular distribution for this MT number
-            if mt not in dist_container:
-                raise KeyError(f"MT={mt} not found in {particle_type} angular distributions")
-            
-            # Add information about the particle type and MT number to the dataframe
-            distribution = dist_container[mt]
-            df = None
-            
-            # Special handling for Kalbach-Mann distributions
-            if isinstance(distribution, KalbachMannAngularDistribution):
-                df = distribution.to_dataframe(energy, ace, num_points, interpolate=True)
-            else:
-                df = distribution.to_dataframe(energy, num_points, interpolate)
-                
-            if df is not None:
-                # Add columns for particle type and MT
-                df['particle_type'] = particle_type
-                df['mt'] = mt
-                if particle_type == 'particle':
-                    df['particle_idx'] = particle_idx
-                
-                return df
-            return None
-                
-        except ImportError:
-            return None
+            return df
+        return None
     
     def plot(self, mt: int, energy: float, particle_type: str = 'neutron', 
             particle_idx: int = 0, ace=None, ax=None, title=None, **kwargs) -> Optional[Tuple]:

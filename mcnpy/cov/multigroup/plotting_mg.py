@@ -723,6 +723,257 @@ def plot_mg_vs_endf_comparison(
     return fig
 
 
+def plot_mg_vs_endf_uncertainties_comparison(
+    mg_covmat: "MGMF34CovMat",
+    endf_data: Union["MF34CovMat", object],
+    isotope: int,
+    mt: int,
+    orders: Optional[Union[int, List[int]]] = None,
+    energy_range: Optional[Tuple[float, float]] = None,
+    style: str = 'default',
+    figsize: Tuple[float, float] = (10, 6),
+    legend_loc: str = 'best',
+    mg_marker: bool = True,
+    uncertainty_type: str = "relative",
+    **kwargs
+) -> plt.Figure:
+    """
+    Compare multigroup uncertainties with ENDF uncertainties for Legendre coefficients.
+    
+    This function plots both the multigroup uncertainties and the uncertainties
+    from the original ENDF MF34 covariance data for comparison using step plots.
+    
+    Parameters
+    ----------
+    mg_covmat : MGMF34CovMat
+        Multigroup covariance matrix object
+    endf_data : MF34CovMat or ENDF object
+        Either:
+        - MF34CovMat: Original ENDF MF34 covariance data object
+        - ENDF object: ENDF object containing MF34 data (will extract MF34CovMat automatically)
+    isotope : int
+        Isotope ID to plot
+    mt : int
+        Reaction MT number to plot
+    orders : int or list of int, optional
+        Legendre orders to plot. If None, plots all available orders
+    energy_range : tuple of float, optional
+        Energy range for plotting. If None, uses full multigroup range
+    style : str
+        Plot style from _plot_settings
+    figsize : tuple
+        Figure size
+    legend_loc : str
+        Legend location
+    mg_marker : bool
+        Whether to include markers for multigroup data
+    uncertainty_type : str
+        Type of uncertainty to plot: "relative" (%) or "absolute"
+    **kwargs
+        Additional plotting arguments
+    
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure containing the plot
+    """
+    # Handle endf_data parameter - convert to MF34CovMat if needed
+    if hasattr(endf_data, 'mf') and 34 in endf_data.mf:
+        # This is an ENDF object, extract MF34CovMat
+        if mt in endf_data.mf[34].mt:
+            endf_mf34_covmat = endf_data.mf[34].mt[mt].to_ang_covmat()
+        else:
+            raise ValueError(f"MT {mt} not found in ENDF MF34 data")
+    else:
+        # Assume this is already a MF34CovMat object
+        endf_mf34_covmat = endf_data
+    
+    # Setup plot style
+    plot_kwargs = setup_plot_style(style=style, figsize=figsize, **kwargs)
+    fig = plot_kwargs['_fig']
+    ax = plot_kwargs['ax']
+    colors = plot_kwargs['_colors']
+    
+    # Multigroup energy grid (boundaries) and centers
+    mg_energy_grid = np.asarray(mg_covmat.energy_grid, dtype=float)
+    mg_energy_centers = _get_energy_group_centers(mg_energy_grid)
+    
+    # Determine which orders to plot
+    available_mg_orders = []
+    for key in mg_covmat.legendre_coefficients.keys():
+        iso_key, mt_key, l_key = key
+        if iso_key == isotope and mt_key == mt:
+            available_mg_orders.append(l_key)
+    
+    available_mg_orders = sorted(set(available_mg_orders))
+    
+    if orders is None:
+        orders = available_mg_orders
+    elif isinstance(orders, int):
+        orders = [orders]
+    
+    # Filter orders to only those available
+    orders = [order for order in orders if order in available_mg_orders]
+    
+    if not orders:
+        ax.text(0.5, 0.5, f'No matching orders available\nMG orders: {available_mg_orders}', 
+                ha='center', va='center', transform=ax.transAxes)
+        return fig
+    
+    # Set energy range
+    if energy_range is None:
+        energy_range = (mg_covmat.energy_grid[0], mg_covmat.energy_grid[-1])
+    
+    from mcnpy._utils import zaid_to_symbol
+    try:
+        isotope_symbol = zaid_to_symbol(isotope)
+    except Exception:
+        isotope_symbol = f"Isotope {isotope}"
+
+    # Plot each order
+    for order_idx, order in enumerate(orders):
+        color = colors[order_idx % len(colors)]
+
+        # Plot multigroup uncertainties (dashed step plot)
+        mg_key = (isotope, mt, order)
+        if mg_key in mg_covmat.legendre_coefficients:
+            # Get multigroup uncertainties from diagonal covariance matrix
+            mg_uncertainties = None
+            for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
+                    mg_covmat.isotope_rows,
+                    mg_covmat.reaction_rows,
+                    mg_covmat.l_rows,
+                    mg_covmat.isotope_cols,
+                    mg_covmat.reaction_cols,
+                    mg_covmat.l_cols)):
+                if (iso_r == isotope and mt_r == mt and l_r == order and
+                        iso_c == isotope and mt_c == mt and l_c == order):
+                    matrix = mg_covmat.relative_matrices[i]
+                    diag = np.diag(matrix)
+                    mg_uncertainties = np.sqrt(diag)  # Relative uncertainties
+                    if uncertainty_type == "relative":
+                        mg_uncertainties = mg_uncertainties * 100  # Convert to percentage
+                    elif uncertainty_type == "absolute":
+                        # Convert to absolute using multigroup coefficients
+                        mg_coeffs = np.asarray(mg_covmat.legendre_coefficients[mg_key], dtype=float)
+                        mg_uncertainties = mg_uncertainties * np.abs(mg_coeffs)
+                    break
+            
+            if mg_uncertainties is not None:
+                # Create step plot for multigroup data (dashed)
+                mg_steps = np.append(mg_uncertainties, mg_uncertainties[-1])
+                ax.step(
+                    mg_energy_grid,
+                    mg_steps,
+                    where='post',
+                    color=color,
+                    linewidth=2,
+                    linestyle='--',  # Dashed for MG
+                    label=f"MG {isotope_symbol} - L={order}",
+                    zorder=3
+                )
+                if mg_marker:
+                    ax.plot(mg_energy_centers, mg_uncertainties, 'o', color=color, markersize=4, zorder=4)
+
+        # Plot ENDF uncertainties (solid step plot)
+        endf_uncertainty_data = endf_mf34_covmat.get_uncertainties_for_legendre_coefficient(isotope, mt, order)
+        if endf_uncertainty_data is not None:
+            endf_energies = endf_uncertainty_data['energies']
+            endf_uncertainties = endf_uncertainty_data['uncertainties']
+            
+            # Filter by energy range
+            mask = (endf_energies >= energy_range[0]) & (endf_energies <= energy_range[1])
+            endf_energies_filtered = endf_energies[mask]
+            endf_uncertainties_filtered = endf_uncertainties[mask]
+            
+            if len(endf_energies_filtered) > 0:
+                if uncertainty_type == "relative":
+                    endf_uncertainties_filtered = endf_uncertainties_filtered * 100  # Convert to percentage
+                # elif uncertainty_type == "absolute" - ENDF uncertainties are already relative, so no conversion needed
+                
+                # Create energy grid for step plot - need to add boundaries
+                # Assume log-spaced energy grid and extrapolate boundaries
+                if len(endf_energies_filtered) > 1:
+                    # Calculate energy bin boundaries for step plot
+                    log_energies = np.log(endf_energies_filtered)
+                    log_widths = np.diff(log_energies)
+                    
+                    # Create boundaries
+                    log_boundaries = np.zeros(len(endf_energies_filtered) + 1)
+                    log_boundaries[1:-1] = (log_energies[:-1] + log_energies[1:]) / 2.0
+                    
+                    # Extrapolate first and last boundaries
+                    if len(log_widths) > 0:
+                        log_boundaries[0] = log_energies[0] - log_widths[0] / 2.0
+                        log_boundaries[-1] = log_energies[-1] + log_widths[-1] / 2.0
+                    else:
+                        log_boundaries[0] = log_energies[0] - 0.1
+                        log_boundaries[-1] = log_energies[-1] + 0.1
+                    
+                    energy_boundaries = np.exp(log_boundaries)
+                    
+                    # Create step values
+                    endf_steps = np.append(endf_uncertainties_filtered, endf_uncertainties_filtered[-1])
+                    
+                    ax.step(
+                        energy_boundaries,
+                        endf_steps,
+                        where='post',
+                        linestyle='-',  # Solid for ENDF
+                        color=color,
+                        linewidth=1.4,
+                        alpha=0.7,
+                        label=f"ENDF {isotope_symbol} - L={order}",
+                        zorder=2
+                    )
+                else:
+                    # Only one point, plot as a single step
+                    ax.plot(
+                        endf_energies_filtered,
+                        endf_uncertainties_filtered,
+                        linestyle='-',
+                        color=color,
+                        linewidth=1.4,
+                        alpha=0.7,
+                        label=f"ENDF {isotope_symbol} - L={order}",
+                        zorder=2
+                    )
+    
+    # Format the plot
+    # Improved title with reaction name if available
+    title_parts = []
+    try:
+        from mcnpy._constants import MT_TO_REACTION
+        if mt in MT_TO_REACTION:
+            title_parts.append(f"MT={mt} {MT_TO_REACTION[mt]}")
+        else:
+            title_parts.append(f"MT={mt}")
+    except ImportError:
+        title_parts.append(f"MT={mt}")
+    title_parts.append(isotope_symbol)
+    title_parts.append("MG vs ENDF Uncertainties")
+    title = " - ".join(title_parts)
+
+    # Set y-axis label based on uncertainty type
+    if uncertainty_type == "relative":
+        y_label = "Relative uncertainty (%)"
+    else:
+        y_label = "Absolute uncertainty"
+
+    ax = format_axes(
+        ax,
+        style=style,
+        use_log_scale=True,
+        is_energy_axis=True,
+        x_label="Energy (eV)",
+        y_label=y_label,
+        title=title,
+        legend_loc=legend_loc
+    )
+    ax.set_xlim(energy_range)
+    return fig
+
+
 def plot_mg_covariance_heatmap(
     mg_covmat: "MGMF34CovMat",
     isotope: int,
@@ -1018,8 +1269,6 @@ def plot_mg_covariance_heatmap(
         elif vmin >= vmax:
             vmin = vmax - 1e-6 if vmax != 0 else -1e-6
             
-        # Use centered normalization for correlation
-        from matplotlib.colors import TwoSlopeNorm
         vcenter = 0.0
         if vcenter <= vmin:
             vcenter = vmin + (vmax - vmin) * 0.1

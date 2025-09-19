@@ -111,7 +111,7 @@ def read_njoy_covmat(file_path: str) -> CovMat:
                 'ISO_V': [], 'REAC_V': [],
                 'STD':    []}
 
-    # NEW – temporary store for cross-section vectors
+    # Temporary store for cross-section vectors
     xs_dict: Dict[Tuple[int, int], np.ndarray] = {}
 
     with open(file_path, 'r') as f:

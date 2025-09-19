@@ -27,6 +27,112 @@ from .diagnostics import (
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+
+def _verify_sample_covariance(
+    samples: np.ndarray,
+    original_cov: np.ndarray,
+    space: str,
+    verbose: bool = True,
+    logger = None,
+) -> Dict[str, float]:
+    """
+    Verify that the empirical covariance from samples matches the original covariance matrix.
+    
+    Parameters
+    ----------
+    samples : np.ndarray
+        Generated samples of shape (n_samples, n_parameters)
+    original_cov : np.ndarray
+        Original covariance matrix of shape (n_parameters, n_parameters)
+    space : str
+        Sampling space: "linear" or "log"
+    verbose : bool
+        Whether to log verification results
+    logger : optional
+        Logger instance for output
+        
+    Returns
+    -------
+    Dict[str, float]
+        Dictionary containing verification metrics
+    """
+    n_samples, n_params = samples.shape
+    
+    # Calculate empirical covariance from samples
+    if space == "linear":
+        # For linear space: samples = factors = 1 + X, so we need Cov(X) = Cov(factors - 1)
+        centered_samples = samples - 1.0
+        empirical_cov = np.cov(centered_samples.T, ddof=1)
+    else:  # log space
+        # For log space: samples = factors = exp(Y), we need to check Cov(log(factors))
+        log_samples = np.log(samples)
+        # Remove the mean shift to get the underlying Y ~ N(m, Σ_log)
+        # Since samples = exp(Y + m), we have log(samples) = Y + m
+        # The original covariance is Cov(Y), so we need Cov(log(samples) - mean(log(samples)))
+        log_samples_centered = log_samples - np.mean(log_samples, axis=0)
+        empirical_cov = np.cov(log_samples_centered.T, ddof=1)
+    
+    # Calculate verification metrics
+    frobenius_original = np.linalg.norm(original_cov, 'fro')
+    frobenius_diff = np.linalg.norm(original_cov - empirical_cov, 'fro')
+    relative_frobenius_error = frobenius_diff / frobenius_original if frobenius_original > 0 else 0.0
+    
+    # Calculate element-wise errors
+    abs_errors = np.abs(original_cov - empirical_cov)
+    max_diagonal_error = np.max(abs_errors[np.eye(n_params, dtype=bool)])
+    max_offdiag_error = np.max(abs_errors[~np.eye(n_params, dtype=bool)]) if n_params > 1 else 0.0
+    
+    # Calculate relative diagonal errors
+    diagonal_original = np.diag(original_cov)
+    diagonal_empirical = np.diag(empirical_cov)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        relative_diagonal_errors = np.abs(diagonal_original - diagonal_empirical) / np.abs(diagonal_original)
+        relative_diagonal_errors = relative_diagonal_errors[np.isfinite(relative_diagonal_errors)]
+    max_relative_diagonal_error = np.max(relative_diagonal_errors) if len(relative_diagonal_errors) > 0 else 0.0
+    
+    metrics = {
+        'relative_frobenius_error': relative_frobenius_error,
+        'max_diagonal_error': max_diagonal_error,
+        'max_offdiag_error': max_offdiag_error,
+        'max_relative_diagonal_error': max_relative_diagonal_error,
+        'n_samples': n_samples,
+        'n_parameters': n_params
+    }
+    
+    # Log results in the same style as decomposition verification
+    if verbose:
+        if logger:
+            logger.info(f"[SAMPLING] [QUALITY] Sample-based covariance verification:")
+            logger.info(f"  Samples used: {n_samples}")
+            logger.info(f"  Parameters: {n_params}")
+            logger.info(f"  Relative Frobenius error: {relative_frobenius_error*100:.6f}%")
+            logger.info(f"  Max diagonal error: {max_relative_diagonal_error*100:.6f}%")
+            logger.info(f"  Max off-diagonal error: {max_offdiag_error:.6e}")
+            
+            # Provide quality assessment
+            if relative_frobenius_error < 0.01:  # < 1%
+                quality = "EXCELLENT"
+            elif relative_frobenius_error < 0.05:  # < 5%
+                quality = "GOOD"
+            elif relative_frobenius_error < 0.15:  # < 15%
+                quality = "FAIR"
+            else:
+                quality = "POOR"
+            
+            logger.info(f"  Sample quality assessment: {quality}")
+            
+            # Add note about sample count dependency
+            if n_samples < 1000:
+                logger.info(f"  Note: Quality improves with more samples (current: {n_samples})")
+        else:
+            print(f"[SAMPLING] [QUALITY] Sample-based covariance verification:")
+            print(f"  Relative Frobenius error: {relative_frobenius_error*100:.6f}%")
+            print(f"  Max relative diagonal error: {max_relative_diagonal_error*100:.6f}%")
+            print(f"  Sample quality: {'GOOD' if relative_frobenius_error < 0.05 else 'FAIR' if relative_frobenius_error < 0.15 else 'POOR'}")
+    
+    return metrics
+
+
 def _uncorrelated(
     dim: int,
     n: int,
@@ -403,6 +509,17 @@ def generate_samples(
             Z_LIMIT, verbose
         )
     
+    # ------------------------------------------------------------------
+    # 7. Verify sample-based covariance matches original covariance
+    if verbose:
+        sample_verification_metrics = _verify_sample_covariance(
+            samples=factors,
+            original_cov=cov_mat,
+            space=space,
+            verbose=verbose,
+            logger=logger
+        )
+    
     # Update fix_info to include soft autofix status
     if soft_autofix_failed and fix_info:
         fix_info["soft_autofix_failed"] = True
@@ -419,7 +536,7 @@ def generate_endf_samples(
     mf34_cov,
     n_samples: int,
     *,
-    space: str = "log",          # "log" (default) or "linear"
+    space: str = "linear",          # "log" (default) or "linear"
     decomposition_method: str = "svd",
     sampling_method: str = "sobol",
     seed: Optional[int] = None,
@@ -607,6 +724,16 @@ def generate_endf_samples(
                 factors, cov_mat, param_triplets, num_groups,
                 bins, Z_LIMIT, verbose=verbose, logger=logger
             )
+            
+        # ------------------------------------------------------------------
+        # 7. Verify sample-based covariance matches original covariance
+        sample_verification_metrics = _verify_sample_covariance(
+            samples=factors,
+            original_cov=cov_mat,
+            space=space,
+            verbose=verbose,
+            logger=logger
+        )
     else:
         endf_sampling_diagnostic_results = None
         

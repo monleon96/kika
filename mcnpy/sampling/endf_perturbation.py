@@ -27,6 +27,38 @@ from mcnpy.endf.read_endf import read_endf
 from mcnpy.ace.xsdir import create_xsdir_files_for_ace
 
 
+def _format_energy_group_name(energy_grid: List[float], group_index: int) -> str:
+    """
+    Format energy group name using actual energy boundary values in scientific notation.
+    
+    Parameters
+    ----------
+    energy_grid : List[float]
+        Energy grid boundaries
+    group_index : int
+        Energy group index (0-based)
+        
+    Returns
+    -------
+    str
+        Formatted energy group name (e.g., "1.000e-05_1.234e-02")
+    """
+    # Check bounds to prevent index out of range errors
+    if group_index >= len(energy_grid) - 1:
+        # Return a placeholder for padding bins
+        return f"PADDING_BIN_{group_index}"
+    
+    # Get the lower and upper energy boundaries for this group
+    e_low = energy_grid[group_index]
+    e_high = energy_grid[group_index + 1]
+    
+    # Format in scientific notation with 3 decimal places
+    e_low_str = f"{e_low:.3e}"
+    e_high_str = f"{e_high:.3e}"
+    
+    return f"{e_low_str}_{e_high_str}"
+
+
 # Reuse the DualLogger from ace_perturbation
 from mcnpy.sampling.ace_perturbation import DualLogger
 
@@ -433,6 +465,24 @@ def load_mf34_covariance(path: str) -> Optional[MF34CovMat]:
                 
                 # Add all matrices from this MT to the combined object
                 for i in range(mt_covmat.num_matrices):
+                    # Check if matrix is relative (required for sampling)
+                    if not mt_covmat.is_relative[i]:
+                        if logger:
+                            logger.warning(f"[ENDF] [MF34] Skipping absolute covariance matrix for isotope {mt_covmat.isotope_rows[i]} "
+                                         f"MT{mt_covmat.reaction_rows[i]} L={mt_covmat.l_rows[i]} ↔ "
+                                         f"isotope {mt_covmat.isotope_cols[i]} MT{mt_covmat.reaction_cols[i]} L={mt_covmat.l_cols[i]}. "
+                                         f"Only relative covariance matrices are supported for sampling.")
+                        continue
+                    
+                    # Check if frame is compatible (should be "same-as-MF4")
+                    if mt_covmat.frame[i] != "same-as-MF4":
+                        if logger:
+                            logger.warning(f"[ENDF] [MF34] Covariance matrix for isotope {mt_covmat.isotope_rows[i]} "
+                                         f"MT{mt_covmat.reaction_rows[i]} L={mt_covmat.l_rows[i]} ↔ "
+                                         f"isotope {mt_covmat.isotope_cols[i]} MT{mt_covmat.reaction_cols[i]} L={mt_covmat.l_cols[i]} "
+                                         f"has reference frame '{mt_covmat.frame[i]}' instead of 'same-as-MF4'. "
+                                         f"This may cause inconsistencies in perturbation.")
+                    
                     combined_mf34_cov.add_matrix(
                         isotope_row=mt_covmat.isotope_rows[i],
                         reaction_row=mt_covmat.reaction_rows[i],
@@ -441,7 +491,9 @@ def load_mf34_covariance(path: str) -> Optional[MF34CovMat]:
                         reaction_col=mt_covmat.reaction_cols[i],
                         l_col=mt_covmat.l_cols[i],
                         matrix=mt_covmat.matrices[i],
-                        energy_grid=mt_covmat.energy_grids[i]
+                        energy_grid=mt_covmat.energy_grids[i],
+                        is_relative=mt_covmat.is_relative[i],
+                        frame=mt_covmat.frame[i]
                     )
         
         if logger:
@@ -1007,6 +1059,9 @@ def _apply_factors_to_mf4_legendre(
     This function implements the ENDF-6 standard for representing discontinuities by duplicating
     energy points at bin boundaries to encode proper jumps in the angular distributions.
     
+    Uses tolerant boundary checking with np.isclose to avoid double-scaling at nearly-identical
+    energy values. Union energy grids ensure consistent alignment across all covariance matrices.
+    
     Works with both MF4MTLegendre (LTT=1) and MF4MTMixed (LTT=3) types.
     
     Parameters
@@ -1018,9 +1073,17 @@ def _apply_factors_to_mf4_legendre(
     param_mapping : List[Tuple[int, int, int, int]]
         Mapping of factor indices to parameters: (isotope, mt, l_coeff, energy_bin)
     energy_grids : Dict[Tuple[int, int, int], List[float]]
-        Energy grids for each parameter combination
+        Union energy grids for each parameter combination
     verbose : bool
         Whether to log details
+        
+    Notes
+    -----
+    Key improvements implemented:
+    - Uses union energy grids for consistent parameter mapping
+    - Tolerant boundary detection with np.isclose (atol=1e-10) 
+    - Prevents double-scaling at nearly-identical energies
+    - Ensures discontinuities are inserted exactly once per boundary
     """
     # Get the current coefficients
     current_coeffs = mt_data.legendre_coefficients
@@ -1058,7 +1121,11 @@ def _apply_factors_to_mf4_legendre(
             if E0[0] <= boundary <= E0[-1]:
                 boundaries.add(boundary)
     
-    boundaries = sorted(list(boundaries))
+    boundaries = np.asarray(sorted(boundaries), dtype=float)
+    
+    def _on_boundary(x, atol=1e-10):
+        """Check if energy x is on any boundary within tolerance."""
+        return np.any(np.isclose(boundaries, x, rtol=0.0, atol=atol))
     
     if verbose and _get_logger():
         _get_logger().debug(f"[ENDF] [MT{mt_data.number}] Found {len(boundaries)} bin boundaries: {boundaries}")
@@ -1091,7 +1158,7 @@ def _apply_factors_to_mf4_legendre(
         
         # Apply factor to coefficients strictly inside this bin (not at boundaries)
         for energy_idx, energy in enumerate(mt_data._energies):
-            if energy_low <= energy < energy_high and energy not in boundaries:
+            if energy_low <= energy < energy_high and not _on_boundary(energy):
                 # Check if this L coefficient exists at this energy
                 coeff_index = l_coeff - 1  # Convert L=1,2,3... to 0-indexed
                 if (coeff_index >= 0 and energy_idx < len(mt_data._legendre_coeffs) and 
@@ -1141,9 +1208,9 @@ def _apply_factors_to_mf4_legendre(
             energy_high = energy_grid[energy_bin + 1]
             
             # Check which side of the boundary this bin is on
-            if abs(energy_high - boundary_energy) < 1e-10:  # This bin ends at the boundary
+            if np.isclose(energy_high, boundary_energy, rtol=0.0, atol=1e-10):  # This bin ends at the boundary
                 lower_factors[l_coeff] = factor  # This factor applies to the lower side
-            if abs(energy_low - boundary_energy) < 1e-10:  # This bin starts at the boundary  
+            if np.isclose(energy_low, boundary_energy, rtol=0.0, atol=1e-10):  # This bin starts at the boundary  
                 upper_factors[l_coeff] = factor  # This factor applies to the upper side
         
         # If no factors found, skip this boundary
@@ -1390,7 +1457,9 @@ def _filter_mf34_covariance(
                 reaction_col=mt_col,
                 l_col=l_col,
                 matrix=mf34_cov.matrices[i],
-                energy_grid=mf34_cov.energy_grids[i]
+                energy_grid=mf34_cov.energy_grids[i],
+                is_relative=mf34_cov.is_relative[i],
+                frame=mf34_cov.frame[i]
             )
     
     if _get_logger():
@@ -1399,63 +1468,41 @@ def _filter_mf34_covariance(
     return filtered_cov
 
 
-def _create_parameter_mapping(mf34_cov: MF34CovMat) -> Tuple[List[Tuple[int, int, int, int]], Dict[Tuple[int, int, int], List[float]]]:
+def _create_parameter_mapping(mf34_cov):
     """
-    Create parameter mapping and energy grids from MF34 covariance data.
-    Each parameter now includes energy bin index: (isotope, MT, l, energy_bin_index).
+    Create parameter mapping using union energy grids for consistent alignment.
     
-    The parameter mapping must match exactly how MF34CovMat.covariance_matrix builds
-    the full covariance matrix: each (isotope, MT, l) triplet gets max_G parameters,
-    one for each energy bin, arranged in the same order as param_triplets.
-    
-    However, we mark which parameters correspond to actual vs padding bins.
+    This function replaces the original approach that used individual matrix energy grids
+    with a union-based approach that ensures all covariance matrices are properly aligned.
     
     Parameters
     ----------
     mf34_cov : MF34CovMat
-        MF34 covariance data
+        MF34 covariance matrix object with union grids support
         
     Returns
     -------
     Tuple[List[Tuple[int, int, int, int]], Dict[Tuple[int, int, int], List[float]]]
-        Parameter mapping with energy bins and energy grids
-    """
-    # Get unique parameter triplets in the same order as covariance matrix
-    param_triplets = mf34_cov._get_param_triplets()
-    
-    # Create energy grids dictionary
-    energy_grids = {}
-    
-    for i in range(mf34_cov.num_matrices):
-        # Add row parameters
-        row_param = (mf34_cov.isotope_rows[i], mf34_cov.reaction_rows[i], mf34_cov.l_rows[i])
-        energy_grids[row_param] = mf34_cov.energy_grids[i]
+        - param_mapping: List of (isotope, mt, l_coeff, energy_bin) tuples
+        - energy_grids: Dictionary mapping triplets to union energy grids
         
-        # Add column parameters if different
-        col_param = (mf34_cov.isotope_cols[i], mf34_cov.reaction_cols[i], mf34_cov.l_cols[i])
-        if col_param != row_param:
-            energy_grids[col_param] = mf34_cov.energy_grids[i]
-    
-    # Find maximum energy grid size across all matrices
-    max_G = max(matrix.shape[0] for matrix in mf34_cov.matrices) if mf34_cov.matrices else 0
-    
-    # Create parameter mapping that matches covariance matrix structure exactly
+    Notes
+    -----
+    Key improvements:
+    - Uses union grids instead of raw matrix grids
+    - Ensures consistent max_G across all parameter triplets  
+    - Proper alignment for covariance matrix construction
+    """
+    param_triplets = mf34_cov._get_param_triplets()
+    union_grids = mf34_cov.get_union_energy_grids()
+    energy_grids = {t: union_grids[t].tolist() for t in param_triplets}
+    max_G = max(len(g)-1 for g in energy_grids.values()) if energy_grids else 0
+
     param_mapping = []
-    
     for triplet in param_triplets:
-        isotope, mt, l = triplet
-        # Add max_G parameters for this triplet, one for each energy bin
+        iso, mt, L = triplet
         for energy_bin in range(max_G):
-            param_mapping.append((isotope, mt, l, energy_bin))
-    
-    if _get_logger():
-        _get_logger().info(f"Created parameter mapping with {len(param_mapping)} parameters (including energy bins)")
-        _get_logger().info(f"Parameter triplets: {len(param_triplets)} unique (isotope, MT, l) combinations")
-        _get_logger().info(f"Max energy groups: {max_G}")
-        _get_logger().info(f"Total parameters: {len(param_triplets)} × {max_G} = {len(param_mapping)}")
-        if param_mapping:
-            _get_logger().info(f"Sample parameters: {param_mapping[:3]}{'...' if len(param_mapping) > 3 else ''}")
-    
+            param_mapping.append((iso, mt, L, energy_bin))
     return param_mapping, energy_grids
 
 
@@ -1554,11 +1601,24 @@ def _write_master_perturbation_file(
         
         # Create columns for each parameter in this file
         for param_idx, (isotope, mt, l_coeff, energy_bin) in enumerate(param_mapping):
+            # Get the energy grid for this (isotope, mt, l_coeff) combination
+            energy_grid_key = (isotope, mt, l_coeff)
+            if energy_grid_key in energy_grids:
+                energy_grid = energy_grids[energy_grid_key]
+                
+                # Skip padding bins - only process actual energy bins
+                if energy_bin >= len(energy_grid) - 1:
+                    continue
+                    
+                # Column name format: Fe56_MT2_L1_1.000e-05_1.234e-02 (actual energy boundaries)
+                energy_group_name = _format_energy_group_name(energy_grid, energy_bin)
+            else:
+                # Fallback to old format if energy grid not found
+                energy_group_name = f"E{energy_bin}-E{energy_bin+1}"
+            
             # Get element symbol from ZAID
             symbol = zaid_to_symbol(isotope)
-            
-            # Column name format: Fe56_MT2_L1_E0-E1
-            col_name = f"{symbol}_MT{mt}_L{l_coeff}_E{energy_bin}-E{energy_bin+1}"
+            col_name = f"{symbol}_MT{mt}_L{l_coeff}_{energy_group_name}"
             
             # Create column data, padding with NaN if this file has fewer samples
             column_data = np.full(max_samples, np.nan, dtype=np.float32)

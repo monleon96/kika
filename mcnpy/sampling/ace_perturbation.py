@@ -16,6 +16,34 @@ from mcnpy._utils import zaid_to_symbol
 from mcnpy._constants import MT_GROUPS
 from mcnpy.ace.xsdir import write_xsdir_line, build_xsdir_line, create_xsdir_files_for_ace
 
+
+def _format_energy_group_name(energy_grid: List[float], group_index: int) -> str:
+    """
+    Format energy group name using actual energy boundary values in scientific notation.
+    
+    Parameters
+    ----------
+    energy_grid : List[float]
+        Energy grid boundaries
+    group_index : int
+        Energy group index (0-based)
+        
+    Returns
+    -------
+    str
+        Formatted energy group name (e.g., "1.000e-05_1.234e-02")
+    """
+    # Get the lower and upper energy boundaries for this group
+    e_low = energy_grid[group_index]
+    e_high = energy_grid[group_index + 1]
+    
+    # Format in scientific notation with 3 decimal places
+    e_low_str = f"{e_low:.3e}"
+    e_high_str = f"{e_high:.3e}"
+    
+    return f"{e_low_str}_{e_high_str}"
+
+
 class DualLogger:
     """Logger that writes detailed info to file and basic info to console."""
     
@@ -1040,8 +1068,9 @@ def _update_master_perturbation_matrix(
     
     for mt_idx, mt in enumerate(mt_numbers):
         for grp in range(n_groups):
-            # Format: H1_MT2_E0-E1 (energy group indices)
-            col_name = f"{symbol}_MT{mt}_E{grp}-E{grp+1}"
+            # Format: H1_MT2_1.000e-05_1.234e-02 (actual energy boundaries)
+            energy_group_name = _format_energy_group_name(energy_grid, grp)
+            col_name = f"{symbol}_MT{mt}_{energy_group_name}"
             
             # Extract the data for this parameter across all samples
             start_idx = mt_idx * n_groups + grp

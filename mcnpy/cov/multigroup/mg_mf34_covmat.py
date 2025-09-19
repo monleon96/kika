@@ -8,10 +8,12 @@ matrices derived from MF34 angular distribution data.
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import List, Tuple, Union, Optional, Dict
+from typing import List, Tuple, Union, Optional, Dict, TYPE_CHECKING
 from matplotlib import pyplot as plt
 from ..._utils import create_repr_section
 
+if TYPE_CHECKING:
+    from ..mf34_covmat import MF34CovMat
 
 @dataclass
 class MGMF34CovMat:
@@ -590,6 +592,75 @@ class MGMF34CovMat:
             vmax=vmax,
             symmetric_scale=symmetric_scale,
             use_log_scale=use_log_scale,
+            **kwargs
+        )
+
+    def plot_uncertainties_comparison(
+        self,
+        endf_data: Union["MF34CovMat", object],
+        isotope: int,
+        mt: int,
+        orders: Optional[Union[int, List[int]]] = None,
+        energy_range: Optional[Tuple[float, float]] = None,
+        style: str = 'default',
+        figsize: Tuple[float, float] = (10, 6),
+        legend_loc: str = 'best',
+        mg_marker: bool = True,
+        uncertainty_type: str = "relative",
+        **kwargs
+    ) -> plt.Figure:
+        """
+        Compare multigroup uncertainties with ENDF uncertainties for Legendre coefficients.
+        
+        This is a convenience method that calls the standalone uncertainty comparison
+        plotting function with this object as input.
+        
+        Parameters
+        ----------
+        endf_data : MF34CovMat or ENDF object
+            Either:
+            - MF34CovMat: Original ENDF MF34 covariance data object
+            - ENDF object: ENDF object containing MF34 data (will extract MF34CovMat automatically)
+        isotope : int
+            Isotope ID to plot
+        mt : int
+            Reaction MT number to plot
+        orders : int or list of int, optional
+            Legendre orders to plot. If None, plots all available orders
+        energy_range : tuple of float, optional
+            Energy range for plotting. If None, uses full multigroup range
+        style : str
+            Plot style from _plot_settings
+        figsize : tuple
+            Figure size
+        legend_loc : str
+            Legend location
+        mg_marker : bool
+            Whether to include markers for multigroup data
+        uncertainty_type : str
+            Type of uncertainty to plot: "relative" (%) or "absolute"
+        **kwargs
+            Additional plotting arguments
+        
+        Returns
+        -------
+        plt.Figure
+            The matplotlib figure containing the comparison plot
+        """
+        from .plotting_mg import plot_mg_vs_endf_uncertainties_comparison
+        
+        return plot_mg_vs_endf_uncertainties_comparison(
+            mg_covmat=self,
+            endf_data=endf_data,
+            isotope=isotope,
+            mt=mt,
+            orders=orders,
+            energy_range=energy_range,
+            style=style,
+            figsize=figsize,
+            legend_loc=legend_loc,
+            mg_marker=mg_marker,
+            uncertainty_type=uncertainty_type,
             **kwargs
         )
 
