@@ -28,10 +28,19 @@ class SDFReactionData:
     sensitivity: List[float]
     error: List[float]
     nuclide: str = field(init=False)
-    reaction_name: str = field(init=False)
+    # reaction_name can be provided (e.g. for unknown MT numbers not in mapping);
+    # if None it's inferred from MT_TO_REACTION in __post_init__.
+    reaction_name: str | None = None
     
     def __post_init__(self):
-        """Calculate and store nuclide symbol and reaction name after initialization."""
+        """Calculate and store nuclide symbol and reaction name after initialization.
+
+        If the MT number is not present in ``MT_TO_REACTION`` and no
+        ``reaction_name`` was supplied, we fall back to a generic label
+        ``MT<mt>`` so that previously unknown / extended MT numbers do not
+        cause parsing to fail. When a custom ``reaction_name`` is supplied
+        (e.g. by the parser reading the legacy file), it is preserved as is.
+        """
         # Calculate nuclide symbol
         z = self.zaid // 1000
         a = self.zaid % 1000
@@ -42,10 +51,12 @@ class SDFReactionData:
         self.nuclide = f"{ATOMIC_NUMBER_TO_SYMBOL[z]}-{a}"
         
         # Calculate reaction name
-        if self.mt not in MT_TO_REACTION:
-            raise KeyError(f"MT number {self.mt} not found in MT_TO_REACTION dictionary")
-            
-        self.reaction_name = MT_TO_REACTION[self.mt]
+        if self.reaction_name is None:
+            if self.mt in MT_TO_REACTION:
+                self.reaction_name = MT_TO_REACTION[self.mt]
+            else:
+                # Fallback: preserve unknown MT with generic name
+                self.reaction_name = f"MT{self.mt}"
     
     def __repr__(self) -> str:
         """Returns a formatted string representation of the reaction data.
@@ -108,7 +119,7 @@ class SDFData:
     :type pert_energies: List[float]
     :ivar r0: Unperturbed tally result (reference response value)
     :type r0: float
-    :ivar e0: Error of the unperturbed tally result
+    :ivar e0: Relative error of the unperturbed tally result (σ/μ)
     :type e0: float
     :ivar data: List of reaction-specific sensitivity data
     :type data: List[SDFReactionData]

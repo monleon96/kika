@@ -464,8 +464,8 @@ def create_sdf_from_serpent(
 ) -> SDFData:
     """Create a SDFData object from SERPENT sensitivity results.
     
-    Note: SERPENT provides relative errors (σ/μ) which are converted to absolute errors (σ)
-    to maintain consistency with MCNP processing and SDF format standards.
+    Note: SERPENT provides relative errors (σ/μ) which are preserved as relative errors
+    to maintain consistency with nuclear data uncertainty propagation methods.
     
     :param serpent_file: SERPENT sensitivity file object(s). Can be a single file or list of files.
     :type serpent_file: Union[SensitivityFile, List[SensitivityFile]]
@@ -484,7 +484,7 @@ def create_sdf_from_serpent(
     :param response_values: Tuple of (r0, e0) reference response values. If None, uses (1.0, 0.01).
                            r0 is the unperturbed tally result (reference response value),
                            e0 is the relative error of the unperturbed tally result (e.g., 0.01 for 1%).
-                           Note: e0 will be converted to absolute error for SDF format compliance.
+                           Note: e0 is stored as relative error for consistency with nuclear data uncertainties.
     :type response_values: Tuple[float, float], optional
     :returns: SDFData object containing the SERPENT sensitivity data
     :rtype: SDFData
@@ -510,9 +510,9 @@ def create_sdf_from_serpent(
         raise ValueError("At least one SERPENT file must be provided")
     
     # Validate energy grids match across all files
-    first_energies = serpent_files[0].energy_edges
+    first_energies = serpent_files[0].energy_grid
     for i, sfile in enumerate(serpent_files[1:], 1):
-        if not np.allclose(sfile.energy_edges, first_energies):
+        if not np.allclose(sfile.energy_grid, first_energies):
             raise ValueError(f"Energy grids don't match between files. File {i+1} has different energy grid than file 1.")
     
     # Set default response values
@@ -521,9 +521,8 @@ def create_sdf_from_serpent(
     
     r0, e0_relative = response_values
     
-    # Convert relative error to absolute error for SDF format consistency
-    # SDF format expects absolute errors (σ) not relative errors (σ/μ)
-    e0_absolute = r0 * e0_relative
+    # Store relative error directly in SDF data for consistency with nuclear data uncertainties
+    # Both statistical and nuclear data uncertainties should be handled as relative values
     
     # Convert energy edges to perturbation energies (SDF format expects MeV)
     pert_energies = first_energies.tolist()
@@ -546,7 +545,7 @@ def create_sdf_from_serpent(
         energy=energy_str,
         pert_energies=pert_energies,
         r0=r0,
-        e0=e0_absolute,  # Use absolute error
+        e0=e0_relative,  # Store relative error for consistency
         data=[]
     )
     
@@ -556,7 +555,7 @@ def create_sdf_from_serpent(
         
         # Validate response exists in this file
         available_base_names = list(sfile.data.keys())
-        available_full_names = sfile.available_responses
+        available_full_names = sfile.responses
         
         # If resp_name is a full name (like "sens_ratio_BIN_2"), extract the base name
         if resp_name in available_full_names:

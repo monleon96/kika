@@ -110,33 +110,57 @@ class UncertaintyResult:
     def __repr__(self) -> str:
         """Format uncertainty results for display."""
         lines = []
-        lines.append("=" * 70)
+        lines.append("=" * 80)
         lines.append("UNCERTAINTY PROPAGATION RESULTS (Sandwich Formula)")
-        lines.append("=" * 70)
+        lines.append("=" * 80)
         
-        # Calculate absolute uncertainty
-        absolute_uncertainty = self.relative_uncertainty * abs(self.response_value)
-        relative_uncertainty_pct = self.relative_uncertainty * 100
+        # Calculate all uncertainty components
+        nuclear_data_abs = self.relative_uncertainty * abs(self.response_value)  # Nuclear data uncertainty (absolute)
+        nuclear_data_rel_pct = self.relative_uncertainty * 100  # Nuclear data uncertainty (relative %)
         
-        lines.append(f"Total variance (σ²):          {self.total_variance:.6e}")
-        lines.append(f"Total uncertainty (1σ):       {self.total_uncertainty:.6e} (relative)")
-        lines.append(f"Relative uncertainty:          {self.relative_uncertainty:.4%}")
+        # Statistical uncertainty components (e0 is stored as relative error)
+        statistical_rel = self.response_error  # Statistical uncertainty (relative, as stored in SDF)
+        statistical_abs = statistical_rel * abs(self.response_value)  # Convert to absolute
+        statistical_rel_pct = statistical_rel * 100  # Convert to percentage
+        
+        # Total uncertainty (combination of statistical + nuclear data)
+        # For independent uncertainties: σ_total = √(σ_stat² + σ_nucl²)
+        total_abs = (statistical_abs**2 + nuclear_data_abs**2)**0.5
+        total_rel_pct = (abs(total_abs) / abs(self.response_value) * 100) if self.response_value != 0 else 0.0
+        
         lines.append("")
-        lines.append("RESPONSE VALUE WITH UNCERTAINTY:")
-        lines.append(f"Response value:                {self.response_value:.6e} ± {self.response_error:.6e} (statistical)")
-        lines.append(f"Nuclear data uncertainty:      ± {absolute_uncertainty:.6e} (absolute)")
-        lines.append(f"Nuclear data uncertainty:      ± {relative_uncertainty_pct:.2f}% (relative)")
-        lines.append(f"Final result:                  {self.response_value:.6e} ± {absolute_uncertainty:.6e}")
+        lines.append("RESPONSE VALUE WITH UNCERTAINTIES:")
+        lines.append("-" * 50)
+        lines.append(f"Response value:                    {self.response_value:.6e}")
         lines.append("")
-        lines.append(f"Reactions included:            {self.n_reactions}")
-        lines.append(f"Energy groups:                 {self.n_energy_groups}")
+        lines.append("STATISTICAL UNCERTAINTY (from Monte Carlo):")
+        lines.append(f"  • Absolute:                      ± {statistical_abs:.6e}")
+        lines.append(f"  • Relative:                      ± {statistical_rel_pct:.3f}%")
+        lines.append("")
+        lines.append("NUCLEAR DATA UNCERTAINTY (from covariances):")
+        lines.append(f"  • Absolute:                      ± {nuclear_data_abs:.6e}")
+        lines.append(f"  • Relative:                      ± {nuclear_data_rel_pct:.3f}%")
+        lines.append("")
+        lines.append("TOTAL UNCERTAINTY (statistical + nuclear data):")
+        lines.append(f"  • Absolute:                      ± {total_abs:.6e}")
+        lines.append(f"  • Relative:                      ± {total_rel_pct:.3f}%")
+        lines.append("")
+        lines.append("FINAL RESULT:")
+        lines.append(f"  Response = {self.response_value:.6e} ± {total_abs:.6e}")
+        lines.append(f"  Response = {self.response_value:.6e} ± {total_rel_pct:.3f}%")
+        lines.append("")
+        lines.append("PROPAGATION DETAILS:")
+        lines.append("-" * 50)
+        lines.append(f"Total variance (σ²):               {self.total_variance:.6e}")
+        lines.append(f"Reactions included:                {self.n_reactions}")
+        lines.append(f"Energy groups:                     {self.n_energy_groups}")
         
         # Always show correlation effects (even if zero)
         if abs(self.correlation_effects) > 1e-15:
             corr_pct = abs(self.correlation_effects) / abs(self.total_variance) * 100 if abs(self.total_variance) > 1e-15 else 0.0
-            lines.append(f"Cross-correlation effects:     {self.correlation_effects:.6e} ({corr_pct:.1f}% of total)")
+            lines.append(f"Cross-correlation effects:         {self.correlation_effects:.6e} ({corr_pct:.1f}% of total)")
         else:
-            lines.append(f"Cross-correlation effects:     None (independent reactions)")
+            lines.append(f"Cross-correlation effects:         None (independent reactions)")
         
         lines.append("\n" + "=" * 70)
         lines.append("INDIVIDUAL REACTION CONTRIBUTIONS")
@@ -407,8 +431,17 @@ def sandwich_uncertainty_propagation(
     # Calculate relative uncertainty
     # Since both sensitivities and covariances are relative, the sandwich formula
     # gives relative variance directly. Therefore, sqrt(variance) IS the relative uncertainty.
-    response_value = sdf_data.r0 if sdf_data.r0 and sdf_data.r0 != 0 else 1.0
-    response_error = sdf_data.e0 if sdf_data.e0 else 0.0
+    
+    # Validate response value is properly provided
+    if sdf_data.r0 is None or sdf_data.r0 == 0:
+        raise ValueError(
+            "Response value (r0) must be provided and non-zero in SDF data. "
+            "This is required to properly calculate absolute uncertainties. "
+            "Please provide the actual response value when creating the SDF data."
+        )
+    
+    response_value = sdf_data.r0
+    response_error = sdf_data.e0 if sdf_data.e0 is not None else 0.0
     relative_uncertainty = total_uncertainty  # Already relative!
     
     # Calculate total number of reactions across all types
@@ -1122,22 +1155,33 @@ def _calculate_correlation_effects(
     reaction_indices: Dict[int, Tuple],
     n_groups: int
 ) -> float:
-    """Calculate the contribution from cross-correlations between reactions."""
+    """Calculate the contribution from cross-correlations between reactions.
+    
+    Computes the sum of all off-diagonal terms in the contribution matrix:
+    Cross-correlation effect = Σ_{i≠j} S_i^T Σ_ij S_j
+    
+    This represents the total contribution from correlations between different 
+    reactions (different Legendre orders or cross-sections).
+    """
     
     correlation_variance = 0.0
     
+    # Calculate off-diagonal contributions (cross-correlations between different reactions)
     for i in reaction_indices.keys():
+        start_i = i * n_groups
+        end_i = (i + 1) * n_groups
+        sens_i = sensitivity_vector[start_i:end_i]
+        
         for j in reaction_indices.keys():
-            if i != j:  # Only off-diagonal terms
-                start_i = i * n_groups
-                end_i = (i + 1) * n_groups
-                start_j = j * n_groups  
+            if i != j:  # Only off-diagonal terms (cross-correlations)
+                start_j = j * n_groups
                 end_j = (j + 1) * n_groups
-                
-                sens_i = sensitivity_vector[start_i:end_i]
                 sens_j = sensitivity_vector[start_j:end_j]
+                
+                # Extract cross-covariance block Σ_ij
                 cov_ij = covariance_matrix[start_i:end_i, start_j:end_j]
                 
+                # Add cross-correlation contribution: S_i^T Σ_ij S_j
                 correlation_variance += float(sens_i.T @ cov_ij @ sens_j)
     
     return correlation_variance

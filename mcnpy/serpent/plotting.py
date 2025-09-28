@@ -135,7 +135,6 @@ def plot_energy_sensitivity(
     *,
     materials: Optional[Union[IndexLike, IndexSeq]] = None,
     nuclides: Optional[Union[IndexLike, IndexSeq]] = None,
-    # NEW: split perturbation selection
     mt: Optional[Union[int, Sequence[int]]] = None,
     leg: Optional[Union[int, Sequence[int]]] = None,
     leg_channel: Optional[str] = None,
@@ -215,7 +214,7 @@ def plot_energy_sensitivity(
         colors = prop_cycle.by_key().get('color', ['C0'])
         fig = ax.get_figure()
 
-    full_edges = sf.energy_edges
+    full_edges = sf.energy_grid
     full_widths = sf.lethargy_widths
 
     # Define line styles that will cycle for different responses

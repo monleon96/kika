@@ -91,7 +91,7 @@ def parse_sensitivity_text(text: str) -> SensitivityFile:
     materials = extract_string_list(mats_block or "")
     zais = extract_int_list(zais_block or "")
     perts_raw = extract_string_list(perts_block or "") 
-    energy_edges = np.array(extract_numeric_list(e_block or ""), dtype=float)
+    energy_grid = np.array(extract_numeric_list(e_block or ""), dtype=float)
     lethargy_widths = np.array(extract_numeric_list(leth_block or ""), dtype=float)
 
     # Basic validation against header counts
@@ -102,8 +102,8 @@ def parse_sensitivity_text(text: str) -> SensitivityFile:
     if len(perts_raw) != n_pert:
         raise ParseError(f"SENS_PERT_LIST length {len(perts_raw)} != SENS_N_PERT {n_pert}")
     
-    if energy_edges.shape[0] != n_ene + 1:
-        raise ParseError(f"SENS_E length {energy_edges.shape[0]} != SENS_N_ENE+1 {n_ene+1}")
+    if energy_grid.shape[0] != n_ene + 1:
+        raise ParseError(f"SENS_E length {energy_grid.shape[0]} != SENS_N_ENE+1 {n_ene+1}")
     if lethargy_widths.shape[0] != n_ene:
         raise ParseError(f"SENS_LETHARGY_WIDTHS length {lethargy_widths.shape[0]} != SENS_N_ENE {n_ene}")
 
@@ -192,7 +192,7 @@ def parse_sensitivity_text(text: str) -> SensitivityFile:
         nuclides=zais,
         perturbations_raw=perts_raw,
         perturbations=perts,
-        energy_edges=energy_edges,
+        energy_grid=energy_grid,
         lethargy_widths=lethargy_widths,
         data=data,
         meta={"notes": "Parsed by serpent_sens.parser"},
@@ -200,7 +200,7 @@ def parse_sensitivity_text(text: str) -> SensitivityFile:
     return sf
 
 
-def load_sensitivity_file(path_or_text: str) -> SensitivityFile:
+def read_sensitivity_file(path_or_text: str) -> SensitivityFile:
     """Load from a filesystem path or from a raw text string.
 
     If `path_or_text` points to an existing file, it is read from disk. Otherwise

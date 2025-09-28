@@ -9,6 +9,8 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 import numpy as np
 import xarray as xr
+from mcnpy.energy_grids.utils import _identify_energy_grid
+from mcnpy._utils import zaid_to_symbol
 
 
 
@@ -159,7 +161,7 @@ class SensitivityFile:
     perturbations: List[Perturbation]
 
     # Energy grid
-    energy_edges: np.ndarray
+    energy_grid: np.ndarray
     lethargy_widths: np.ndarray
 
     # Data
@@ -179,7 +181,7 @@ class SensitivityFile:
         nuclides: List[int],
         perturbations_raw: List[str],
         perturbations: List[Perturbation],
-        energy_edges: np.ndarray,
+        energy_grid: np.ndarray,
         lethargy_widths: np.ndarray,
         data: Dict[str, SensitivitySet],
         meta: Optional[Dict[str, Any]] = None,
@@ -196,7 +198,7 @@ class SensitivityFile:
         self.perturbations_raw = list(perturbations_raw)
         self.perturbations = perturbations
 
-        self.energy_edges = np.asarray(energy_edges, dtype=float)
+        self.energy_grid = np.asarray(energy_grid, dtype=float)
         self.lethargy_widths = np.asarray(lethargy_widths, dtype=float)
         self.data = data
         self.meta = dict(meta or {})
@@ -211,12 +213,21 @@ class SensitivityFile:
         return self.n_energy_bins
 
     @property
-    def available_responses(self) -> List[str]:
+    def responses(self) -> List[str]:
         out: List[str] = []
         for base, sset in self.data.items():
             for r in sset.responses:
                 out.append(r.full_name)
         return out
+
+    @property
+    def reactions(self) -> List[int]:
+        """List of unique MT reaction numbers available in the perturbations."""
+        mt_numbers = set()
+        for p in self.perturbations:
+            if p.mt is not None:
+                mt_numbers.add(p.mt)
+        return sorted(list(mt_numbers))
 
     # Filtering helpers for perturbations
     def by_mt(self, mt: int) -> List[Perturbation]:
@@ -485,8 +496,8 @@ class SensitivityFile:
                                 "rel_err": float(rels[ei]),
                             }
                             if include_edges:
-                                rec["E_low"] = float(self.energy_edges[ei])
-                                rec["E_high"] = float(self.energy_edges[ei + 1])
+                                rec["E_low"] = float(self.energy_grid[ei])
+                                rec["E_high"] = float(self.energy_grid[ei + 1])
                             records.append(rec)
 
         if response_full is None:
@@ -548,8 +559,8 @@ class SensitivityFile:
         )
         if include_edges:
             ds = ds.assign_coords(
-                E_low=("energy", self.energy_edges[:-1]),
-                E_high=("energy", self.energy_edges[1:]),
+                E_low=("energy", self.energy_grid[:-1]),
+                E_high=("energy", self.energy_grid[1:]),
             )
         return ds
 
@@ -567,8 +578,8 @@ class SensitivityFile:
             raise ValueError("nuclides length != n_nuclides")
         if len(self.perturbations) != self.n_perturbations:
             raise ValueError("perturbations length != n_perturbations")
-        if self.energy_edges.shape[0] != self.n_energy_bins + 1:
-            raise ValueError("energy_edges length must be n_energy_bins + 1")
+        if self.energy_grid.shape[0] != self.n_energy_bins + 1:
+            raise ValueError("energy_grid length must be n_energy_bins + 1")
         if self.lethargy_widths.shape[0] != self.n_energy_bins:
             raise ValueError("lethargy_widths length must be n_energy_bins")
         # Data shapes
@@ -596,9 +607,148 @@ class SensitivityFile:
             ", ".join((self.perturbations[i].short_label or self.perturbations[i].raw_label)
                       for i in range(min(5, self.n_perturbations))) + ("..." if self.n_perturbations>5 else "")
         ))
-        resp_list = self.available_responses
+        resp_list = self.responses
         lines.append(f"- Responses ({len(resp_list)}): " + ", ".join(resp_list[:5]) + ("..." if len(resp_list)>5 else ""))
         lines.append(f"- Energy bins: {self.n_energy_bins}")
         if self.n_mu_bins is not None:
             lines.append(f"- Mu bins (undocumented): {self.n_mu_bins}")
         return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        """Returns a detailed formatted string representation of the sensitivity file.
+        
+        This method is called when the object is evaluated in interactive environments
+        like Jupyter notebooks or the Python interpreter.
+        
+        :return: Formatted string representation of the sensitivity file
+        :rtype: str
+        """
+        # Create a visually appealing header with a border
+        header_width = 70
+        header = "=" * header_width + "\n"
+        header += f"{'SERPENT Sensitivity File':^{header_width}}\n"
+        header += "=" * header_width + "\n\n"
+        
+        # Create aligned key-value pairs with consistent width
+        label_width = 25  # Width for labels
+        
+        # Basic information section
+        info_lines = []
+        info_lines.append(f"{'Materials:':{label_width}} {self.n_materials}")
+        info_lines.append(f"{'Nuclides:':{label_width}} {self.n_nuclides}")
+        
+        resp_list = self.responses
+
+        info_lines.append(f"{'Perturbations:':{label_width}} {self.n_perturbations}")  
+        
+        # Enhanced energy bins line with grid identification
+        try:
+            # Handle potential numpy array issues by converting to list
+            energy_list = list(self.energy_grid) if hasattr(self.energy_grid, '__iter__') else self.energy_grid
+            if len(energy_list) >= 2:
+                grid_name = _identify_energy_grid(energy_list)
+                if grid_name:
+                    energy_info = f"{self.n_energy_bins} ({grid_name.lower()})"
+                else:
+                    energy_info = str(self.n_energy_bins)
+            else:
+                energy_info = str(self.n_energy_bins)
+        except:
+            energy_info = str(self.n_energy_bins)
+        info_lines.append(f"{'Energy bins:':{label_width}} {energy_info}")
+        info_lines.append(f"{'Responses:':{label_width}} {len(resp_list)}")
+        
+        if self.n_mu_bins is not None:
+            info_lines.append(f"{'Mu bins:':{label_width}} {self.n_mu_bins}")
+        
+        stats = "\n".join(info_lines)
+        
+        # Energy grid preview
+        energy_preview = "\n\nEnergy grid:"
+        edges = self.energy_grid
+        if len(edges) > 6:
+            energy_grid = "  " + ", ".join(f"{e:.6e}" for e in edges[:3])
+            energy_grid += ", ... , " 
+            energy_grid += ", ".join(f"{e:.6e}" for e in edges[-3:])
+        else:
+            energy_grid = "  " + ", ".join(f"{e:.6e}" for e in edges)
+            
+        energy_preview += "\n" + energy_grid
+        
+        # Materials preview
+        materials_preview = "\n\nMaterials:\n"
+        materials_list = [m.name for m in self.materials[:5]]
+        if self.n_materials > 5:
+            materials_list.append(f"... ({self.n_materials - 5} more)")
+        materials_preview += "  " + ", ".join(materials_list)
+        
+        # Nuclides preview with atomic symbols
+        nuclides_preview = "\n\nNuclides:\n"
+        nuclides_list = []
+        for n in self.nuclides[:8]:
+            try:
+                symbol = zaid_to_symbol(n.zai)
+                formatted_symbol = f"{symbol} ({n.zai})"
+                nuclides_list.append(formatted_symbol)
+            except Exception:
+                nuclides_list.append(str(n.zai))
+        if self.n_nuclides > 8:
+            nuclides_list.append(f"... ({self.n_nuclides - 8} more)")
+        nuclides_preview += "  " + ", ".join(nuclides_list)
+        
+        # Perturbation Access mapping
+        pert_summary = "\n\nPerturbation Access:\n"
+        
+        # Show perturbations with clear MT to index mapping
+        for i, p in enumerate(self.perturbations[:15]):
+            if p.mt is not None:
+                pert_summary += f"  MT={p.mt:<3}      .perturbations[{i}]\n"
+            else:
+                # For non-MT perturbations, show the category/type
+                if p.category == PertCategory.LEGENDRE_MOMENT:
+                    label = f"L={p.moment}" if p.moment is not None else "Legendre"
+                else:
+                    label = p.short_label or p.raw_label[:10]
+                pert_summary += f"  {label:<8}   .perturbations[{i}]\n"
+        
+        if self.n_perturbations > 15:
+            pert_summary += f"  ... ({self.n_perturbations - 15} more perturbations)\n"
+        
+        # Responses summary
+        responses_summary = "\n\nResponses (with access names):\n"
+        for i, resp in enumerate(resp_list):
+            responses_summary += f"  '{resp}'\n"
+        
+        # Usage examples in two-column format
+        if resp_list:
+            first_resp = resp_list[0]
+            sample_mat = self.materials[0].name if self.materials else "material_0"
+            sample_nuc = self.nuclides[0].zai if self.nuclides else 26056
+            
+            # Find a suitable MT number for example
+            sample_mt = 2  # Default to elastic
+            for p in self.perturbations:
+                if p.mt is not None and p.mt < 100:
+                    sample_mt = p.mt
+                    break
+            
+            usage_examples = f"\n\nUsage Examples:\n"
+            usage_examples += f"{'Action':<35} {'Method Call':<35}\n"
+            usage_examples += f"{'-'*35} {'-'*35}\n"
+            usage_examples += f"{'Get energy-dependent data':<35} .get_energy_dependent(...)\n"
+            usage_examples += f"{'Get integrated data':<35} .get_integrated(...)\n"
+            usage_examples += f"{'Convert to DataFrame':<35} .to_dataframe(...)\n"
+            usage_examples += f"{'Convert to xarray Dataset':<35} .to_xarray(...)\n"
+            usage_examples += f"{'Get compact summary':<35} .summary()\n"
+        else:
+            usage_examples = "\n\nNo responses available for usage examples."
+        
+        # Footer with available methods
+        footer = "\n\nAvailable methods:\n"
+        footer += "- .get_energy_dependent() - Get energy-dependent sensitivity data\n"
+        footer += "- .get_integrated() - Get integrated sensitivity data\n"
+        footer += "- .to_dataframe() - Convert to pandas DataFrame\n"
+        footer += "- .to_xarray() - Convert to xarray Dataset\n"
+        footer += "- .summary() - Get compact summary\n"
+        
+        return header + stats + energy_preview + materials_preview + nuclides_preview + pert_summary + responses_summary + usage_examples + footer

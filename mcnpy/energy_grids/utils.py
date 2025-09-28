@@ -20,7 +20,7 @@ def _identify_energy_grid(energies, tolerance=1e-5):
     :returns: Name of the matching grid or None if no match is found
     :rtype: str or None
     """
-    if not energies or len(energies) < 2:
+    if energies is None or len(energies) < 2:
         return None
     
     # Dictionary mapping grid variables to their names

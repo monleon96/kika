@@ -13,7 +13,7 @@ from .sens import (
     SensitivityFile,
 )
 
-from .parse_sens import load_sensitivity_file, parse_sensitivity_text
+from .parse_sens import read_sensitivity_file, parse_sensitivity_text
 
 __all__ = [
     "PertCategory",
@@ -23,6 +23,6 @@ __all__ = [
     "Response",
     "SensitivitySet",
     "SensitivityFile",
-    "load_sensitivity_file",
+    "read_sensitivity_file",
     "parse_sensitivity_text",
 ]

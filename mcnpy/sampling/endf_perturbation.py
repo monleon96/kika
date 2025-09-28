@@ -27,50 +27,18 @@ from mcnpy.endf.read_endf import read_endf
 from mcnpy.ace.xsdir import create_xsdir_files_for_ace
 
 
-def _format_energy_group_name(energy_grid: List[float], group_index: int) -> str:
-    """
-    Format energy group name using actual energy boundary values in scientific notation.
-    
-    Parameters
-    ----------
-    energy_grid : List[float]
-        Energy grid boundaries
-    group_index : int
-        Energy group index (0-based)
-        
-    Returns
-    -------
-    str
-        Formatted energy group name (e.g., "1.000e-05_1.234e-02")
-    """
-    # Check bounds to prevent index out of range errors
-    if group_index >= len(energy_grid) - 1:
-        # Return a placeholder for padding bins
-        return f"PADDING_BIN_{group_index}"
-    
-    # Get the lower and upper energy boundaries for this group
-    e_low = energy_grid[group_index]
-    e_high = energy_grid[group_index + 1]
-    
-    # Format in scientific notation with 3 decimal places
-    e_low_str = f"{e_low:.3e}"
-    e_high_str = f"{e_high:.3e}"
-    
-    return f"{e_low_str}_{e_high_str}"
-
-
-# Reuse the DualLogger from ace_perturbation
-from mcnpy.sampling.ace_perturbation import DualLogger
+# Reuse the DualLogger and utilities from sampling.utils
+from mcnpy.sampling.utils import (
+    _format_energy_group_name,
+    DualLogger, 
+    _get_logger
+)
 
 # Import NJOY runner for ACE generation
 from mcnpy.njoy.run_njoy import run_njoy
 
 # Global logger instance
 _logger = None
-
-def _get_logger():
-    """Get the global logger instance."""
-    return _logger
 
 
 def _process_sample(
@@ -1375,27 +1343,6 @@ def _insert_boundary_discontinuity(
         mt_data._energies.insert(insert_idx + 1, boundary_energy)
         mt_data._legendre_coeffs.insert(insert_idx + 1, coeffs_plus[:])
 
-
-def _find_energy_group(energy: float, energy_grid: List[float]) -> int:
-    """
-    Find the energy group index for a given energy.
-    
-    Parameters
-    ----------
-    energy : float
-        Energy value
-    energy_grid : List[float]
-        Energy group boundaries
-        
-    Returns
-    -------
-    int
-        Energy group index, or -1 if not found
-    """
-    for i in range(len(energy_grid) - 1):
-        if energy_grid[i] <= energy < energy_grid[i + 1]:
-            return i
-    return -1
 
 
 def _filter_mf34_covariance(
