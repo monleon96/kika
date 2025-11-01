@@ -1,0 +1,14 @@
+# KIKA Streamlit UI Requirements
+# Install with: pip install -r requirements.txt
+
+# Core dependencies (should already be installed with mcnpy)
+streamlit>=1.40.0
+streamlit-authenticator>=0.3.3
+extra-streamlit-components>=0.1.71
+pillow>=11.0.0
+
+# These should come from the main mcnpy installation
+# but listed here for reference
+matplotlib>=3.10.0
+numpy>=1.26.0
+pandas>=2.2.0

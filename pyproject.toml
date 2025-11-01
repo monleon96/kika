@@ -28,6 +28,12 @@ twine = "^6.1.0"
 scikit-learn = "^1.7.0"
 xgboost = "^3.0.2"
 
+[tool.poetry.group.ui.dependencies]
+streamlit = "^1.40.0"
+streamlit-authenticator = "^0.3.3"
+extra-streamlit-components = "^0.1.71"
+pillow = "^11.0.0"
+
 [tool.poetry.group.docs.dependencies]
 sphinx = "^8.2.1"
 myst-parser = "^4.0.1"
