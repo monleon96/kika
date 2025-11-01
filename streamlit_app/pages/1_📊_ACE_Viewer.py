@@ -75,11 +75,21 @@ with st.sidebar:
                 try:
                     # Load ACE file
                     ace_obj = mcnpy.read_ace(tmp_path)
+                    
+                    # Validate that we have the minimum required data
+                    if not ace_obj.header:
+                        raise ValueError("ACE file loaded but header is missing")
+                    if not ace_obj.cross_section:
+                        st.warning(f"⚠️ {file_name}: No cross section data found")
+                    
                     st.session_state.ace_files[file_name] = tmp_path
                     st.session_state.ace_objects[file_name] = ace_obj
                     st.success(f"✓ Loaded: {file_name}")
                 except Exception as e:
                     st.error(f"✗ Error loading {file_name}: {str(e)}")
+                    import traceback
+                    with st.expander("Show error details"):
+                        st.code(traceback.format_exc())
     
     st.markdown("---")
     
@@ -88,9 +98,26 @@ with st.sidebar:
     if st.session_state.ace_objects:
         for i, (name, ace_obj) in enumerate(st.session_state.ace_objects.items()):
             with st.expander(f"📄 {name}", expanded=False):
-                st.write(f"**ZAID:** {ace_obj.zaid}")
-                st.write(f"**Temperature:** {ace_obj.temperature} K")
-                st.write(f"**Library:** {ace_obj.library if hasattr(ace_obj, 'library') else 'N/A'}")
+                # Access header properties correctly
+                if ace_obj.header:
+                    st.write(f"**ZAID:** {ace_obj.header.zaid}")
+                    if ace_obj.header.temperature is not None:
+                        # Temperature is in MeV, convert to Kelvin (1 MeV = 1.160451812e10 K)
+                        temp_k = ace_obj.header.temperature * 1.160451812e10
+                        st.write(f"**Temperature:** {temp_k:.2f} K ({ace_obj.header.temperature:.6e} MeV)")
+                    if ace_obj.header.atomic_weight_ratio is not None:
+                        st.write(f"**AWR:** {ace_obj.header.atomic_weight_ratio:.4f}")
+                    if ace_obj.header.date:
+                        st.write(f"**Date:** {ace_obj.header.date}")
+                    if ace_obj.header.comment:
+                        st.write(f"**Comment:** {ace_obj.header.comment[:50]}..." if len(ace_obj.header.comment) > 50 else f"**Comment:** {ace_obj.header.comment}")
+                
+                # Show basic data info
+                if ace_obj.header and ace_obj.header.num_energies:
+                    st.write(f"**Energy Points:** {ace_obj.header.num_energies}")
+                if ace_obj.header and ace_obj.header.num_reactions:
+                    st.write(f"**Reactions:** {ace_obj.header.num_reactions}")
+                
                 if st.button(f"Remove", key=f"remove_{i}"):
                     del st.session_state.ace_files[name]
                     del st.session_state.ace_objects[name]
@@ -251,15 +278,30 @@ else:
                     builder = PlotBuilder()
                     
                     # Add data for each selected file
+                    errors = []
                     for file_name, label in zip(selected_files, labels):
                         ace_obj = st.session_state.ace_objects[file_name]
                         
-                        if data_type == "Cross Section":
-                            plot_data = ace_obj.to_plot_data('xs', mt=mt_number, label=label)
-                        else:  # Angular Distribution
-                            plot_data = ace_obj.to_plot_data('angular', mt=mt_number, energy=energy, label=label)
-                        
-                        builder.add_data(plot_data)
+                        try:
+                            if data_type == "Cross Section":
+                                plot_data = ace_obj.to_plot_data('xs', mt=mt_number, label=label)
+                            else:  # Angular Distribution
+                                plot_data = ace_obj.to_plot_data('angular', mt=mt_number, energy=energy, label=label)
+                            
+                            builder.add_data(plot_data)
+                        except Exception as e:
+                            error_msg = f"{file_name}: {str(e)}"
+                            errors.append(error_msg)
+                            st.warning(f"⚠️ Skipping {file_name}: {str(e)}")
+                    
+                    # Check if we have any data to plot
+                    if len(builder._data_list) == 0:
+                        st.error("No valid data to plot. All files encountered errors.")
+                        if errors:
+                            with st.expander("Error details"):
+                                for error in errors:
+                                    st.write(f"• {error}")
+                        raise ValueError("No valid plot data")
                     
                     # Configure plot
                     builder.set_labels(title=plot_title, x_label=x_label, y_label=y_label)
