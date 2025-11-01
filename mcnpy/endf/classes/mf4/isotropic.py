@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Tuple
 import numpy as np
 
 from .base import MF4MT
@@ -50,6 +50,93 @@ class MF4MTIsotropic(MF4MT):
             for l in range(1, max_legendre_order + 1):
                 result[l] = 0.0
         return result
+    
+    def to_plot_data(
+        self,
+        order: int,
+        energy_range: Tuple[float, float] = (1e-5, 20e6),
+        num_points: int = 100,
+        label: str = None,
+        **styling_kwargs
+    ):
+        """
+        Create a PlotData object for isotropic distribution (LTT=0).
+        
+        For isotropic distributions:
+        - a_0(E) = 1.0 for all energies (constant)
+        - a_l(E) = 0.0 for all l > 0 (constant)
+        
+        Since isotropic distributions have no energy dependence, this method creates
+        plot data over a specified energy range showing the constant values.
+        
+        Parameters
+        ----------
+        order : int
+            Legendre polynomial order to extract (0 gives 1.0, l>0 gives 0.0)
+        energy_range : tuple of float, optional
+            (E_min, E_max) energy range for the plot (default: 1e-5 to 20 MeV)
+        num_points : int, optional
+            Number of energy points to generate (default: 100)
+        label : str, optional
+            Custom label for the plot. If None, auto-generates.
+        **styling_kwargs
+            Additional styling kwargs (color, linestyle, linewidth, etc.)
+            
+        Returns
+        -------
+        LegendreCoeffPlotData
+            Plot data object showing constant coefficient value
+            
+        Examples
+        --------
+        >>> # Isotropic distribution - a_0 = 1 everywhere
+        >>> data = mf4_isotropic.to_plot_data(order=0, color='blue')
+        >>> builder = PlotBuilder().add_data(data).build()
+        >>> 
+        >>> # Higher orders are zero for isotropic
+        >>> data_l1 = mf4_isotropic.to_plot_data(order=1, color='red')
+        >>> # Will show a horizontal line at y=0
+        
+        Notes
+        -----
+        Isotropic distributions (LTT=0) have no energy dependence. The returned
+        plot data shows the constant coefficient value across the specified energy range.
+        """
+        from mcnpy.plotting import LegendreCoeffPlotData
+        
+        # Generate energy grid
+        energies = np.logspace(np.log10(energy_range[0]), np.log10(energy_range[1]), num_points)
+        
+        # Generate coefficient values (constant)
+        if order == 0:
+            coeffs = np.ones(num_points, dtype=float)
+        else:
+            coeffs = np.zeros(num_points, dtype=float)
+        
+        # Get isotope information
+        isotope = getattr(self, 'isotope', None)
+        if isotope is None and hasattr(self, 'zaid'):
+            isotope = str(self.zaid)
+        
+        mt = getattr(self, 'number', None)
+        
+        # Auto-generate label if not provided
+        if label is None:
+            if order == 0:
+                label = f'Isotropic (L=0, a_0=1)'
+            else:
+                label = f'Isotropic (L={order}, a_{order}=0)'
+        
+        return LegendreCoeffPlotData(
+            x=energies,
+            y=coeffs,
+            order=order,
+            isotope=isotope,
+            mt=mt,
+            energy_range=energy_range,
+            label=label,
+            **styling_kwargs
+        )
         
     def __str__(self) -> str:
         """

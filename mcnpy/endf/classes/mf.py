@@ -48,6 +48,59 @@ class MF:
         """Direct access to MT sections dictionary"""
         return self.sections
     
+    def to_plot_data(self, mt: int, **kwargs):
+        """
+        Create a PlotData object from the specified MT section.
+        
+        This is a convenience method that delegates to the MT section's to_plot_data method.
+        For MF4 (angular distributions), this requires an 'order' parameter.
+        
+        Note: For uncertainty support at the MF level, use the ENDF.to_plot_data method
+        which can combine MF4 (nominal) and MF34 (uncertainties) data.
+        
+        Parameters
+        ----------
+        mt : int
+            MT section number to extract data from
+        **kwargs
+            Additional parameters passed to the underlying to_plot_data method.
+            For MF4, this should include 'order' (Legendre polynomial order).
+            May also include styling parameters (label, color, linestyle, etc.)
+            
+        Returns
+        -------
+        PlotData
+            Plot data object ready to be added to a PlotBuilder
+            
+        Raises
+        ------
+        KeyError
+            If the MT section doesn't exist
+        AttributeError
+            If the MT section doesn't support to_plot_data
+            
+        Examples
+        --------
+        >>> # For MF4 data (angular distributions)
+        >>> mf4 = endf.mf[4]
+        >>> data = mf4.to_plot_data(mt=2, order=1)
+        >>> 
+        >>> # With styling
+        >>> data = mf4.to_plot_data(mt=2, order=1, label='Fe-56 Elastic', color='blue')
+        """
+        if mt not in self.sections:
+            raise KeyError(f"MT section {mt} not found in MF{self.number}")
+        
+        mt_section = self.sections[mt]
+        
+        if not hasattr(mt_section, 'to_plot_data'):
+            raise AttributeError(
+                f"MT section {mt} in MF{self.number} does not support to_plot_data. "
+                f"This feature is currently available for MF4 (angular distributions)."
+            )
+        
+        return mt_section.to_plot_data(**kwargs)
+    
     def __repr__(self):
         return f"MF({self.number}, {len(self.sections)} sections)"
     

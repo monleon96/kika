@@ -292,6 +292,99 @@ class AngularDistributionContainer:
             return df
         return None
     
+    def to_plot_data(self, mt: int, energy: float, particle_type: str = 'neutron',
+                    particle_idx: int = 0, ace=None, **kwargs):
+        """
+        Extract angular distribution plot data in a format compatible with PlotBuilder.
+        
+        This method provides direct access to angular distribution data without going through
+        the parent Ace object. It's equivalent to calling ace.to_plot_data('ang', mt=mt, energy=energy).
+        
+        Parameters
+        ----------
+        mt : int
+            MT reaction number
+        energy : float
+            Incident energy in MeV at which to evaluate the distribution
+        particle_type : str, optional
+            Type of particle: 'neutron', 'photon', or 'particle' (default: 'neutron')
+        particle_idx : int, optional
+            Particle index for particle_type='particle' (default: 0)
+        ace : Ace, optional
+            ACE object (required for Kalbach-Mann distributions)
+        **kwargs
+            Additional parameters for styling and data extraction:
+            - label (str): Custom label (default: auto-generated)
+            - color (str): Line color
+            - linestyle (str): Line style ('-', '--', '-.', ':')
+            - linewidth (float): Line width
+            - marker (str): Marker style ('o', 's', '^', etc.)
+            - markersize (float): Marker size
+            - num_points (int): Number of angular points when interpolating (default: 100)
+            - interpolate (bool): Whether to interpolate onto regular grid (default: False)
+            
+        Returns
+        -------
+        PlotData
+            PlotData object compatible with PlotBuilder
+            
+        Examples
+        --------
+        >>> ace = mcnpy.read_ace('fe56.ace')
+        >>> 
+        >>> # Direct access from angular_distributions object
+        >>> ang_data = ace.angular_distributions.to_plot_data(mt=2, energy=5.0, label='5 MeV')
+        >>> 
+        >>> # Use with PlotBuilder
+        >>> from mcnpy.plotting import PlotBuilder
+        >>> fig = (PlotBuilder()
+        ...        .add_data(ang_data)
+        ...        .set_labels(x_label='cos(θ)', y_label='Probability Density')
+        ...        .build())
+        """
+        from mcnpy.plotting import PlotData
+        import numpy as np
+        
+        # Additional parameters for to_dataframe
+        num_points = kwargs.pop('num_points', 100)
+        interpolate = kwargs.pop('interpolate', False)
+        
+        # Get the angular distribution data as a DataFrame
+        df = self.to_dataframe(
+            mt=mt,
+            energy=energy,
+            particle_type=particle_type,
+            particle_idx=particle_idx,
+            ace=ace,
+            num_points=num_points,
+            interpolate=interpolate
+        )
+        
+        if df is None:
+            raise ValueError(f"Could not extract angular distribution for MT={mt} at energy={energy} MeV")
+        
+        # Extract cosine (mu) and pdf from the DataFrame
+        mu = df['cosine'].values
+        pdf = df['pdf'].values
+        
+        # Get label
+        label = kwargs.get('label', None)
+        if label is None:
+            # Create default label
+            label = f"MT={mt} @ {energy} MeV"
+        
+        return PlotData(
+            x=np.array(mu),
+            y=np.array(pdf),
+            label=label,
+            color=kwargs.get('color', None),
+            linestyle=kwargs.get('linestyle', '-'),
+            linewidth=kwargs.get('linewidth', None),
+            marker=kwargs.get('marker', None),
+            markersize=kwargs.get('markersize', None),
+            plot_type='line'
+        )
+    
     def plot(self, mt: int, energy: float, particle_type: str = 'neutron', 
             particle_idx: int = 0, ace=None, ax=None, title=None, **kwargs) -> Optional[Tuple]:
         """

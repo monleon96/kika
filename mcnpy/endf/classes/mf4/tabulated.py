@@ -218,6 +218,99 @@ class MF4MTTabulated(MF4MT):
         """
         return {e: (c, p) for e, c, p in zip(self._energies, self._cosines, self._probabilities)}
     
+    def to_plot_data(
+        self,
+        order: int,
+        label: str = None,
+        quad_order: int = 96,
+        **styling_kwargs
+    ):
+        """
+        Create a PlotData object for tabulated distribution projected to Legendre coefficients.
+        
+        For tabulated distributions (LTT=2), Legendre coefficients are computed by
+        projecting the tabulated f(μ,E) distributions onto Legendre polynomials using
+        Gauss-Legendre quadrature.
+        
+        Parameters
+        ----------
+        order : int
+            Legendre polynomial order to extract
+        label : str, optional
+            Custom label for the plot. If None, auto-generates from isotope and order.
+        quad_order : int, optional
+            Quadrature order for Gauss-Legendre integration when projecting
+            tabulated distributions to Legendre coefficients (default: 96)
+        **styling_kwargs
+            Additional styling kwargs (color, linestyle, linewidth, etc.)
+            
+        Returns
+        -------
+        LegendreCoeffPlotData
+            Plot data object ready to be added to a PlotBuilder
+            
+        Examples
+        --------
+        >>> # Project tabulated distribution to Legendre coefficients
+        >>> data = mf4_tabulated.to_plot_data(order=1, color='blue')
+        >>> builder = PlotBuilder().add_data(data).build()
+        >>> 
+        >>> # Use higher quadrature order for better accuracy
+        >>> data = mf4_tabulated.to_plot_data(order=2, quad_order=128)
+        
+        Notes
+        -----
+        Tabulated distributions (LTT=2) store f(μ,E) at discrete (μ, E) points.
+        To obtain Legendre coefficients a_ℓ(E), we compute:
+        
+            a_ℓ(E) = (2ℓ+1)/2 ∫_{-1}^{1} P_ℓ(μ) f(μ,E) dμ
+        
+        using Gauss-Legendre quadrature. The accuracy depends on the quad_order parameter.
+        Higher orders require higher quadrature orders for accurate integration.
+        """
+        from mcnpy.plotting import LegendreCoeffPlotData
+        
+        # Get energy grid from tabulated data
+        energies = np.array(self._energies, dtype=float)
+        
+        if len(energies) == 0:
+            raise ValueError("No tabulated data available to create plot")
+        
+        # Extract Legendre coefficients at all energy points using the built-in method
+        coeffs_dict = self.extract_legendre_coefficients(
+            energy=energies,
+            max_legendre_order=order,
+            quad_order=quad_order,
+            out_of_range="zero"
+        )
+        
+        # Get the coefficient values for the requested order
+        coeff_values = coeffs_dict[order]
+        
+        # Get isotope information
+        isotope = getattr(self, 'isotope', None)
+        if isotope is None and hasattr(self, 'zaid'):
+            isotope = str(self.zaid)
+        
+        mt = getattr(self, 'number', None)
+        
+        # Auto-generate label if not provided
+        if label is None:
+            label = f'Tabulated→Legendre L={order}'
+            if isotope:
+                label = f'{isotope} {label}'
+        
+        return LegendreCoeffPlotData(
+            x=energies,
+            y=coeff_values,
+            order=order,
+            isotope=isotope,
+            mt=mt,
+            energy_range=(energies.min(), energies.max()),
+            label=label,
+            **styling_kwargs
+        )
+    
 
     def __str__(self) -> str:
         """

@@ -158,9 +158,9 @@ class UncertaintyResult:
         # Always show correlation effects (even if zero)
         if abs(self.correlation_effects) > 1e-15:
             corr_pct = abs(self.correlation_effects) / abs(self.total_variance) * 100 if abs(self.total_variance) > 1e-15 else 0.0
-            lines.append(f"Cross-correlation effects:         {self.correlation_effects:.6e} ({corr_pct:.1f}% of total)")
+            lines.append(f"Cross-reaction correlations:       {self.correlation_effects:.6e} ({corr_pct:.1f}% of total)")
         else:
-            lines.append(f"Cross-correlation effects:         None (independent reactions)")
+            lines.append(f"Cross-reaction correlations:       None (single reaction only)")
         
         lines.append("\n" + "=" * 70)
         lines.append("INDIVIDUAL REACTION CONTRIBUTIONS")
@@ -171,9 +171,9 @@ class UncertaintyResult:
                                 for c in self.contributions)
         
         # Show both types of contributions
-        lines.append("WITHOUT CROSS-COVARIANCES (auto-contributions only):")
-        lines.append(f"{'Rank':<4} {'Nuclide':<12} {'Reaction':<15} {'Variance':<12} {'% Auto':<8}")
-        lines.append("-" * 60)
+        lines.append("SINGLE-REACTION VARIANCE (includes energy-to-energy correlations):")
+        lines.append(f"{'Rank':<4} {'Nuclide':<12} {'Reaction':<15} {'MT':<6} {'Variance':<12} {'% Auto':<8}")
+        lines.append("-" * 68)
         
         # Sort by auto-contributions
         auto_sorted = sorted(self.contributions, 
@@ -183,15 +183,15 @@ class UncertaintyResult:
         for rank, contrib in enumerate(auto_sorted, 1):
             auto_var = getattr(contrib, 'auto_variance_contribution', contrib.variance_contribution)
             auto_pct = abs(auto_var) / abs(total_auto_variance) * 100 if abs(total_auto_variance) > 1e-15 else 0.0
-            lines.append(f"{rank:<4} {contrib.nuclide:<12} {contrib.reaction_name:<15} "
+            lines.append(f"{rank:<4} {contrib.nuclide:<12} {contrib.reaction_name:<15} {contrib.mt:<6} "
                         f"{auto_var:.4e} {auto_pct:>6.2f}%")
         
-        lines.append(f"\nTotal auto-variance: {total_auto_variance:.6e}")
+        lines.append(f"\nSum of single-reaction variances: {total_auto_variance:.6e}")
         lines.append("")
         
-        lines.append("WITH CROSS-COVARIANCES (total contributions including correlations):")
-        lines.append(f"{'Rank':<4} {'Nuclide':<12} {'Reaction':<15} {'Variance':<12} {'% Total':<8}")
-        lines.append("-" * 60)
+        lines.append("TOTAL VARIANCE (includes cross-reaction correlations):")
+        lines.append(f"{'Rank':<4} {'Nuclide':<12} {'Reaction':<15} {'MT':<6} {'Variance':<12} {'% Total':<8}")
+        lines.append("-" * 68)
         
         # Sort contributions by total magnitude
         sorted_contribs = sorted(self.contributions, 
@@ -200,13 +200,13 @@ class UncertaintyResult:
         
         for rank, contrib in enumerate(sorted_contribs, 1):
             pct = contrib.relative_contribution * 100
-            lines.append(f"{rank:<4} {contrib.nuclide:<12} {contrib.reaction_name:<15} "
+            lines.append(f"{rank:<4} {contrib.nuclide:<12} {contrib.reaction_name:<15} {contrib.mt:<6} "
                         f"{contrib.variance_contribution:.4e} {pct:>6.2f}%")
         
-        lines.append(f"\nTotal variance (with correlations): {self.total_variance:.6e}")
+        lines.append(f"\nTotal variance: {self.total_variance:.6e}")
         off_diagonal_contribution = self.total_variance - total_auto_variance
         off_diagonal_pct = abs(off_diagonal_contribution) / abs(self.total_variance) * 100 if abs(self.total_variance) > 1e-15 else 0.0
-        lines.append(f"Cross-correlation contribution: {off_diagonal_contribution:.6e} ({off_diagonal_pct:.1f}% of total)")
+        lines.append(f"Cross-REACTION correlation: {off_diagonal_contribution:.6e} ({off_diagonal_pct:.1f}% of total)")
         
         lines.append("=" * 70)
         
@@ -231,7 +231,7 @@ def sandwich_uncertainty_propagation(
     legendre_cov_mat: Optional[MGMF34CovMat] = None,
     reaction_filter: Optional[Dict[int, List[int]]] = None,
     energy_tolerance: float = 1e-6,
-    verbose: bool = True
+    verbose: bool = False
 ) -> UncertaintyResult:
     """
     Apply the sandwich formula σ²_R = S^T Σ S to propagate nuclear data uncertainties.
@@ -323,8 +323,13 @@ def sandwich_uncertainty_propagation(
     xs_sensitivities = [r for r in sdf_data.data if r.mt < 4000]  # Cross-section sensitivities
     leg_sensitivities = [r for r in sdf_data.data if r.mt >= 4000]  # Legendre sensitivities
     
+    # Check for and exclude MT=1 (total cross section) to avoid double-counting
+    mt1_found = [r for r in xs_sensitivities if r.mt == 1]
+    if mt1_found:
+        xs_sensitivities = [r for r in xs_sensitivities if r.mt != 1]
+    
     if verbose:
-        logger.info(f"  Found {len(xs_sensitivities)} cross-section sensitivities")
+        logger.info(f"  Found {len(xs_sensitivities)} cross-section sensitivities (excluding MT=1)")
         logger.info(f"  Found {len(leg_sensitivities)} Legendre moment sensitivities")
     
     # We'll handle each type separately and then combine
@@ -415,7 +420,7 @@ def sandwich_uncertainty_propagation(
     if verbose:
         logger.info("Building combined sensitivity vector and covariance matrix...")
     
-    sensitivity_vector, covariance_matrix, reaction_indices, total_energy_groups = _build_combined_matrices(
+    sensitivity_vector, covariance_matrix, reaction_indices, reaction_spans = _build_combined_matrices(
         results,
         verbose
     )
@@ -452,7 +457,7 @@ def sandwich_uncertainty_propagation(
         sensitivity_vector,
         covariance_matrix, 
         reaction_indices,
-        total_energy_groups,
+        reaction_spans,
         total_variance,
         verbose
     )
@@ -462,11 +467,15 @@ def sandwich_uncertainty_propagation(
         sensitivity_vector,
         covariance_matrix,
         reaction_indices,
-        total_energy_groups
+        reaction_spans
     )
     
     if verbose:
         logger.info(f"Propagation complete: {relative_uncertainty:.2%} relative uncertainty")
+    
+    # Calculate representative energy groups from reaction spans
+    # (use the first reaction's group count as representative value)
+    representative_n_groups = reaction_spans[0][1] if reaction_spans else 0
     
     return UncertaintyResult(
         total_variance=total_variance,
@@ -476,7 +485,7 @@ def sandwich_uncertainty_propagation(
         response_error=response_error,
         contributions=contributions,
         n_reactions=total_reactions,
-        n_energy_groups=total_energy_groups,
+        n_energy_groups=representative_n_groups,
         correlation_effects=correlation_effects
     )
 
@@ -805,7 +814,7 @@ def _build_matrices(
 def _build_combined_matrices(
     results: List[Dict],
     verbose: bool
-) -> Tuple[np.ndarray, np.ndarray, Dict[int, Tuple], int]:
+) -> Tuple[np.ndarray, np.ndarray, Dict[int, Tuple], Dict[int, Tuple[int, int]]]:
     """Build combined sensitivity vector and covariance matrix for both cross-section and Legendre data.
     
     This function combines cross-section and Legendre sensitivities and covariances into unified
@@ -828,20 +837,16 @@ def _build_combined_matrices(
         Combined block-diagonal covariance matrix
     - reaction_indices : Dict[int, Tuple]
         Mapping from index to reaction identifier (format depends on type)
-    - total_energy_groups : int
-        Total number of energy groups used
+    - reaction_spans : Dict[int, Tuple[int, int]]
+        Mapping from reaction index to (start_offset, n_groups) for that reaction
     """
     
     # Build matrices for each type
     sub_matrices = []
-    total_size = 0
-    max_energy_groups = 0
     
     for result in results:
         if result['type'] == 'cross_section':
             # Build cross-section matrices using existing function
-            sens_lookup = {(r.zaid, r.mt): r for r in result['sdf_data']}
-            
             # Convert to SDFData-like object for compatibility
             class MockSDFData:
                 def __init__(self, data):
@@ -883,10 +888,8 @@ def _build_combined_matrices(
                 'n_groups': len(result['energy_mapping']),
                 'n_reactions': len(result['matching_reactions'])
             })
-        
-        # Track sizes
-        total_size += sub_matrices[-1]['sensitivity_vector'].size
-        max_energy_groups = max(max_energy_groups, sub_matrices[-1]['n_groups'])
+    
+    total_size = sum(m['sensitivity_vector'].size for m in sub_matrices)
     
     if verbose:
         logger.info(f"Combining {len(sub_matrices)} matrix blocks, total size: {total_size}")
@@ -894,35 +897,45 @@ def _build_combined_matrices(
     # Create combined matrices
     combined_sensitivity = np.zeros(total_size)
     combined_covariance = np.zeros((total_size, total_size))
-    combined_reaction_indices = {}
+    combined_reaction_indices: Dict[int, Tuple] = {}
+    combined_reaction_spans: Dict[int, Tuple[int, int]] = {}
     
     # Fill combined matrices block by block
     current_offset = 0
-    reaction_counter = 0
+    global_reaction_idx = 0
     
-    for sub_mat in sub_matrices:
-        sub_size = sub_mat['sensitivity_vector'].size
+    for sub in sub_matrices:
+        sub_vec = sub['sensitivity_vector']
+        sub_cov = sub['covariance_matrix']
+        n_groups = sub['n_groups']
+        n_reac = sub['n_reactions']
         
         # Copy sensitivity vector
-        combined_sensitivity[current_offset:current_offset + sub_size] = sub_mat['sensitivity_vector']
+        combined_sensitivity[current_offset:current_offset + sub_vec.size] = sub_vec
         
         # Copy covariance matrix
-        combined_covariance[current_offset:current_offset + sub_size, 
-                          current_offset:current_offset + sub_size] = sub_mat['covariance_matrix']
+        combined_covariance[current_offset:current_offset + sub_vec.size,
+                          current_offset:current_offset + sub_vec.size] = sub_cov
         
-        # Update reaction indices with offset
-        for idx, reaction in sub_mat['reaction_indices'].items():
-            combined_reaction_indices[reaction_counter + idx] = reaction
+        # Map reactions and their spans
+        for local_idx, reaction_id in sub['reaction_indices'].items():
+            start = current_offset + local_idx * n_groups
+            combined_reaction_indices[global_reaction_idx + local_idx] = reaction_id
+            combined_reaction_spans[global_reaction_idx + local_idx] = (start, n_groups)
         
-        reaction_counter += sub_mat['n_reactions']
-        current_offset += sub_size
+        current_offset += sub_vec.size
+        global_reaction_idx += n_reac
+    
+    # Enforce exact symmetry once
+    combined_covariance = 0.5 * (combined_covariance + combined_covariance.T)
     
     if verbose:
         logger.info(f"Combined matrix construction complete")
         logger.info(f"  Total sensitivity elements: {np.count_nonzero(combined_sensitivity)}/{total_size}")
         logger.info(f"  Total covariance elements: {np.count_nonzero(combined_covariance)}/{total_size**2}")
+        logger.info(f"  Total reactions: {len(combined_reaction_indices)}")
     
-    return combined_sensitivity, combined_covariance, combined_reaction_indices, max_energy_groups
+    return combined_sensitivity, combined_covariance, combined_reaction_indices, combined_reaction_spans
 
 
 def _build_legendre_matrices(
@@ -1045,7 +1058,7 @@ def _calculate_individual_contributions(
     sensitivity_vector: np.ndarray,
     covariance_matrix: np.ndarray,
     reaction_indices: Dict[int, Tuple],
-    n_groups: int,
+    reaction_spans: Dict[int, Tuple[int, int]],
     total_variance: float,
     verbose: bool
 ) -> List[UncertaintyContribution]:
@@ -1062,76 +1075,70 @@ def _calculate_individual_contributions(
     - (zaid, mt_base, l_order) tuples for Legendre moment reactions
     """
     
-    contributions = []
-    n_reactions = len(reaction_indices)
+    contributions: List[UncertaintyContribution] = []
     
-    # Calculate contribution matrix: C_ij = S_i^T Σ_ij S_j
-    contribution_matrix = np.zeros((n_reactions, n_reactions))
+    # One matvec gives all row-sum pieces (efficient O(n²) instead of O(n³))
+    sigma_s = covariance_matrix @ sensitivity_vector
     
-    for i in range(n_reactions):
-        start_i = i * n_groups
-        end_i = (i + 1) * n_groups
-        sens_i = sensitivity_vector[start_i:end_i]
-        
-        for j in range(n_reactions):
-            start_j = j * n_groups
-            end_j = (j + 1) * n_groups
-            sens_j = sensitivity_vector[start_j:end_j]
-            
-            # Extract covariance block Σ_ij
-            cov_ij = covariance_matrix[start_i:end_i, start_j:end_j]
-            
-            # Calculate contribution: S_i^T Σ_ij S_j
-            contribution_matrix[i, j] = float(sens_i.T @ cov_ij @ sens_j)
+    # Accumulate diagnostics
+    total_auto = 0.0
+    total_rowsum = 0.0
     
-    # Calculate total diagonal and off-diagonal contributions for reference
-    total_diagonal = np.sum(np.diag(contribution_matrix))
-    total_off_diagonal = np.sum(contribution_matrix) - total_diagonal
-    
-    if verbose:
-        logger.info(f"Contribution matrix analysis:")
-        logger.info(f"  Total variance: {total_variance:.6e}")
-        logger.info(f"  Diagonal contributions: {total_diagonal:.6e} ({100*total_diagonal/total_variance:.1f}%)")
-        logger.info(f"  Off-diagonal contributions: {total_off_diagonal:.6e} ({100*total_off_diagonal/total_variance:.1f}%)")
-    
-    # For each reaction, calculate both types of contributions
     for i, reaction_info in reaction_indices.items():
-        # Handle both cross-section and Legendre reactions
+        start_i, n_g_i = reaction_spans[i]
+        s_i = sensitivity_vector[start_i: start_i + n_g_i]
+        t_i = sigma_s[start_i: start_i + n_g_i]
+        
+        # Projection (row-sum) piece: c_i = s_i^T t_i
+        total_contribution = float(s_i.T @ t_i)
+        
+        # Auto piece: s_i^T Σ_ii s_i
+        block_ii = covariance_matrix[start_i: start_i + n_g_i, start_i: start_i + n_g_i]
+        auto_contribution = float(s_i.T @ block_ii @ s_i)
+        
+        # Build display MT
         if len(reaction_info) == 2:
-            # Cross-section reaction: (zaid, mt)
             zaid, mt = reaction_info
             mt_display = mt
         elif len(reaction_info) == 3:
-            # Legendre reaction: (zaid, mt_base, l_order)
             zaid, mt_base, l_order = reaction_info
-            mt_display = 4000 + l_order  # Convert back to sensitivity MT for display
+            mt_display = 4000 + l_order
         else:
             raise ValueError(f"Unexpected reaction format: {reaction_info}")
         
-        # Method 1: Auto-contribution only (diagonal term)
-        auto_contribution = contribution_matrix[i, i]
-        
-        # Method 2: Total contribution including cross-covariances (row sum)
-        total_contribution = np.sum(contribution_matrix[i, :])
-        
-        # Create UncertaintyContribution object with both values
         contrib = UncertaintyContribution(
             zaid=zaid,
             mt=mt_display,
-            variance_contribution=total_contribution  # Primary value (with cross-covariances)
+            variance_contribution=total_contribution
         )
         
-        # Set relative contribution after initialization
-        contrib.relative_contribution = total_contribution / total_variance if total_variance > 0 else 0.0
+        denom_total = total_variance if total_variance != 0 else 1.0
+        contrib.relative_contribution = total_contribution / denom_total
         
-        # Add custom attributes for the auto-contribution
+        # Attach auto pieces as attributes for reporting
         contrib.auto_variance_contribution = auto_contribution
-        contrib.auto_relative_contribution = auto_contribution / total_diagonal if total_diagonal > 0 else 0.0
+        # We'll set auto_relative_contribution after computing total_auto
+        contrib.auto_relative_contribution = 0.0  # Temporary
         
         contributions.append(contrib)
+        
+        total_auto += auto_contribution
+        total_rowsum += total_contribution
     
-    # Sort contributions by magnitude for display
-    contributions.sort(key=lambda x: abs(x.variance_contribution), reverse=True)
+    # Sort by |total| for display
+    contributions.sort(key=lambda c: abs(c.variance_contribution), reverse=True)
+    
+    if verbose:
+        logger.info(f"Sum row-sum contributions = {total_rowsum:.6e} (should equal total variance {total_variance:.6e})")
+        logger.info(f"Sum auto (diagonal)        = {total_auto:.6e}")
+    
+    # Now that we know total_auto, set auto_relative_contribution safely
+    if abs(total_auto) > 0:
+        for c in contributions:
+            c.auto_relative_contribution = getattr(c, 'auto_variance_contribution', 0.0) / total_auto
+    else:
+        for c in contributions:
+            c.auto_relative_contribution = 0.0
     
     if verbose:
         # Show top contributors with both auto and total contributions
@@ -1140,11 +1147,6 @@ def _calculate_individual_contributions(
             total_pct = contrib.relative_contribution * 100
             auto_pct = contrib.auto_relative_contribution * 100
             logger.info(f"  {contrib.nuclide} {contrib.reaction_name}: {total_pct:.2f}% (total), {auto_pct:.2f}% (auto)")
-        
-        # Show diagnostic info
-        total_sum = sum(c.variance_contribution for c in contributions)
-        auto_sum = sum(c.auto_variance_contribution for c in contributions)
-        logger.info(f"Contribution sums: total={total_sum:.6e}, auto={auto_sum:.6e}, expected={total_variance:.6e}")
     
     return contributions
 
@@ -1153,7 +1155,7 @@ def _calculate_correlation_effects(
     sensitivity_vector: np.ndarray,
     covariance_matrix: np.ndarray,
     reaction_indices: Dict[int, Tuple],
-    n_groups: int
+    reaction_spans: Dict[int, Tuple[int, int]]
 ) -> float:
     """Calculate the contribution from cross-correlations between reactions.
     
@@ -1162,29 +1164,27 @@ def _calculate_correlation_effects(
     
     This represents the total contribution from correlations between different 
     reactions (different Legendre orders or cross-sections).
+    
+    Uses the efficient t = Σ S trick for O(n²) complexity.
     """
     
-    correlation_variance = 0.0
+    sigma_s = covariance_matrix @ sensitivity_vector
+    corr = 0.0
     
-    # Calculate off-diagonal contributions (cross-correlations between different reactions)
     for i in reaction_indices.keys():
-        start_i = i * n_groups
-        end_i = (i + 1) * n_groups
-        sens_i = sensitivity_vector[start_i:end_i]
+        start_i, n_g_i = reaction_spans[i]
+        s_i = sensitivity_vector[start_i: start_i + n_g_i]
         
-        for j in reaction_indices.keys():
-            if i != j:  # Only off-diagonal terms (cross-correlations)
-                start_j = j * n_groups
-                end_j = (j + 1) * n_groups
-                sens_j = sensitivity_vector[start_j:end_j]
-                
-                # Extract cross-covariance block Σ_ij
-                cov_ij = covariance_matrix[start_i:end_i, start_j:end_j]
-                
-                # Add cross-correlation contribution: S_i^T Σ_ij S_j
-                correlation_variance += float(sens_i.T @ cov_ij @ sens_j)
+        # Full row-sum S_i^T (Σ S)_i
+        rowsum_i = float(s_i.T @ sigma_s[start_i: start_i + n_g_i])
+        
+        # Subtract auto block S_i^T Σ_ii S_i to leave only off-diagonals for this row
+        block_ii = covariance_matrix[start_i: start_i + n_g_i, start_i: start_i + n_g_i]
+        auto_i = float(s_i.T @ block_ii @ s_i)
+        
+        corr += (rowsum_i - auto_i)
     
-    return correlation_variance
+    return corr
 
 
 def filter_reactions_by_nuclide(zaid: int, mt_list: Optional[List[int]] = None) -> Dict[int, List[int]]:

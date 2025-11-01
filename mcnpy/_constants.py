@@ -39,7 +39,9 @@ NDLIBRARY_TO_SUFFIX = {
     'jeff32': '32',
     'jeff33': '33',
     'jeff40': '40',
-    'jendl40': '40',
+    'jendl4': '40',
+    'jendl5': '50',
+    'tendl' : '00',
 }
 
 

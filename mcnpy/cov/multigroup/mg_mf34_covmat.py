@@ -67,6 +67,7 @@ class MGMF34CovMat:
     _mg_means_col: List[np.ndarray] = field(default_factory=list)
     frame: List[str] = field(default_factory=list)
     weighting_function: str = "constant"
+    relative_normalization: str = "mf34_cell"
     legendre_coefficients: Dict[Tuple[int, int, int], np.ndarray] = field(default_factory=dict)
 
     @property
@@ -271,11 +272,17 @@ class MGMF34CovMat:
     @property
     def covariance_matrix(self) -> np.ndarray:
         """
-        Return the full multigroup covariance matrix of shape (N·G) × (N·G),
-        where N = number of unique (iso, rxn, l) triplets and G = number of energy groups.
+                Return the full multigroup RELATIVE covariance matrix (block assembled).
+
+                Shape: (N·G) × (N·G), where
+                    N = number of unique (isotope, reaction, Legendre) triplets
+                    G = number of energy groups
+
+                Blocks: each (i,j) block is the stored relative covariance between triplet i and j
+                across energy groups. Off-diagonal blocks are symmetrized.
         
-        For multigroup data, this constructs a block matrix where each block corresponds
-        to covariance between different Legendre coefficients.
+                Note: These are RELATIVE covariances (dimensionless) consistent with the
+                MF34 convention. Use `absolute_covariance_matrix` for absolute units.
         """
         if not self.relative_matrices:
             return np.array([])
@@ -297,6 +304,38 @@ class MGMF34CovMat:
             r0, r1 = i * G, (i + 1) * G
             c0, c1 = j * G, (j + 1) * G
 
+            full[r0:r1, c0:c1] = matrix
+            if i != j:
+                full[c0:c1, r0:r1] = matrix.T
+
+        return full
+
+    @property
+    def absolute_covariance_matrix(self) -> np.ndarray:
+        """Return the full multigroup ABSOLUTE covariance matrix assembled as blocks.
+
+        Mirrors the logic of `covariance_matrix` but using `absolute_matrices`.
+        Returns an empty array if no absolute matrices are stored.
+        """
+        if not self.absolute_matrices:
+            return np.array([])
+
+        param_triplets = self._get_param_triplets()
+        idx_map = {p: i for i, p in enumerate(param_triplets)}
+
+        G = self.num_groups
+        N = len(param_triplets)
+        full = np.zeros((N * G, N * G), dtype=float)
+
+        for ir, rr, lr, ic, rc, lc, matrix in zip(
+            self.isotope_rows, self.reaction_rows, self.l_rows,
+            self.isotope_cols, self.reaction_cols, self.l_cols,
+            self.absolute_matrices
+        ):
+            i = idx_map[(ir, rr, lr)]
+            j = idx_map[(ic, rc, lc)]
+            r0, r1 = i * G, (i + 1) * G
+            c0, c1 = j * G, (j + 1) * G
             full[r0:r1, c0:c1] = matrix
             if i != j:
                 full[c0:c1, r0:r1] = matrix.T
@@ -376,7 +415,192 @@ class MGMF34CovMat:
             # Return the list for the specified isotope, or empty list if not found
             return sorted_dict.get(isotope, [])
 
-        return sorted_dict
+        return True
+
+    def to_plot_data(
+        self,
+        isotope: int,
+        mt: int,
+        order: int,
+        sigma: float = 1.0,
+        label: str = None,
+        **styling_kwargs
+    ):
+        """
+        Create PlotData objects for multigroup Legendre coefficients with uncertainties.
+        
+        Returns both the Legendre coefficient data and uncertainty band, following the
+        unified API pattern. Always returns a tuple (legendre_data, unc_band) where
+        either can be None if data is not available.
+        
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID
+        mt : int
+            Reaction MT number
+        order : int
+            Legendre polynomial order
+        sigma : float, default 1.0
+            Sigma level for uncertainty bands (e.g., 1.0 for 1σ, 2.0 for 2σ)
+        label : str, optional
+            Custom label for the plot. If None, auto-generates from isotope and order.
+        **styling_kwargs
+            Additional styling kwargs (color, linestyle, linewidth, etc.)
+            
+        Returns
+        -------
+        tuple of (LegendreCoeffPlotData, UncertaintyBand)
+            Tuple containing:
+            - legendre_data: PlotData for Legendre coefficients (None if not available)
+            - unc_band: UncertaintyBand with relative uncertainties (None if not available)
+            
+        Raises
+        ------
+        ValueError
+            If neither Legendre coefficient nor covariance data is available
+            
+        Examples
+        --------
+        >>> # Extract data for L=1 coefficient
+        >>> legendre_data, unc_band = mg_covmat.to_plot_data(
+        ...     isotope=26056, mt=2, order=1)
+        >>> 
+        >>> # Build a plot with PlotBuilder
+        >>> from mcnpy.plotting import PlotBuilder
+        >>> fig = (PlotBuilder()
+        ...        .add_data(legendre_data, uncertainty=unc_band)
+        ...        .build())
+        """
+        from mcnpy.plotting import LegendreCoeffPlotData, UncertaintyBand
+        from mcnpy._utils import zaid_to_symbol
+        
+        # Check if Legendre coefficient data exists
+        key = (isotope, mt, order)
+        if key not in self.legendre_coefficients:
+            raise ValueError(
+                f"No Legendre coefficient data available for "
+                f"isotope={isotope}, MT={mt}, order={order}"
+            )
+        
+        # Extract Legendre coefficients
+        coeffs = np.asarray(self.legendre_coefficients[key], dtype=float)
+        energy_grid = np.asarray(self.energy_grid, dtype=float)
+        
+        # Validate data consistency
+        if coeffs.size != energy_grid.size - 1:
+            raise ValueError(
+                f"Legendre coefficient size ({coeffs.size}) does not match "
+                f"energy grid groups ({energy_grid.size - 1})"
+            )
+        
+        # For step plots with where='post', extend y to match x length
+        # This creates the proper step representation for histogram-like data
+        coeffs_extended = np.append(coeffs, coeffs[-1])
+        
+        # Generate label if not provided
+        if label is None:
+            try:
+                isotope_symbol = zaid_to_symbol(isotope)
+            except Exception:
+                isotope_symbol = f"Isotope {isotope}"
+            
+            label = f"{isotope_symbol} - $a_{{{order}}}$"
+            if sigma == 1.0:
+                label += " (±1σ)"
+            else:
+                label += f" (±{sigma}σ)"
+        
+        # Create LegendreCoeffPlotData
+        legendre_data = LegendreCoeffPlotData(
+            x=energy_grid,  # Bin boundaries for step plots
+            y=coeffs_extended,  # Extended to match x length for step='post'
+            label=label,
+            order=order,
+            isotope=zaid_to_symbol(isotope) if isotope else None,
+            mt=mt,
+            plot_type='step',
+            **styling_kwargs
+        )
+        
+        # Create uncertainty PlotData instead of UncertaintyBand
+        unc_data = self._create_uncertainty_plotdata(
+            isotope=isotope,
+            mt=mt,
+            order=order,
+            energy_grid=energy_grid,
+            sigma=sigma,
+            label=label,
+            **styling_kwargs
+        )
+        
+        return legendre_data, unc_data
+    
+    def _create_uncertainty_plotdata(
+        self,
+        isotope: int,
+        mt: int,
+        order: int,
+        energy_grid: np.ndarray,
+        sigma: float,
+        label: str = None,
+        **styling_kwargs
+    ):
+        """
+        Helper method to create LegendreUncertaintyPlotData from covariance matrix.
+        
+        Returns None if covariance data is not available.
+        """
+        from mcnpy.plotting import LegendreUncertaintyPlotData
+        from mcnpy._utils import zaid_to_symbol
+        
+        # Find the covariance matrix for this order
+        for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
+            self.isotope_rows, self.reaction_rows, self.l_rows,
+            self.isotope_cols, self.reaction_cols, self.l_cols
+        )):
+            if (iso_r == isotope and mt_r == mt and l_r == order and
+                iso_c == isotope and mt_c == mt and l_c == order):
+                # Found diagonal block
+                cov_matrix = self.relative_matrices[i]
+                diag = np.diag(cov_matrix)
+                
+                # Extract relative uncertainties (square root of diagonal)
+                # This has n values (one per energy group)
+                rel_unc = np.sqrt(diag)
+                
+                # Convert to percentage and apply sigma multiplier
+                rel_unc_pct = rel_unc * 100.0 * sigma
+                
+                # Convert to energy group centers for plotting
+                energy_centers = np.sqrt(energy_grid[:-1] * energy_grid[1:])
+                
+                # Generate label if not provided
+                if label is None:
+                    try:
+                        isotope_symbol = zaid_to_symbol(isotope)
+                    except Exception:
+                        isotope_symbol = f"Isotope {isotope}"
+                    
+                    sigma_str = f"{sigma}σ" if sigma != 1.0 else "1σ"
+                    label = f"{isotope_symbol} - $a_{{{order}}}$ Uncertainty ({sigma_str})"
+                
+                # Create LegendreUncertaintyPlotData
+                return LegendreUncertaintyPlotData(
+                    x=energy_centers,
+                    y=rel_unc_pct,
+                    label=label,
+                    order=order,
+                    isotope=zaid_to_symbol(isotope) if isotope else None,
+                    mt=mt,
+                    uncertainty_type='relative',
+                    energy_bins=energy_grid,
+                    step_where='post',
+                    **styling_kwargs
+                )
+        
+        # No covariance data found
+        return None
 
     def plot_legendre_coefficients(
         self,
@@ -386,7 +610,7 @@ class MGMF34CovMat:
         style: str = 'default',
         figsize: Tuple[float, float] = (10, 6),
         legend_loc: str = 'best',
-        marker: bool = False,
+        marker: bool = True,
         include_uncertainties: bool = False,
         uncertainty_sigma: float = 1.0,
         **kwargs
@@ -676,7 +900,8 @@ class MGMF34CovMat:
                 f"- {len(self.isotopes)} unique isotopes\n"
                 f"- {len(self.reactions)} unique reaction types\n"
                 f"- {len(self.legendre_indices)} unique Legendre indices\n"
-                f"- Weighting: {self.weighting_function}")
+                f"- Weighting: {self.weighting_function}\n"
+                f"- Normalization: {self.relative_normalization}")
 
     def __repr__(self) -> str:
         """Detailed string representation."""
@@ -718,6 +943,9 @@ class MGMF34CovMat:
             width1=property_col_width, width2=value_col_width)
         info_table += "{:<{width1}} {:<{width2}}\n".format(
             "Weighting Function", self.weighting_function, 
+            width1=property_col_width, width2=value_col_width)
+        info_table += "{:<{width1}} {:<{width2}}\n".format(
+            "Relative Normalization", self.relative_normalization, 
             width1=property_col_width, width2=value_col_width)
         
         info_table += "-" * header_width + "\n\n"

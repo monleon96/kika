@@ -48,9 +48,15 @@ def _format_energy_group_name(energy_grid: List[float], group_index: int) -> str
 
 
 class DualLogger:
-    """Logger that writes detailed info to file and basic info to console."""
+    """Logger that writes detailed info to file and minimal info to console.
     
-    def __init__(self, log_file: str, console_level: str = 'INFO'):
+    The logger writes ALL messages to the log file, but only prints messages
+    to console when explicitly requested via the console parameter in the
+    info/warning/error methods. This ensures users can read the complete
+    story in the log file without console spam.
+    """
+    
+    def __init__(self, log_file: str, console_level: str = 'CRITICAL'):
         self.log_file = log_file
         
         # Create logger
@@ -60,16 +66,17 @@ class DualLogger:
         # Clear existing handlers
         self.logger.handlers.clear()
         
-        # File handler - gets everything
+        # File handler - gets everything at DEBUG level
         file_handler = logging.FileHandler(log_file, mode='w')
         file_handler.setLevel(logging.DEBUG)
         file_formatter = logging.Formatter('%(message)s')
         file_handler.setFormatter(file_formatter)
         self.logger.addHandler(file_handler)
         
-        # Console handler - only basic info
+        # Console handler - set to CRITICAL by default to suppress automatic console output
+        # Messages will only appear in console when explicitly printed via console=True parameter
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(getattr(logging, console_level.upper()))
+        console_handler.setLevel(logging.CRITICAL + 1)  # Effectively disable automatic console output
         console_formatter = logging.Formatter('[%(levelname)s] %(message)s')
         console_handler.setFormatter(console_formatter)
         self.logger.addHandler(console_handler)

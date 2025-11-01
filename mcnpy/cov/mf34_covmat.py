@@ -485,6 +485,109 @@ class MF34CovMat:
             **kwargs
         )
 
+    def to_plot_data(
+        self,
+        isotope: int,
+        mt: int,
+        order: int,
+        uncertainty_type: str = 'relative',
+        label: str = None,
+        **styling_kwargs
+    ):
+        """
+        Create a PlotData object for Legendre coefficient uncertainties.
+        
+        This is a convenience method to easily convert MF34 covariance data into
+        a plottable format using the new plotting infrastructure.
+        
+        Parameters
+        ----------
+        isotope : int
+            Isotope ID
+        mt : int
+            Reaction MT number
+        order : int
+            Legendre polynomial order
+        uncertainty_type : str, default 'relative'
+            Type of uncertainty: 'relative' (%) or 'absolute'
+        label : str, optional
+            Custom label for the plot. If None, auto-generates from isotope and order.
+        **styling_kwargs
+            Additional styling kwargs (color, linestyle, linewidth, etc.)
+            
+        Returns
+        -------
+        LegendreUncertaintyPlotData
+            Plot data object ready to be added to a PlotBuilder
+            
+        Raises
+        ------
+        ValueError
+            If uncertainty data is not available for the specified parameters
+            
+        Examples
+        --------
+        >>> # Extract uncertainty data from MF34CovMat
+        >>> mf34_covmat = endf.mf[34].mt[2].to_ang_covmat()
+        >>> unc_data = mf34_covmat.to_plot_data(isotope=26056, mt=2, order=1)
+        >>> 
+        >>> # Build a plot
+        >>> from mcnpy.plotting import PlotBuilder
+        >>> fig = PlotBuilder().add_data(unc_data).build()
+        """
+        from mcnpy.plotting import LegendreUncertaintyPlotData
+        from mcnpy._utils import zaid_to_symbol
+        
+        # Get uncertainty data
+        unc_data = self.get_uncertainties_for_legendre_coefficient(isotope, mt, order)
+        
+        if unc_data is None:
+            raise ValueError(
+                f"No uncertainty data available for isotope={isotope}, MT={mt}, L={order}"
+            )
+        
+        # Extract energies and uncertainties
+        energies = unc_data['energies']
+        uncertainties = unc_data['uncertainties']
+        
+        # Get energy bin boundaries
+        energy_bins = None
+        for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
+            self.isotope_rows, self.reaction_rows, self.l_rows,
+            self.isotope_cols, self.reaction_cols, self.l_cols
+        )):
+            # Look for diagonal variance matrix (L = L) for the specified parameters
+            if (iso_r == isotope and iso_c == isotope and 
+                mt_r == mt and mt_c == mt and 
+                l_r == order and l_c == order):
+                energy_bins = np.array(self.energy_grids[i])
+                break
+        
+        # Convert to percentage if relative
+        if uncertainty_type.lower() == 'relative':
+            uncertainties = uncertainties * 100.0  # Convert to percentage
+        
+        # Generate label if not provided
+        if label is None:
+            isotope_symbol = zaid_to_symbol(isotope)
+            if uncertainty_type.lower() == 'relative':
+                label = f"{isotope_symbol} MT={mt} L={order} (σ %)"
+            else:
+                label = f"{isotope_symbol} MT={mt} L={order} (σ abs)"
+        
+        # Create and return PlotData object
+        return LegendreUncertaintyPlotData(
+            x=energies,
+            y=uncertainties,
+            label=label,
+            order=order,
+            isotope=zaid_to_symbol(isotope),
+            mt=mt,
+            uncertainty_type=uncertainty_type,
+            energy_bins=energy_bins,
+            **styling_kwargs
+        )
+
     def filter_by_isotope_reaction(self, isotope: int, mt: int) -> "MF34CovMat":
         """
         Return a new MF34CovMat containing only matrices for the specified isotope and MT reaction.

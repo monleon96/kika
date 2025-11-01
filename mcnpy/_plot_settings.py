@@ -189,8 +189,9 @@ def setup_plot_style(
     plt.style.use('default')
     
     # Set up publication-quality settings
-    # For 3D plots and non-interactive backends, avoid constrained_layout
-    use_constrained_layout = (projection != '3d' and interactive)
+    # For 3D plots, avoid constrained_layout (it doesn't work well with 3D)
+    # Enable for all 2D plots to prevent label overlap and cutoff
+    use_constrained_layout = (projection != '3d')
     
     plt.rcParams.update({
         'font.family': font_family,

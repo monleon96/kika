@@ -172,10 +172,8 @@ def plot_mf34_uncertainties(
         
         # Create label
         isotope_symbol = zaid_to_symbol(isotope)
-        label = f"{isotope_symbol} - σ$_{{a_{{{l_val}}}}}$"
-        if uncertainty_type == "relative":
-            label += " (%)"
-        else:
+        label = f"{isotope_symbol} - (l={l_val})"
+        if uncertainty_type == "absolute":
             label += " (absolute)"
         
         # Plot as step function (uncertainties are constant within energy bins)
@@ -315,236 +313,285 @@ def plot_mf34_covariance_heatmap(
     vmin: float | None = None,
     show_uncertainties: bool = False,
     cmap: Optional[Union[str, mpl.colors.Colormap]] = None,
+    scale: str = "log",      # "log" | "linear"
+    energy_range: Optional[Tuple[float, float]] = None,
     **imshow_kwargs,
 ) -> plt.Figure:
     """
-    Draw a covariance or correlation matrix heat-map for MF34 angular distribution data
-    for *one* isotope and MT reaction, with one or more Legendre coefficients.
-
-    This function follows the same structure and formatting as the regular heatmap.py
-    but is adapted for Legendre coefficients instead of MT numbers.
+    Covariance/correlation heatmap with energy-proportional blocks (MF34) and optional
+    uncertainty row. Energy labels are in eV (scientific, no units).  
 
     Parameters
     ----------
-    mf34_covmat : MF34CovMat
-        The MF34 covariance matrix object
-    isotope : int
-        Isotope ID
-    mt : int
-        Reaction MT number
-    legendre_coeffs : int, list of int, or tuple of (row_l, col_l)
-        Legendre coefficient(s). Can be:
-        - Single int: diagonal block for that L
-        - List of ints: diagonal blocks for those L values  
-        - Tuple of (row_l, col_l): off-diagonal block between row and column L
-    ax : plt.Axes, optional
-        Matplotlib axes to draw into (only used when show_uncertainties=False)
-    matrix_type : str
-        Type of matrix to plot: "cov" for covariance or "corr" for correlation
-    style : str
-        Plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
-    figsize : tuple
-        Figure size in inches (width, height)
-    dpi : int
-        Dots per inch for figure resolution
-    font_family : str
-        Font family for text elements
-    vmax, vmin : float, optional
-        Color scale limits
-    show_uncertainties : bool
-        Whether to show uncertainty plots above the heatmap
-    show : bool
-        Whether to display the figure (default: True)
-    cmap : str or matplotlib.colors.Colormap, optional
-        Colormap to use for the heatmap. Can be a string name of any matplotlib 
-        colormap (e.g., 'viridis', 'plasma', 'RdYlBu', 'coolwarm') or a matplotlib 
-        Colormap object. If None, defaults to 'RdYlGn' for correlation matrices 
-        and 'viridis' for covariance matrices.
-    **imshow_kwargs
-        Additional arguments passed to imshow
-
-    Returns
-    -------
-    plt.Figure
-        The matplotlib figure containing the heatmap and optional uncertainty plots
+    scale : str, default "log"
+        Energy axis scale. Options: "log" (default) or "linear".
+    
+    Updates:
+    - Right-side energy labels respect inverted Y (high at top).
+    - Log scale: label at each decade (1e+k); ticks at 2..9 within each decade (unlabeled).
+    - Uncertainty panels: x ticks only (no labels), aligned with covariance; no per-panel titles.
+    - Covariance: energy ticks on TOP/RIGHT (labels), and BOTTOM/LEFT (ticks only).
     """
-    # Validate matrix_type parameter
+    import numpy as np
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm
+    from matplotlib.gridspec import GridSpec
+
+    # ----------------------- helpers -----------------------
+    def _fmt_sci_eV_full(v: float) -> str:
+        """Scientific notation like '1e+02' (no unit suffix)."""
+        return f"{v:.0e}"
+
+    def _normalize_edges(edges, G_expected: int) -> Optional[np.ndarray]:
+        e = np.asarray(edges, dtype=float).reshape(-1)
+        if e.ndim != 1 or len(e) != G_expected + 1 or not np.all(np.isfinite(e)):
+            return None
+        e = e.copy()
+        dif = np.diff(e)
+        for i, d in enumerate(dif):
+            if d <= 0:
+                e[i+1] = e[i] + max(1e-300, 1e-12 * max(1.0, abs(e[i])))
+        return e
+
+    def _choose_scale(edges: np.ndarray, mode: str) -> str:
+        """Validate and return the scale mode."""
+        if mode not in ("log", "linear"):
+            raise ValueError(f"scale must be 'log' or 'linear', got '{mode}'")
+        # For log scale, check if edges are positive
+        if mode == "log" and edges.min() <= 0:
+            raise ValueError(f"scale='log' requires positive energy values, got min={edges.min():.2e}")
+        return mode
+
+    def _transform_edges(edges: np.ndarray, scale: str) -> np.ndarray:
+        if scale == "log":
+            e = np.maximum(edges, 1e-300)
+            return np.log10(e)
+        return edges.astype(float)
+
+    def _concat_blocks(transformed_base: np.ndarray, n_blocks: int):
+        base = transformed_base - transformed_base[0]
+        w = base[-1] - base[0]
+        per_block = []
+        ranges = []
+        start = 0.0
+        for _ in range(n_blocks):
+            b = base + start
+            per_block.append(b)
+            ranges.append((b[0], b[-1]))
+            start += w
+        stitched = np.concatenate([b[:-1] for b in per_block] + [per_block[-1][-1:]])
+        return stitched, ranges, per_block
+
+    def _log_ticks_with_decades(edges_one_block: np.ndarray):
+        """Return (all_tick_local, labels_for_all) for LOG scale.
+        - Ticks at mantissa m=1..9 of every decade in [Emin,Emax].
+        - Labels when m==1 (1e+k) and also at Emin/Emax if they're not decade boundaries.
+        Local coords start at 0 inside the block (log10 energy minus log10 Emin).
+        """
+        Emin = float(edges_one_block[0]); Emax = float(edges_one_block[-1])
+        kmin = int(np.ceil(np.log10(max(Emin, 1e-300))))
+        kmax = int(np.floor(np.log10(max(Emax, 1e-300))))
+        if kmax < kmin:  # narrow window
+            k = int(np.floor(np.log10(max(Emin, 1e-300))))
+            ks = np.array([k])
+        else:
+            ks = np.arange(kmin, kmax + 1, dtype=int)
+
+        vals = []
+        labels = []
+        
+        # Check if Emin is a decade boundary (1e+k)
+        is_emin_decade = np.isclose(Emin, 10.0 ** np.round(np.log10(Emin)), rtol=1e-10)
+        # Check if Emax is a decade boundary (1e+k)
+        is_emax_decade = np.isclose(Emax, 10.0 ** np.round(np.log10(Emax)), rtol=1e-10)
+        
+        # Add Emin if it's not a decade boundary
+        if not is_emin_decade:
+            vals.append(Emin)
+            labels.append(_fmt_sci_eV_full(Emin))
+        
+        for k in ks:
+            decade_base = 10.0 ** k
+            for m in range(1, 10):
+                v = m * decade_base
+                if Emin <= v <= Emax:
+                    vals.append(v)
+                    labels.append(_fmt_sci_eV_full(v) if m == 1 else "")  # label only at 1e+k
+        
+        # Add Emax if it's not a decade boundary and not already added
+        if not is_emax_decade and (len(vals) == 0 or not np.isclose(vals[-1], Emax, rtol=1e-10)):
+            vals.append(Emax)
+            labels.append(_fmt_sci_eV_full(Emax))
+        
+        vals = np.array(vals, dtype=float)
+        if vals.size == 0:
+            return np.array([]), []
+
+        base0 = np.log10(max(Emin, 1e-300))
+        pos = np.log10(vals) - base0
+        return pos, labels
+
+    def _linear_ticks_20pct(edges_one_block: np.ndarray):
+        """20% increments on linear scale; label at all ticks (using eV sci)."""
+        Emin = float(edges_one_block[0]); Emax = float(edges_one_block[-1])
+        if Emax <= Emin:
+            return np.array([]), []
+        fracs = np.linspace(0.0, 1.0, 6)  # 0,20,40,60,80,100%
+        vals = Emin + fracs * (Emax - Emin)
+        labels = [_fmt_sci_eV_full(v) for v in vals]
+        pos = vals - Emin
+        return pos, labels
+
+    def _energy_ticks(edges_one_block: np.ndarray, scale_pref: str):
+        """Unified tick generator: returns (pos_local_all, labels_all)."""
+        if _choose_scale(edges_one_block, scale_pref) == "log" and edges_one_block[0] > 0:
+            return _log_ticks_with_decades(edges_one_block)
+        # linear
+        return _linear_ticks_20pct(edges_one_block)
+
+    # ----------------------- validate & style -----------------------
     if matrix_type not in ["cov", "corr"]:
         raise ValueError(f"matrix_type must be 'cov' or 'corr', got '{matrix_type}'")
-    
-    # Reset matplotlib to default state
+
     plt.rcdefaults()
-    
-    # Setup publication-quality settings (same as heatmap.py)
     plt.rcParams.update({
         'font.family': font_family,
         'font.size': 12,
         'axes.labelsize': 14,
         'axes.titlesize': 14,
-        'xtick.labelsize': 12,
-        'ytick.labelsize': 12,
+        'xtick.labelsize': 11,
+        'ytick.labelsize': 11,
         'legend.fontsize': 12,
         'figure.figsize': figsize,
         'figure.dpi': dpi,
         'axes.linewidth': 1.2,
-        'lines.linewidth': 2.5,
-        'lines.markersize': 8,
-        'axes.grid': True,
-        'grid.alpha': 0.3,
-        'grid.linestyle': '--',
-        'xtick.major.width': 1.2,
-        'ytick.major.width': 1.2,
-        'xtick.minor.width': 1.0,
-        'ytick.minor.width': 1.0,
-        'xtick.major.size': 5.0,
-        'ytick.major.size': 5.0,
-        'xtick.minor.size': 3.0,
-        'ytick.minor.size': 3.0,
-        'xtick.direction': 'out',
-        'ytick.direction': 'out',
+        'lines.linewidth': 2.2,
+        'lines.markersize': 7,
+        'axes.grid': False,
         'axes.facecolor': 'white',
         'figure.facecolor': 'white',
         'savefig.facecolor': 'white',
         'figure.constrained_layout.use': False,
     })
-    
-    # Apply style customizations
     if style == 'dark':
         plt.rcParams.update({
-            'axes.facecolor': 'black',
-            'figure.facecolor': 'black',
-            'savefig.facecolor': 'black',
-            'axes.edgecolor': 'white',
-            'axes.labelcolor': 'white',
-            'xtick.color': 'white',
-            'ytick.color': 'white',
-            'text.color': 'white',
+            'axes.facecolor': 'black', 'figure.facecolor': 'black', 'savefig.facecolor': 'black',
+            'axes.edgecolor': 'white', 'axes.labelcolor': 'white',
+            'xtick.color': 'white', 'ytick.color': 'white', 'text.color': 'white',
         })
     elif style == 'presentation':
-        plt.rcParams.update({
-            'font.size': 14,
-            'axes.labelsize': 16,
-            'axes.titlesize': 16,
-            'lines.linewidth': 3.0,
-        })
-    
-    background_color = "#F0F0F0"
+        plt.rcParams.update({'font.size': 14, 'axes.labelsize': 16, 'axes.titlesize': 16, 'lines.linewidth': 3.0})
 
-    # 1. Filter and locate the sub-matrix for the specified isotope and MT
+    background_color = "#F5F5F5"
+    tick_grey = "#707070"
+
+    # ----------------------- data selection -----------------------
     filtered_mf34 = mf34_covmat.filter_by_isotope_reaction(isotope, mt)
-    
     if filtered_mf34.num_matrices == 0:
         raise ValueError(f"No matrices found for isotope={isotope}, MT={mt}")
 
-    # Get all available Legendre coefficients for this isotope/MT combination
     all_triplets = filtered_mf34._get_param_triplets()
-    available_legendre = sorted(list(set(t[2] for t in all_triplets if t[0] == isotope and t[1] == mt)))
-    
+    available_legendre = sorted({t[2] for t in all_triplets if t[0] == isotope and t[1] == mt})
     if not available_legendre:
         raise ValueError(f"No Legendre coefficients found for isotope={isotope}, MT={mt}")
 
-    # Find the energy group size (assume all matrices have the same size)
     G = filtered_mf34.matrices[0].shape[0] if filtered_mf34.matrices else 0
     if G == 0:
         raise ValueError("Number of energy groups (G) cannot be zero.")
 
-    # Handle different Legendre coefficient input formats
+    # parse legendre selection
     if isinstance(legendre_coeffs, tuple) and len(legendre_coeffs) == 2:
-        # Off-diagonal block case: (row_l, col_l)
         row_l, col_l = legendre_coeffs
-        if not isinstance(row_l, int) or not isinstance(col_l, int):
-            raise ValueError("For off-diagonal blocks, legendre_coeffs tuple must contain two integers: (row_l, col_l)")
-        
+        if row_l not in available_legendre or col_l not in available_legendre:
+            raise ValueError(f"Requested L not available for isotope={isotope}, MT={mt}")
         legendre_coeffs_sorted = [row_l, col_l]
         is_diagonal = False
-        
-        # Extract the specific off-diagonal block
-        l_triplets = [(isotope, mt, row_l), (isotope, mt, col_l)]
-        
-        # Verify both Legendre coefficients exist
-        for l_val in [row_l, col_l]:
-            if l_val not in available_legendre:
-                raise ValueError(f"Legendre coefficient L={l_val} not available for isotope={isotope}, MT={mt}")
-                
     else:
-        # Diagonal block logic
-        if isinstance(legendre_coeffs, int):
-            legendre_list = [legendre_coeffs]
-        else:
-            legendre_list = list(legendre_coeffs)
-            if not legendre_list:
-                # Use all available Legendre coefficients
-                legendre_list = available_legendre
-                
-        # Validate requested Legendre coefficients
+        legendre_list = [legendre_coeffs] if isinstance(legendre_coeffs, int) \
+                        else (list(legendre_coeffs) if legendre_coeffs else [])
+        if not legendre_list:
+            legendre_list = available_legendre
         for l_val in legendre_list:
             if l_val not in available_legendre:
                 raise ValueError(f"Legendre coefficient L={l_val} not available for isotope={isotope}, MT={mt}")
-        
-        legendre_coeffs_sorted = sorted(list(set(legendre_list)))
+        legendre_coeffs_sorted = sorted(set(legendre_list))
         is_diagonal = True
-        
-        # Create triplets for the diagonal blocks
-        l_triplets = [(isotope, mt, l_val) for l_val in legendre_coeffs_sorted]
 
-    if not l_triplets:
-        raise ValueError("No valid Legendre coefficient data to plot.")
-
-    # Determine if we're plotting a single block (single Legendre coefficient)
     single_block = (is_diagonal and len(legendre_coeffs_sorted) == 1) or (not is_diagonal)
 
-    # Get the appropriate matrix based on matrix_type
-    if matrix_type == "cov":
-        full_matrix = filtered_mf34.covariance_matrix
-        matrix_name = "Covariance"
-    else:  # matrix_type == "corr"
-        full_matrix = filtered_mf34.correlation_matrix
-        matrix_name = "Correlation"
+    # matrix choice
+    full_matrix_all = filtered_mf34.covariance_matrix if matrix_type == "cov" else filtered_mf34.correlation_matrix
+    matrix_name = "Covariance" if matrix_type == "cov" else "Correlation"
 
-    # Extract the submatrix for the requested Legendre coefficients
-    if is_diagonal:
-        # For diagonal blocks, extract blocks for all requested Legendre coefficients
-        indices = []
-        for l_val in legendre_coeffs_sorted:
-            # Find the index of this Legendre coefficient in the full matrix
-            triplet_idx = all_triplets.index((isotope, mt, l_val))
-            indices.extend(range(triplet_idx * G, (triplet_idx + 1) * G))
-        
-        M_full = full_matrix[np.ix_(indices, indices)]
+    # energy edges (raw)
+    energy_edges_raw = None
+    if getattr(filtered_mf34, "energy_grids", None):
+        energy_edges_raw = _normalize_edges(filtered_mf34.energy_grids[0], G)
+    if energy_edges_raw is None:
+        energy_edges_raw = np.linspace(1.0, float(G) + 1.0, G + 1)  # fallback 1..G+1 eV
+
+    # energy cropping by range (include bins that overlap with the range)
+    # A bin overlaps if its upper edge > emin AND its lower edge < emax
+    if energy_range is not None:
+        emin, emax = energy_range
+        if not (np.isfinite(emin) and np.isfinite(emax)) or emin >= emax:
+            raise ValueError("energy_range must be a tuple (emin, emax) with emin < emax.")
+        # For each bin i: lower edge = energy_edges_raw[i], upper edge = energy_edges_raw[i+1]
+        keep_mask = (energy_edges_raw[1:] > float(emin)) & (energy_edges_raw[:-1] < float(emax))
     else:
-        # For off-diagonal blocks, extract the specific block
-        row_triplet_idx = all_triplets.index((isotope, mt, row_l))
-        col_triplet_idx = all_triplets.index((isotope, mt, col_l))
-        
-        row_indices = list(range(row_triplet_idx * G, (row_triplet_idx + 1) * G))
-        col_indices = list(range(col_triplet_idx * G, (col_triplet_idx + 1) * G))
-        
-        M_full = full_matrix[np.ix_(row_indices, col_indices)]
+        keep_mask = np.ones(G, dtype=bool)
+    keep_idx = np.where(keep_mask)[0]
+    if keep_idx.size == 0:
+        raise ValueError("energy_range removed all groups; nothing to plot.")
 
-    # 2. Setup figure and layout based on whether we show uncertainties
+    edges_sel_raw = energy_edges_raw[keep_idx[0]: keep_idx[-1] + 2]
+
+    # ----------------------- extract submatrix with energy crop -----------------------
+    def _block_indices_for_L(L):
+        t = all_triplets.index((isotope, mt, L))
+        base = t * G
+        return base + keep_idx
+
+    if is_diagonal:
+        gather = []
+        for L in legendre_coeffs_sorted:
+            gather.extend(_block_indices_for_L(L))
+        M_full = full_matrix_all[np.ix_(gather, gather)]
+    else:
+        r_idx = _block_indices_for_L(row_l)
+        c_idx = _block_indices_for_L(col_l)
+        M_full = full_matrix_all[np.ix_(r_idx, c_idx)]
+
+    # ----------------------- transformed coordinates -----------------------
+    chosen_scale = _choose_scale(edges_sel_raw, scale)
+    base_transformed = _transform_edges(edges_sel_raw, chosen_scale)
+
+    if is_diagonal:
+        n_blocks = len(legendre_coeffs_sorted)
+        xedges, x_ranges, per_block_transformed = _concat_blocks(base_transformed, n_blocks)
+        yedges = xedges.copy()
+        y_ranges = x_ranges
+    else:
+        xedges = (base_transformed - base_transformed[0]).copy()
+        yedges = (base_transformed - base_transformed[0]).copy()
+        x_ranges = [(xedges[0], xedges[-1])]
+        y_ranges = [(yedges[0], yedges[-1])]
+        per_block_transformed = [xedges]
+
+    # ----------------------- figure & axes -----------------------
     if show_uncertainties:
-        # Create figure with uncertainty plots
-        plt.ioff()
-        
-        uncertainty_height_ratio = 0.2
-        # For off-diagonal blocks, show both row and column uncertainties
-        num_legendre = 2 if not is_diagonal else len(legendre_coeffs_sorted)
-        fig_height = figsize[1] * (1 + uncertainty_height_ratio)
-        
-        plt.close('all')
-        
-        fig = plt.figure(figsize=(figsize[0], fig_height), dpi=dpi)
-        
-        gs = GridSpec(2, num_legendre, figure=fig,
-                     height_ratios=[uncertainty_height_ratio, 1],
-                     hspace=0.02, wspace=0.01)
-        
-        uncertainty_axes = []
-        for i in range(num_legendre):
-            ax_u = fig.add_subplot(gs[0, i])
-            uncertainty_axes.append(ax_u)
-            
-        ax_heatmap = fig.add_subplot(gs[1, :])
+        if is_diagonal:
+            ncols = len(legendre_coeffs_sorted)
+            fig = plt.figure(figsize=(figsize[0], figsize[1] * (1 + 0.18)), dpi=dpi)
+            gs = GridSpec(2, ncols, figure=fig, height_ratios=[0.16, 1.0], hspace=0.08, wspace=0.02)
+            uncertainty_axes = [fig.add_subplot(gs[0, i]) for i in range(ncols)]
+            ax_heatmap = fig.add_subplot(gs[1, :])
+        else:
+            fig = plt.figure(figsize=(figsize[0], figsize[1] * (1 + 0.16)), dpi=dpi)
+            gs = GridSpec(2, 1, figure=fig, height_ratios=[0.16, 1.0], hspace=0.08)
+            uncertainty_axes = [fig.add_subplot(gs[0, 0])]
+            ax_heatmap = fig.add_subplot(gs[1, 0])
     else:
         plt.close('all')
         if ax is None:
@@ -554,379 +601,302 @@ def plot_mf34_covariance_heatmap(
             fig = ax_heatmap.get_figure()
         uncertainty_axes = None
 
-    # 3. Mask zeros and setup display
+    # ----------------------- heatmap -----------------------
     M = np.ma.masked_where(M_full == 0.0, M_full)
     ax_heatmap.set_facecolor(background_color)
     ax_heatmap.grid(False, which="both")
-    for axis_obj in (ax_heatmap.xaxis, ax_heatmap.yaxis):
-        axis_obj.grid(False)
+    ax_heatmap.set_aspect('auto')
 
-    # 4. Color normalization and colormap setup
-    # Handle colormap selection
     if cmap is None:
-        # Use default colormaps based on matrix type
-        if matrix_type == "corr":
-            colormap = plt.get_cmap("RdYlGn").copy()
-        else:
-            colormap = plt.get_cmap("viridis").copy()
+        colormap = plt.get_cmap("RdYlGn").copy() if matrix_type == "corr" else plt.get_cmap("viridis").copy()
     else:
-        # Use user-specified colormap
-        if isinstance(cmap, str):
-            try:
-                colormap = plt.get_cmap(cmap).copy()
-            except ValueError:
-                raise ValueError(f"Invalid colormap name: '{cmap}'. "
-                               f"Please use a valid matplotlib colormap name.")
-        elif hasattr(cmap, 'copy'):
-            # Assume it's already a matplotlib colormap object
-            colormap = cmap.copy()
-        else:
-            raise ValueError("cmap must be a string name or matplotlib Colormap object")
-    
+        colormap = plt.get_cmap(cmap).copy() if isinstance(cmap, str) else cmap.copy()
     colormap.set_bad(color=background_color)
 
     if vmax is None or vmin is None:
         if matrix_type == "corr":
-            # For correlation matrices, use symmetric range around 0
             absmax = np.nanmax(np.abs(M_full)) if M_full.size > 0 else 1.0
             vmax_calc = min(1.0, absmax) if vmax is None else vmax
             vmin_calc = max(-1.0, -absmax) if vmin is None else vmin
         else:
-            # For covariance matrices, use 0 to max
             matrix_max = np.nanmax(M_full) if M_full.size > 0 else 1.0
             vmax_calc = matrix_max if vmax is None else vmax
             vmin_calc = 0.0 if vmin is None else vmin
     else:
-        vmax_calc = vmax
-        vmin_calc = vmin
-        
-    # Handle edge cases for normalization
+        vmax_calc, vmin_calc = vmax, vmin
+
     if np.isclose(vmin_calc, vmax_calc, atol=1e-10):
         if np.isclose(vmin_calc, 0.0, atol=1e-10):
-            vmin_calc = -1e-6
-            vmax_calc = 1e-6
+            vmin_calc, vmax_calc = -1e-6, 1e-6
         else:
-            padding = abs(vmax_calc) * 0.01
-            vmin_calc = vmax_calc - padding
-            vmax_calc = vmax_calc + padding
+            pad = abs(vmax_calc) * 0.01
+            vmin_calc, vmax_calc = vmax_calc - pad, vmax_calc + pad
     elif vmin_calc >= vmax_calc:
-        vmin_calc = vmax_calc - 1e-6 if vmax_calc != 0 else -1e-6
-    
-    # Choose normalization based on matrix type
-    if matrix_type == "corr":
-        vcenter = 0.0
-        if vcenter <= vmin_calc:
-            vcenter = vmin_calc + (vmax_calc - vmin_calc) * 0.1
-        elif vcenter >= vmax_calc:
-            vcenter = vmax_calc - (vmax_calc - vmin_calc) * 0.1
-        norm = TwoSlopeNorm(vmin=vmin_calc, vcenter=vcenter, vmax=vmax_calc)
-    else:
-        # For covariance matrices, use linear normalization
-        norm = None
+        vmin_calc = vmax_calc - (1e-6 if vmax_calc != 0 else 1e-6)
 
-    # 5. Draw the heatmap matrix
-    # Remove 'cmap' from imshow_kwargs to avoid conflict
-    plot_kwargs = {k: v for k, v in imshow_kwargs.items()
-                   if not k.startswith("_") and k not in ["ax", "cmap"]}
-    
-    # Use regular imshow for all cases (single or multiple blocks)
-    im = ax_heatmap.imshow(M, cmap=colormap, norm=norm,
-                           origin="upper", interpolation="nearest", **plot_kwargs)
+    norm = TwoSlopeNorm(vmin=vmin_calc, vcenter=0.0, vmax=vmax_calc) if matrix_type == "corr" else None
 
-    # Draw block boundaries only for multiple blocks
-    if not single_block and is_diagonal:
-        matrix_size = len(legendre_coeffs_sorted) * G
-        # Draw block boundaries
-        for g_val in range(0, matrix_size + 1, G):
-            ax_heatmap.axhline(g_val - 0.5, color="black", lw=0.2)
-            ax_heatmap.axvline(g_val - 0.5, color="black", lw=0.2)
+    plot_kwargs = {k: v for k, v in imshow_kwargs.items() if not k.startswith("_")}
+    for bad in ("origin", "interpolation", "extent", "cmap"):
+        plot_kwargs.pop(bad, None)
 
-    # 6. Ticks, labels for heatmap
-    # Always show Legendre coefficients consistently, regardless of single or multiple blocks
+    X, Y = np.meshgrid(xedges, yedges)
+    im = ax_heatmap.pcolormesh(X, Y, M, cmap=colormap, norm=norm, shading='flat', **plot_kwargs)
+
+    ax_heatmap.set_xlim(xedges[0], xedges[-1])
+    ax_heatmap.set_ylim(yedges[0], yedges[-1])
+    ax_heatmap.invert_yaxis()  # image-style orientation
+
+    # block boundaries
+    if is_diagonal and len(legendre_coeffs_sorted) > 1:
+        for i in range(1, len(legendre_coeffs_sorted)):
+            edge = x_ranges[i][0]
+            ax_heatmap.axvline(edge, color="black", lw=0.3)
+            ax_heatmap.axhline(edge, color="black", lw=0.3)
+
+    # L ticks on BOTH primary axes
+    def _centers(ranges):
+        return [(a+b)*0.5 for (a,b) in ranges]
+
     if single_block:
-        # For single blocks, show the single Legendre coefficient in the center
-        centres = [G / 2 - 0.5]  # Center of the matrix
-        
         if is_diagonal:
-            # Single diagonal block
-            l_val = legendre_coeffs_sorted[0]
-            x_labels = [str(l_val)]
-            y_labels = [str(l_val)]
+            centers = _centers([x_ranges[0]])
+            ltxt = [str(legendre_coeffs_sorted[0])]
+            ax_heatmap.set_xticks(centers); ax_heatmap.set_xticklabels(ltxt)
+            ax_heatmap.set_yticks(centers); ax_heatmap.set_yticklabels(ltxt)
         else:
-            # Off-diagonal block between two Legendre coefficients
-            x_labels = [str(col_l)]  # X-axis shows second number of tuple
-            y_labels = [str(row_l)]  # Y-axis shows first number of tuple
-        
-        ax_heatmap.set_xticks(centres)
-        ax_heatmap.set_yticks(centres)
-        ax_heatmap.set_xticklabels(x_labels, rotation=0, ha="center")
-        ax_heatmap.set_yticklabels(y_labels)
-        
-        ax_heatmap.set_xlabel("Legendre coefficient")
-        ax_heatmap.set_ylabel("Legendre coefficient")
+            centers = _centers([x_ranges[0]])
+            ax_heatmap.set_xticks(centers); ax_heatmap.set_xticklabels([str(col_l)])
+            ax_heatmap.set_yticks(centers); ax_heatmap.set_yticklabels([str(row_l)])
     else:
-        # For multiple blocks, show Legendre coefficients
-        centres = [i * G + (G - 1) / 2 for i in range(len(legendre_coeffs_sorted))]
-        l_labels = [str(l_val) for l_val in legendre_coeffs_sorted]
-        
-        ax_heatmap.set_xticks(centres)
-        ax_heatmap.set_yticks(centres)
-        ax_heatmap.set_xticklabels(l_labels, rotation=0, ha="center")
-        ax_heatmap.set_yticklabels(l_labels)
-        
-        ax_heatmap.set_xlabel("Legendre coefficient")
-        ax_heatmap.set_ylabel("Legendre coefficient")
-    
-    # Set tick parameters for heatmap
+        centers = _centers(x_ranges)
+        l_labels = [str(l) for l in legendre_coeffs_sorted]
+        ax_heatmap.set_xticks(centers); ax_heatmap.set_xticklabels(l_labels)
+        ax_heatmap.set_yticks(centers); ax_heatmap.set_yticklabels(l_labels)
+
+    ax_heatmap.set_xlabel("Legendre coefficient L")
+    ax_heatmap.set_ylabel("Legendre coefficient L")
     ax_heatmap.tick_params(axis="both", which="major", length=0, pad=5)
 
-    # Set title
+    # ----------------------- energy ticks (ALL sides) -----------------------
+    # Build energy ticks in local coords for each block
+    if is_diagonal:
+        # one block's tick pattern reused
+        pos_local_all, labels_all = _energy_ticks(edges_sel_raw, scale)
+        # top/right (with labels); bottom/left (ticks only)
+        top_ticks = []
+        top_labels = []
+        side_ticks = []
+        side_labels = []
+        for i, xr in enumerate(x_ranges):
+            pos_g = pos_local_all + xr[0]
+            # For top (x-axis): add ticks but filter labels
+            top_ticks.extend(pos_g.tolist())
+            # Filter out min and max labels for x-axis (top)
+            filtered_top_labels = []
+            for lbl in labels_all:
+                # Remove first (min) and last (max) non-empty labels
+                if lbl and (lbl == labels_all[0] or lbl == labels_all[-1]):
+                    filtered_top_labels.append("")
+                else:
+                    filtered_top_labels.append(lbl)
+            top_labels.extend(filtered_top_labels)
+            
+            # For right (y-axis): show max label only in the last block
+            is_last_block = (i == len(x_ranges) - 1)
+            side_ticks.extend(pos_g.tolist())
+            filtered_side_labels = []
+            for j, lbl in enumerate(labels_all):
+                # Keep max label only in last block; for other blocks, remove it
+                if lbl and lbl == labels_all[-1]:  # max label
+                    filtered_side_labels.append(lbl if is_last_block else "")
+                else:
+                    filtered_side_labels.append(lbl)
+            side_labels.extend(filtered_side_labels)
+    else:
+        pos_local_all, labels_all = _energy_ticks(edges_sel_raw, scale)
+        pos_g = pos_local_all + xedges[0]
+        top_ticks = pos_g.tolist()
+        side_ticks = pos_g.tolist()
+        
+        # Filter labels for top (x-axis): remove min and max
+        top_labels = []
+        for lbl in labels_all:
+            if lbl and (lbl == labels_all[0] or lbl == labels_all[-1]):
+                top_labels.append("")
+            else:
+                top_labels.append(lbl)
+        
+        # For single block, keep all labels on right (y-axis)
+        side_labels = labels_all
+
+    # Create twin axes
+    ax_top = ax_heatmap.twiny()
+    ax_right = ax_heatmap.twinx()
+    # Extra twins for bottom/left ticks (labels off)
+    ax_bottom = ax_heatmap.twiny()
+    ax_left = ax_heatmap.twinx()
+
+    # --- TOP (labeled) ---
+    ax_top.set_xlim(ax_heatmap.get_xlim())
+    ax_top.set_xticks(top_ticks); ax_top.set_xticklabels(top_labels, fontsize=9, color=tick_grey)
+    ax_top.tick_params(axis='x', direction='out', length=3, colors=tick_grey, pad=2, top=True, bottom=False)
+    ax_top.spines['top'].set_visible(True); ax_top.spines['top'].set_linewidth(0.6); ax_top.spines['top'].set_color(tick_grey)
+    ax_top.grid(False)
+
+    # --- BOTTOM (ticks only) ---
+    ax_bottom.set_xlim(ax_heatmap.get_xlim())
+    ax_bottom.xaxis.set_ticks_position('bottom')
+    ax_bottom.spines['bottom'].set_position(('outward', 0))
+    ax_bottom.set_xticks(top_ticks); ax_bottom.set_xticklabels(['']*len(top_ticks))
+    ax_bottom.tick_params(axis='x', direction='out', length=2, colors=tick_grey, pad=2, top=False, bottom=True)
+    ax_bottom.spines['bottom'].set_visible(False)  # just tick marks
+    ax_bottom.grid(False)
+
+    # --- RIGHT (labeled, inverted-Y-aware) ---
+    ax_right.set_ylim(ax_heatmap.get_ylim())
+    # flip tick positions so high energy appears at TOP with inverted y
+    y0, y1 = yedges[0], yedges[-1]
+    # Mirror the tick positions for inverted y-axis
+    right_ticks = [(y0 + y1) - t for t in side_ticks]
+    # Mirror the labels: reverse the entire list so first label (low energy) goes to bottom (high y-value)
+    right_labels = list(reversed(side_labels))
+    ax_right.set_yticks(right_ticks); ax_right.set_yticklabels(right_labels, fontsize=9, color=tick_grey)
+    ax_right.tick_params(axis='y', direction='out', length=3, colors=tick_grey, pad=2, right=True, left=False)
+    ax_right.spines['right'].set_visible(True); ax_right.spines['right'].set_linewidth(0.6); ax_right.spines['right'].set_color(tick_grey)
+    ax_right.grid(False)
+
+    # --- LEFT (ticks only) ---
+    ax_left.set_ylim(ax_heatmap.get_ylim())
+    ax_left.yaxis.set_ticks_position('left')
+    ax_left.spines['left'].set_position(('outward', 0))
+    left_ticks = [(y0 + y1) - t for t in side_ticks]  # mirror same as right
+    ax_left.set_yticks(left_ticks); ax_left.set_yticklabels(['']*len(left_ticks))
+    ax_left.tick_params(axis='y', direction='out', length=2, colors=tick_grey, pad=2, left=True, right=False)
+    ax_left.spines['left'].set_visible(False)
+    ax_left.grid(False)
+
+    # ----------------------- uncertainties -----------------------
+    if show_uncertainties and uncertainty_axes is not None:
+        diag_sqrt = np.sqrt(np.diag(filtered_mf34.covariance_matrix))
+
+        def _sigma_pct_for_L(L: int) -> np.ndarray:
+            t_idx = all_triplets.index((isotope, mt, L))
+            return 100.0 * diag_sqrt[t_idx*G:(t_idx+1)*G][keep_idx]
+
+        def _draw_ygrid_inside(ax_u, xr, ymax):
+            top = float(np.ceil(ymax / 10.0) * 10.0)
+            grid_vals = np.arange(0.0, top + 1e-9, 10.0)
+            for y in grid_vals:
+                ax_u.axhline(y, color=tick_grey, lw=0.6, alpha=0.35, zorder=0)
+            x_label = xr[1] - 0.01 * (xr[1] - xr[0])
+            for y in grid_vals:
+                ax_u.text(x_label, y, f"{int(y)}", ha="right", va="center",
+                          color=tick_grey, fontsize=8, alpha=0.9, zorder=2)
+
+        # precompute energy ticks for uncertainty X (no labels)
+        if is_diagonal:
+            pos_local_u, _labels_ignore = _energy_ticks(edges_sel_raw, scale)
+            for i, (ax_u, L, block_tx_edges, xr) in enumerate(zip(
+                    uncertainty_axes, legendre_coeffs_sorted, per_block_transformed, x_ranges)):
+                # Use LOCAL coordinates for this subplot (each subplot has its own coord system)
+                # Use bin edges (not midpoints) for proper step plotting that covers full bins
+                xs_edges_local = block_tx_edges - xr[0]
+                sigma_pct = _sigma_pct_for_L(L)
+
+                ax_u.set_facecolor(background_color)
+                ax_u.grid(False)
+
+                # draw line - only if data exists and is not all zeros
+                # Use 'post' stepping: each value extends from its edge to the next edge (covers full bin)
+                if sigma_pct.size > 0 and np.any(sigma_pct > 0):
+                    ax_u.step(xs_edges_local[:-1], sigma_pct, where='post', linewidth=1.4, color=f"C{i}", zorder=3)
+                    y_max = float(np.nanmax(sigma_pct))
+                else:
+                    # If no data or all zeros, set a reasonable default
+                    y_max = 5.0
+                
+                # Ensure minimum y_max for visibility
+                y_max = max(y_max, 1.0)
+                pad = max(0.08 * y_max, 0.4)
+                ax_u.set_ylim(0.0, np.ceil((y_max + pad)/10.0)*10.0)
+                # Set xlim using local coordinates (0 to width)
+                ax_u.set_xlim(0, xr[1] - xr[0])
+
+                # x ticks aligned to energy ticks, but no labels (local coords)
+                ax_u.set_xticks(pos_local_u)
+                ax_u.set_xticklabels([])
+                ax_u.tick_params(axis='x', direction='in', length=3, colors=tick_grey, pad=2)
+
+                # y-axis inside 10% grid (kept) - use local x-range
+                _draw_ygrid_inside(ax_u, (0, xr[1] - xr[0]), ax_u.get_ylim()[1])
+                ax_u.set_yticks([])
+
+                if i == 0:
+                    ax_u.set_ylabel('Unc. (%)', fontsize=10, color='black')
+
+                # clean spines; remove titles (per request)
+                for side in ('left','right','top','bottom'):
+                    ax_u.spines[side].set_visible(False)
+        else:
+            ax_u = uncertainty_axes[0]
+            # Use bin edges (not midpoints) for proper step plotting that covers full bins
+            sigma_pct = _sigma_pct_for_L(col_l)
+
+            ax_u.set_facecolor(background_color); ax_u.grid(False)
+            
+            # draw line - only if data exists and is not all zeros
+            # Use 'post' stepping: each value extends from its edge to the next edge (covers full bin)
+            if sigma_pct.size > 0 and np.any(sigma_pct > 0):
+                ax_u.step(xedges[:-1], sigma_pct, where='post', linewidth=1.4, color='C0', zorder=3)
+                y_max = float(np.nanmax(sigma_pct))
+            else:
+                # If no data or all zeros, set a reasonable default
+                y_max = 5.0
+            
+            # Ensure minimum y_max for visibility
+            y_max = max(y_max, 1.0)
+            pad = max(0.08 * y_max, 0.4)
+            ax_u.set_ylim(0.0, np.ceil((y_max + pad)/10.0)*10.0)
+            ax_u.set_xlim(xedges[0], xedges[-1])
+
+            pos_local_u, _ = _energy_ticks(edges_sel_raw, scale)
+            ax_u.set_xticks(pos_local_u + xedges[0])
+            ax_u.set_xticklabels([])
+            ax_u.tick_params(axis='x', direction='in', length=3, colors=tick_grey, pad=2)
+
+            _draw_ygrid_inside(ax_u, (xedges[0], xedges[-1]), ax_u.get_ylim()[1])
+            ax_u.set_yticks([])
+            ax_u.set_ylabel('Unc. (%)', fontsize=10)
+            for side in ('left','right','top','bottom'):
+                ax_u.spines[side].set_visible(False)
+
+    # ----------------------- title, layout, colorbar -----------------------
     if style not in {"paper", "publication"}:
         if single_block:
-            # For single blocks, include Legendre coefficient in title
-            if is_diagonal:
-                l_val = legendre_coeffs_sorted[0]
-                title_text = f"{zaid_to_symbol(isotope)} MT:{mt}   L={l_val} {matrix_name}"
-            else:
-                title_text = f"{zaid_to_symbol(isotope)} MT:{mt}   L={row_l}-{col_l} {matrix_name}"
+            ttl = (f"{zaid_to_symbol(isotope)} MT:{mt}   L={legendre_coeffs_sorted[0]} {matrix_name}"
+                   if is_diagonal else f"{zaid_to_symbol(isotope)} MT:{mt}   L={row_l}-{col_l} {matrix_name}")
         else:
-            # For multiple blocks, show coefficient range
-            l_labels = [str(l_val) for l_val in legendre_coeffs_sorted]
-            title_text = f"{zaid_to_symbol(isotope)} MT:{mt}   L: {', '.join(l_labels)} {matrix_name}"
-            
+            ttl = f"{zaid_to_symbol(isotope)} MT:{mt}   L: {', '.join(str(l) for l in legendre_coeffs_sorted)} {matrix_name}"
         if show_uncertainties:
-            fig.suptitle(title_text)
+            fig.suptitle(ttl, y=0.985)
         else:
-            ax_heatmap.set_title(title_text)
-    ax_heatmap.tick_params(axis="both", which="major", length=0)
+            ax_heatmap.set_title(ttl)
 
-    # 7. Draw uncertainty plots (if requested)
-    if show_uncertainties and uncertainty_axes is not None:
-        # Setup energy grid - try to get from the first available matrix
-        energy_grid = None
-        if filtered_mf34.energy_grids:
-            energy_grid = filtered_mf34.energy_grids[0]
-        
-        if energy_grid is not None and len(energy_grid) == G + 1:
-            energy_grid_mids = [(energy_grid[i] + energy_grid[i+1]) / 2 for i in range(G)]
-            xs = energy_grid_mids
-            use_log_scale = True
-        else:
-            xs = list(range(1, G+1))
-            use_log_scale = False
-        
-        # Get diagonal uncertainties from the filtered covariance matrix
-        diag_sqrt = np.sqrt(np.diag(filtered_mf34.covariance_matrix))
-        line_props = {'color': 'black', 'linewidth': 0.2}
-
-        if is_diagonal:
-            # Process each Legendre coefficient independently for diagonal case
-            for i, (ax_uncert, l_val) in enumerate(zip(uncertainty_axes, legendre_coeffs_sorted)):
-                # Find the index of this Legendre coefficient
-                triplet_idx = all_triplets.index((isotope, mt, l_val))
-                sigma = diag_sqrt[triplet_idx*G : (triplet_idx+1)*G]
-                sigma_pct = sigma * 100
-                
-                ax_uncert.set_facecolor(background_color)
-                ax_uncert.grid(True, which="major", axis='y', linestyle='--', color='gray', alpha=0.3)
-                ax_uncert.step(xs, sigma_pct, where='mid', linewidth=1.5, color=f'C{i}')
-                
-                if use_log_scale:
-                    ax_uncert.set_xscale('log')
-                
-                y_data_min, y_data_max = 0, max(sigma_pct) if len(sigma_pct) > 0 and max(sigma_pct) > 0 else 5
-                padding = 0.1 * (y_data_max - y_data_min)
-                ax_uncert.set_ylim(y_data_min, y_data_max + padding)
-                
-                x_min, x_max = min(xs), max(xs)
-                ax_uncert.set_xlim(x_min, x_max)
-                
-                ax_uncert.set_xticklabels([])
-                ax_uncert.set_xticks([])
-                # Explicitly hide x-axis ticks and labels
-                ax_uncert.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
-                
-                # Custom tick setup for y-axis (same as heatmap.py)
-                y_max = y_data_max
-                if y_max <= 5:
-                    yticks = [0, 1, 2, 3, 4, 5]
-                elif y_max <= 10:
-                    yticks = [0, 2, 4, 6, 8, 10]
-                elif y_max <= 20:
-                    yticks = [0, 5, 10, 15, 20]
-                elif y_max <= 50:
-                    yticks = [0, 10, 20, 30, 40, 50]
-                else:
-                    step = max(5, int(y_max / 5 / 5) * 5)
-                    yticks = list(range(0, int(y_max * 1.1) + step, step))
-                    
-                yticks = [int(round(tick)) for tick in yticks]
-                yticks = [tick for tick in yticks if tick <= y_data_max + padding]
-                yticks = sorted(set(yticks))
-                
-                if len(yticks) < 2:
-                    yticks = [0, int(round(y_data_max + padding))]
-                
-                ax_uncert.set_yticks(yticks)
-                ax_uncert.set_yticklabels([])
-                ax_uncert.tick_params(axis='y', which='major', direction='in', length=0, color='none')
-                
-                if i == 0:
-                    ax_uncert.set_ylabel('% Unc.', fontsize='small')
-                
-                ax_uncert.spines['bottom'].set_visible(False)
-                ax_uncert.spines['top'].set_visible(True)
-                ax_uncert.spines['top'].set(**line_props)
-
-                if i == 0: 
-                    ax_uncert.spines['left'].set_visible(True)
-                    ax_uncert.spines['left'].set(**line_props)
-                else: 
-                    ax_uncert.spines['left'].set_visible(False)
-
-                if i == len(uncertainty_axes) - 1:
-                    ax_uncert.spines['right'].set_visible(True)
-                    ax_uncert.spines['right'].set(**line_props)
-                else:
-                    ax_uncert.spines['right'].set_visible(False)
-
-                # Add internal ytick values as text labels
-                for ytick in yticks:
-                    if ytick > 0:
-                        ax_uncert.text(
-                            xs[0] if not use_log_scale else xs[0] * 1.05,
-                            ytick,
-                            f"{ytick}",
-                            fontsize='x-small',
-                            ha='left',
-                            va='center',
-                            alpha=0.7
-                        )
-        else:
-            # For off-diagonal blocks, show both row and column L uncertainties
-            l_vals_for_uncertainties = [row_l, col_l]
-            l_labels_for_uncertainties = [str(row_l), str(col_l)]
-            
-            for i, (ax_uncert, l_val, l_label) in enumerate(zip(uncertainty_axes, l_vals_for_uncertainties, l_labels_for_uncertainties)):
-                # Find the index of this Legendre coefficient
-                triplet_idx = all_triplets.index((isotope, mt, l_val))
-                sigma = diag_sqrt[triplet_idx*G : (triplet_idx+1)*G]
-                sigma_pct = sigma * 100
-                
-                ax_uncert.set_facecolor(background_color)
-                ax_uncert.grid(True, which="major", axis='y', linestyle='--', color='gray', alpha=0.3)
-                ax_uncert.step(xs, sigma_pct, where='mid', linewidth=1.5, color=f'C{i}')
-                
-                if use_log_scale:
-                    ax_uncert.set_xscale('log')
-                
-                y_data_min, y_data_max = 0, max(sigma_pct) if len(sigma_pct) > 0 and max(sigma_pct) > 0 else 5
-                padding = 0.1 * (y_data_max - y_data_min)
-                ax_uncert.set_ylim(y_data_min, y_data_max + padding)
-                
-                x_min, x_max = min(xs), max(xs)
-                ax_uncert.set_xlim(x_min, x_max)
-                
-                ax_uncert.set_xticklabels([])
-                ax_uncert.set_xticks([])
-                # Explicitly hide x-axis ticks and labels
-                ax_uncert.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
-                
-                # Custom tick setup for y-axis
-                y_max = y_data_max
-                if y_max <= 5:
-                    yticks = [0, 1, 2, 3, 4, 5]
-                elif y_max <= 10:
-                    yticks = [0, 2, 4, 6, 8, 10]
-                elif y_max <= 20:
-                    yticks = [0, 5, 10, 15, 20]
-                elif y_max <= 50:
-                    yticks = [0, 10, 20, 30, 40, 50]
-                else:
-                    step = max(5, int(y_max / 5 / 5) * 5)
-                    yticks = list(range(0, int(y_max * 1.1) + step, step))
-                    
-                yticks = [int(round(tick)) for tick in yticks]
-                yticks = [tick for tick in yticks if tick <= y_data_max + padding]
-                yticks = sorted(set(yticks))
-                
-                if len(yticks) < 2:
-                    yticks = [0, int(round(y_data_max + padding))]
-                
-                ax_uncert.set_yticks(yticks)
-                ax_uncert.set_yticklabels([])
-                ax_uncert.tick_params(axis='y', which='major', direction='in', length=0, color='none')
-                
-                # First plot gets y-axis label
-                if i == 0:
-                    ax_uncert.set_ylabel('% Unc.', fontsize='small')
-                
-                # Add title to identify which L this uncertainty belongs to
-                ax_uncert.set_title(f'L {l_label}', fontsize='small', pad=2)
-                
-                # Spine setup for two uncertainty plots
-                ax_uncert.spines['bottom'].set_visible(False)
-                ax_uncert.spines['top'].set_visible(True)
-                ax_uncert.spines['top'].set(**line_props)
-
-                if i == 0: 
-                    ax_uncert.spines['left'].set_visible(True)
-                    ax_uncert.spines['left'].set(**line_props)
-                    ax_uncert.spines['right'].set_visible(False)
-                else: 
-                    ax_uncert.spines['left'].set_visible(False)
-                    ax_uncert.spines['right'].set_visible(True)
-                    ax_uncert.spines['right'].set(**line_props)
-
-                # Add internal ytick values as text labels
-                for ytick in yticks:
-                    if ytick > 0:
-                        ax_uncert.text(
-                            xs[0] if not use_log_scale else xs[0] * 1.05,
-                            ytick,
-                            f"{ytick}",
-                            fontsize='x-small',
-                            ha='left',
-                            va='center',
-                            alpha=0.7
-                        )
-
-    # 8. Layout configuration (same as heatmap.py)
-    num_legendre = 2 if (not is_diagonal and show_uncertainties) else (1 if not is_diagonal else len(legendre_coeffs_sorted))
-    bottom_margin_config = {
-        1: 0.12, 2: 0.15, 3: 0.16, 4: 0.17, 5: 0.18, 6: 0.19, 7: 0.20,
-    }
+    num_legendre = len(legendre_coeffs_sorted) if is_diagonal else 1
+    bottom_margin_config = {1: 0.12, 2: 0.15, 3: 0.16, 4: 0.17, 5: 0.18, 6: 0.19, 7: 0.20}
     bottom_margin = bottom_margin_config.get(num_legendre, bottom_margin_config[7])
-    
-    if show_uncertainties:
-        plt.ion()
-        fig.subplots_adjust(left=0.12, right=0.90, top=0.93, bottom=bottom_margin)
-    else:
-        fig.subplots_adjust(left=0.12, right=0.88, top=0.95, bottom=bottom_margin)
 
-    # 9. Color-bar (same as heatmap.py)
-    fig.canvas.draw()
-    heatmap_pos = ax_heatmap.get_position()
-    
-    cbar_horizontal_offset = 0.03
-    
-    if show_uncertainties and uncertainty_axes is not None:
-        cbar_ax = fig.add_axes([
-            heatmap_pos.x1 + cbar_horizontal_offset,
-            heatmap_pos.y0,
-            0.03,
-            heatmap_pos.height
-        ])
+    if show_uncertainties:
+        fig.subplots_adjust(left=0.12, right=0.94, top=0.92, bottom=bottom_margin)
     else:
-        cbar_ax = fig.add_axes([
-            heatmap_pos.x1 + cbar_horizontal_offset,
-            heatmap_pos.y0,
-            0.03,
-            heatmap_pos.height
-        ])
-    
+        fig.subplots_adjust(left=0.12, right=0.94, top=0.94, bottom=bottom_margin)
+
+    fig.canvas.draw()
+    pos = ax_heatmap.get_position()
+    # push colorbar farther right (room for right labels)
+    cbar_ax = fig.add_axes([pos.x1 + 0.10, pos.y0, 0.03, pos.height])
     cbar = fig.colorbar(im, cax=cbar_ax)
     cbar.set_label(matrix_name)
 
-    # Always return the figure object for consistency
     return fig

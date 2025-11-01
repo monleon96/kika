@@ -440,3 +440,142 @@ class Ace:
             raise RuntimeError("MT=1 not found in cross section data")
         for E, entry in zip(rx1.energies, rx1._xs_entries):
             entry.value = energy_mt1.get(E, 0.0)
+    
+    def to_plot_data(self, data_type: str, mt: int, **kwargs):
+        """
+        Extract plot data from ACE file in a format compatible with PlotBuilder.
+        
+        Parameters
+        ----------
+        data_type : str
+            Type of data to extract: 'cross_section' (or 'xs') or 'angular' (or 'ang')
+        mt : int
+            MT reaction number
+        **kwargs
+            Additional parameters:
+            - For angular distributions: 'energy' (incident energy in MeV)
+            - For styling: 'label', 'color', 'linestyle', etc.
+            
+        Returns
+        -------
+        PlotData
+            PlotData object compatible with PlotBuilder
+            
+        Examples
+        --------
+        >>> ace = mcnpy.read_ace('fe56.ace')
+        >>> 
+        >>> # Extract cross section data (full name or alias)
+        >>> xs_data = ace.to_plot_data('cross_section', mt=2)
+        >>> xs_data = ace.to_plot_data('xs', mt=2)  # Same as above
+        >>> 
+        >>> # Extract angular distribution data (full name or alias)
+        >>> ang_data = ace.to_plot_data('angular', mt=2, energy=5.0)
+        >>> ang_data = ace.to_plot_data('ang', mt=2, energy=5.0)  # Same as above
+        >>> 
+        >>> # Use with PlotBuilder
+        >>> from mcnpy.plotting import PlotBuilder
+        >>> fig = (PlotBuilder()
+        ...        .add_data(xs_data)
+        ...        .set_labels(title='Fe-56 Elastic XS', x_label='Energy (MeV)', y_label='Cross Section (barns)')
+        ...        .set_scales(log_x=True, log_y=True)
+        ...        .build())
+        """
+        # Normalize data_type (accept aliases)
+        data_type_lower = data_type.lower()
+        if data_type_lower in ('cross_section', 'xs'):
+            return self._to_plot_data_cross_section(mt, **kwargs)
+        elif data_type_lower in ('angular', 'ang'):
+            return self._to_plot_data_angular(mt, **kwargs)
+        else:
+            raise ValueError(f"Unknown data_type: {data_type}. Must be 'cross_section'/'xs' or 'angular'/'ang'")
+    
+    def _to_plot_data_cross_section(self, mt: int, **kwargs):
+        """Extract cross section data for plotting."""
+        from mcnpy.plotting import PlotData
+        import numpy as np
+        
+        if not self.cross_section or not self.cross_section.has_data:
+            raise ValueError("No cross section data available in this ACE file")
+        
+        if mt not in self.cross_section.reaction:
+            available_mts = self.cross_section.mt_numbers
+            raise ValueError(f"MT={mt} not found. Available MT numbers: {available_mts}")
+        
+        reaction = self.cross_section.reaction[mt]
+        energies = reaction.energies  # In MeV
+        xs_values = reaction.xs_values  # In barns
+        
+        # Get label
+        label = kwargs.get('label', None)
+        if label is None:
+            # Create default label from isotope and MT
+            isotope = self.header.zaid if self.header else "Unknown"
+            label = f"{isotope} MT={mt}"
+        
+        return PlotData(
+            x=np.array(energies),
+            y=np.array(xs_values),
+            label=label,
+            color=kwargs.get('color', None),
+            linestyle=kwargs.get('linestyle', '-'),
+            linewidth=kwargs.get('linewidth', None),
+            marker=kwargs.get('marker', None),
+            markersize=kwargs.get('markersize', None),
+            plot_type='line'
+        )
+    
+    def _to_plot_data_angular(self, mt: int, **kwargs):
+        """Extract angular distribution data for plotting."""
+        from mcnpy.plotting import PlotData
+        import numpy as np
+        
+        if not self.angular_distributions:
+            raise ValueError("No angular distribution data available in this ACE file")
+        
+        # Get energy parameter (required for angular distributions)
+        energy = kwargs.get('energy', None)
+        if energy is None:
+            raise ValueError("'energy' parameter is required for angular distributions")
+        
+        # Additional parameters for to_dataframe
+        particle_type = kwargs.get('particle_type', 'neutron')
+        particle_idx = kwargs.get('particle_idx', 0)
+        num_points = kwargs.get('num_points', 100)
+        interpolate = kwargs.get('interpolate', False)
+        
+        # Get the angular distribution data as a DataFrame
+        df = self.angular_distributions.to_dataframe(
+            mt=mt,
+            energy=energy,
+            particle_type=particle_type,
+            particle_idx=particle_idx,
+            ace=self,
+            num_points=num_points,
+            interpolate=interpolate
+        )
+        
+        if df is None:
+            raise ValueError(f"Could not extract angular distribution for MT={mt} at energy={energy} MeV")
+        
+        # Extract cosine (mu) and pdf from the DataFrame
+        mu = df['cosine'].values
+        pdf = df['pdf'].values
+        
+        # Get label
+        label = kwargs.get('label', None)
+        if label is None:
+            isotope = self.header.zaid if self.header else "Unknown"
+            label = f"{isotope} MT={mt} @ {energy} MeV"
+        
+        return PlotData(
+            x=np.array(mu),
+            y=np.array(pdf),
+            label=label,
+            color=kwargs.get('color', None),
+            linestyle=kwargs.get('linestyle', '-'),
+            linewidth=kwargs.get('linewidth', None),
+            marker=kwargs.get('marker', None),
+            markersize=kwargs.get('markersize', None),
+            plot_type='line'
+        )

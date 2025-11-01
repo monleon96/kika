@@ -125,6 +125,8 @@ def _verify_sample_covariance(
             if n_samples < 1000:
                 logger.info(f"  Note: Quality improves with more samples (current: {n_samples})")
         else:
+            # When logger is not available but verbose is True, still print to stdout
+            # This maintains backward compatibility for direct function calls
             print(f"[SAMPLING] [QUALITY] Sample-based covariance verification:")
             print(f"  Relative Frobenius error: {relative_frobenius_error*100:.6f}%")
             print(f"  Max relative diagonal error: {max_relative_diagonal_error*100:.6f}%")
@@ -203,12 +205,14 @@ def _pca_decomposition_sampling(
     total_var = eigvals.sum()
     cumvar    = np.cumsum(eigvals)
     k = int(np.searchsorted(cumvar / total_var, trunc_threshold) + 1)
-    if verbose:
-        print(f"PCA: using k={k} components "
-              f"({cumvar[k-1] / total_var:.4f} variance)")
 
-    # 6) Verify PCA decomposition quality
+    # 6) Print PCA info and verify decomposition quality
     if verbose:
+        if logger:
+            logger.info(f"[DECOMPOSITION] [PCA] Using k={k} components ({cumvar[k-1] / total_var:.4f} variance)")
+        else:
+            print(f"PCA: using k={k} components ({cumvar[k-1] / total_var:.4f} variance)")
+        
         verify_pca_decomposition(
             original_matrix=T,
             eigvals=eigvals,
@@ -334,9 +338,9 @@ def generate_samples(
                     f"  Suggestion: Try processing separately with a harder autofix level ('medium' or 'hard')"
                 )
                 
-                # Only log to file if logger is available, let ace_perturbation handle console output
+                # Log to file if logger is available
                 if logger:
-                    logger.info(f"[COVARIANCE] [ERROR] {error_msg}")
+                    logger.error(f"[COVARIANCE] [ERROR] {error_msg}")
                 else:
                     print(f"[ERROR] {error_msg}")
                     
@@ -432,10 +436,11 @@ def generate_samples(
                             logger=logger
                         )
                 except Exception as chol_err:
-                    if verbose and logger:
-                        logger.info(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
-                    elif verbose:
-                        print(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
+                    if verbose:
+                        if logger:
+                            logger.warning(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
+                        else:
+                            print(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
                     raise  # Re-raise the original exception
             elif method == "eigen":
                 eigvals, eigvecs = cov_fixed.eigen_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)
@@ -662,10 +667,11 @@ def generate_endf_samples(
                         logger=logger
                     )
             except Exception as chol_err:
-                if verbose and logger:
-                    logger.info(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
-                elif verbose:
-                    print(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
+                if verbose:
+                    if logger:
+                        logger.warning(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
+                    else:
+                        print(f"[DECOMPOSITION] [QUALITY] Cholesky verification skipped: decomposition failed ({str(chol_err)})")
                 raise  # Re-raise the original exception
         elif method == "eigen":
             eigvals, eigvecs = mf34_cov.eigen_decomposition(space=space, clip_negatives=True, verbose=verbose, logger=logger)

@@ -167,31 +167,31 @@ def create_xsdir_files_for_ace(
         with open(source_xsdir, 'r') as f:
             xs_lines = f.readlines()
 
+        # Build ZAID prefix for matching (e.g., "92235.01c")
         zaid_prefix = f"{zaid}{ace_ext}"
         line_found = False
 
+        # Write master xsdir file: update existing entry or append new one
         with open(master_xs_path, 'w') as f:
+            # First pass: write all lines, replacing any existing entry for this ZAID
             for line in xs_lines:
-                if line.strip().startswith(zaid_prefix):
-                    # Replace the line with our perturbed version
+                stripped = line.strip()
+                if stripped and stripped.startswith(zaid_prefix):
+                    # Found existing entry - replace it with our perturbed version
                     f.write(xsdir_line + "\n")
                     line_found = True
                 else:
+                    # Write line as-is (already has \n from readlines)
                     f.write(line)
             
-            # If this is a new isotope not in the original file, append the line
+            # Second pass: if ZAID was not found, append it to the end
             if not line_found:
-                # Simple robust approach: ensure the file ends properly before adding new content
+                # Ensure proper line separation before appending
                 if xs_lines:
-                    # Ensure the last line has a newline if it doesn't already
+                    # Check if last line in the source file had a newline
                     if not xs_lines[-1].endswith('\n'):
+                        # Last line didn't end with newline - add one for separation
                         f.write('\n')
-                    
-                    # Check if we need an extra newline for clean separation
-                    # Only add one if the last line is not already blank
-                    if xs_lines[-1].strip() != '':
-                        # The last line has content, so our new line will be properly separated
-                        pass
                 
-                # Add our new entry
+                # Append our new xsdir entry
                 f.write(xsdir_line + "\n")

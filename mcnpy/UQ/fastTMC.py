@@ -20,7 +20,8 @@ def fastTMC(
     n_bootstrap: int = 1000,
     ci_level: float = 0.95,
     random_seed: Optional[int] = None,
-    verbose: bool = True
+    verbose: bool = True,
+    reliability_threshold: float = 0.5
 ) -> Union[Dict, pd.DataFrame]:
     """
     Perform Fast Total Monte Carlo decomposition with bootstrap confidence intervals.
@@ -51,12 +52,27 @@ def fastTMC(
         Seed for reproducible bootstrap resampling. Default is None.
     verbose : bool, optional
         Whether to print detailed results. Default is True.
+    reliability_threshold : float, optional
+        Maximum ratio of statistical_unc / observed_unc for the decomposition to be 
+        considered reliable. Above this threshold, statistical uncertainty dominates and 
+        observed uncertainty should be used instead. Default is 0.5 (statistical 
+        uncertainty must be less than 50% of observed uncertainty for reliable decomposition).
     
     Returns
     -------
     dict or pd.DataFrame
-        For single tally: Dict with uncertainty decomposition results.
-        For multiple tallies: DataFrame with summary results.
+        For single tally: Dict with uncertainty decomposition results including:
+            - 'mean_tally': Mean value across samples
+            - 'percent_unc_observed': Total observed uncertainty (%)
+            - 'percent_unc_statistical': Statistical uncertainty component (%)
+            - 'percent_unc_nuclear_data': Nuclear data uncertainty component (%)
+            - 'is_reliable': Boolean flag indicating if decomposition is reliable
+            - 'bootstrap': Bootstrap resampling results
+            - 'ci': Confidence intervals for key quantities
+        For multiple tallies: DataFrame with summary results including reliability flags.
+        
+        Note: When is_reliable is False, use percent_unc_observed instead of 
+        percent_unc_nuclear_data for reporting uncertainties.
     
     Raises
     ------
@@ -97,7 +113,7 @@ def fastTMC(
             raise ValueError("Both y_val and y_sigma must be provided for single-tally analysis.")
         
         return _single_tally_analysis(
-            y_val, y_sigma, n_bootstrap, ci_level, random_seed, verbose
+            y_val, y_sigma, n_bootstrap, ci_level, random_seed, verbose, reliability_threshold
         )
     
     else:
@@ -107,7 +123,7 @@ def fastTMC(
         
         return _dataframe_analysis(
             results_df, uncertainties_df, columns, n_samples, 
-            n_bootstrap, ci_level, random_seed, verbose
+            n_bootstrap, ci_level, random_seed, verbose, reliability_threshold
         )
 
 
@@ -136,6 +152,9 @@ def create_summary_table(results_dict: Dict[str, Dict]) -> pd.DataFrame:
             'Total_Unc_%': result['percent_unc_observed'],
             'Statistical_%': result['percent_unc_statistical'],
             'Nuclear_Data_%': result['percent_unc_nuclear_data'],
+            'Is_Reliable': result['is_reliable'],
+            'Observed_CI_Lower_%': result['ci']['percent_unc_observed'][0],
+            'Observed_CI_Upper_%': result['ci']['percent_unc_observed'][1],
             'Nuclear_Data_CI_Lower_%': result['ci']['percent_unc_nuclear_data'][0],
             'Nuclear_Data_CI_Upper_%': result['ci']['percent_unc_nuclear_data'][1],
             'Mean_Tally_CI_Lower': result['ci']['mean_tally'][0],
@@ -154,7 +173,8 @@ def _single_tally_analysis(
     n_bootstrap: int,
     ci_level: float,
     random_seed: Optional[int],
-    verbose: bool
+    verbose: bool,
+    reliability_threshold: float
 ) -> Dict:
     """Core Fast TMC analysis for a single tally."""
     # Convert to numpy arrays
@@ -189,13 +209,24 @@ def _single_tally_analysis(
     pct_stat = std_stat / mean_tally * 100.0
     pct_nuc = std_nuc / mean_tally * 100.0
     
-    if verbose:
-        _print_summary(mean_tally, pct_obs, pct_stat, pct_nuc)
+    # Reliability check: statistical uncertainty must be LESS than reliability_threshold * observed
+    # to ensure reliable decomposition (i.e., statistical doesn't dominate)
+    # Default threshold is 0.5, meaning statistical must be < 50% of observed
+    if pct_obs > 0:
+        stat_to_obs_ratio = pct_stat / pct_obs
+        is_reliable = stat_to_obs_ratio < reliability_threshold
+    else:
+        stat_to_obs_ratio = 0.0
+        is_reliable = False
     
     # Bootstrap analysis
     bootstrap_results = _bootstrap_analysis(
         y, sig, n_bootstrap, random_seed, verbose
     )
+    
+    # Print summary (always show warning if unreliable, other details only if verbose)
+    _print_summary(mean_tally, pct_obs, pct_stat, pct_nuc, is_reliable, 
+                  stat_to_obs_ratio, reliability_threshold, verbose)
     
     # Compute confidence intervals
     ci = _compute_confidence_intervals(bootstrap_results, ci_level, verbose)
@@ -205,6 +236,8 @@ def _single_tally_analysis(
         'percent_unc_observed': pct_obs,
         'percent_unc_statistical': pct_stat,
         'percent_unc_nuclear_data': pct_nuc,
+        'is_reliable': is_reliable,
+        'stat_to_obs_ratio': stat_to_obs_ratio,
         'bootstrap': bootstrap_results,
         'ci': ci
     }
@@ -218,7 +251,8 @@ def _dataframe_analysis(
     n_bootstrap: int,
     ci_level: float,
     random_seed: Optional[int],
-    verbose: bool
+    verbose: bool,
+    reliability_threshold: float
 ) -> pd.DataFrame:
     """Core Fast TMC analysis for multiple tallies from DataFrames."""
     # Validate inputs
@@ -255,14 +289,14 @@ def _dataframe_analysis(
     
     all_results = {}
     
+    # Always show we're starting analysis
+    print(f"\nAnalyzing {len(columns_to_analyze)} tallies with Fast TMC ({n_samples} samples)...")
     if verbose:
-        print(f"\nPerforming Fast TMC analysis for {len(columns_to_analyze)} tallies "
-              f"using {n_samples} samples...")
         print("=" * 70)
     
     for tally_name in columns_to_analyze:
-        if verbose:
-            print(f"\n--- Analyzing {tally_name} ---")
+        # Always show which tally we're processing
+        print(f"\n{tally_name}: ", end="")
         
         # Extract data
         y_res = results_df[tally_name].iloc[:n_samples].values
@@ -270,31 +304,63 @@ def _dataframe_analysis(
         
         # Skip if mean is zero
         if np.mean(y_res) == 0:
-            if verbose:
-                print(f"Skipping {tally_name}: mean tally is zero")
+            print(f"SKIPPED (mean is zero)")
             continue
         
         # Perform analysis
         try:
             result = _single_tally_analysis(
-                y_res, y_sig, n_bootstrap, ci_level, random_seed, verbose
+                y_res, y_sig, n_bootstrap, ci_level, random_seed, verbose, reliability_threshold
             )
             all_results[tally_name] = result
         except Exception as e:
-            if verbose:
-                print(f"Error analyzing {tally_name}: {e}")
+            print(f"ERROR: {e}")
             continue
+    
+    # Print summary of reliability for all analyzed tallies
+    if len(all_results) > 0:
+        reliable_tallies = [name for name, res in all_results.items() if res['is_reliable']]
+        unreliable_tallies = [name for name, res in all_results.items() if not res['is_reliable']]
+        
+        print("\n" + "=" * 70)
+        print("SUMMARY")
+        print("=" * 70)
+        print(f"Total tallies analyzed: {len(all_results)}")
+        print(f"OK (use Nuclear Data): {len(reliable_tallies)}/{len(all_results)}")
+        print(f"NOT OK (use Observed): {len(unreliable_tallies)}/{len(all_results)}")
+        
+        if len(unreliable_tallies) > 0:
+            print(f"\nNOT OK tallies (statistical uncertainty too high):")
+            for tally in unreliable_tallies:
+                res = all_results[tally]
+                print(f"   • {tally}: Statistical is {res['stat_to_obs_ratio']*100:.0f}% of observed")
+        
+        print("=" * 70)
     
     # Return as summary DataFrame
     return create_summary_table(all_results)
 
 
-def _print_summary(mean_tally: float, pct_obs: float, pct_stat: float, pct_nuc: float):
+def _print_summary(mean_tally: float, pct_obs: float, pct_stat: float, pct_nuc: float,
+                  is_reliable: bool, stat_to_obs_ratio: float, 
+                  reliability_threshold: float, verbose: bool):
     """Print formatted summary of FTMC results."""
-    print(f"Mean tally                   : {mean_tally:.5e}")
-    print(f"Total 1-σ uncertainty        : {pct_obs:.2f}%")
-    print(f"  • Statistical component    : {pct_stat:.2f}%")
-    print(f"  • Nuclear-data component   : {pct_nuc:.2f}%")
+    # ALWAYS show the result - user-friendly and concise
+    if is_reliable:
+        print(f"✓ OK - Use Nuclear Data uncertainty ({pct_nuc:.2f}%)")
+    else:
+        print(f"✗ NOT OK - Use Observed uncertainty ({pct_obs:.2f}%) instead")
+        print(f"           Statistical uncertainty is {stat_to_obs_ratio*100:.0f}% of observed (threshold: <{reliability_threshold*100:.0f}%)")
+        print(f"           → Reduce statistical uncertainty from your results or use observed uncertainty")
+    
+    # Detailed breakdown only if verbose
+    if verbose:
+        print(f"\n  Details:")
+        print(f"    Mean tally value         : {mean_tally:.5e}")
+        print(f"    Observed uncertainty     : {pct_obs:.2f}%")
+        print(f"    Statistical component    : {pct_stat:.2f}%")
+        print(f"    Nuclear-data component   : {pct_nuc:.2f}%")
+        print(f"    Statistical/Observed ratio: {stat_to_obs_ratio*100:.1f}%")
 
 
 def _bootstrap_analysis(
@@ -310,6 +376,7 @@ def _bootstrap_analysis(
     
     bs_mean = np.empty(n_bootstrap)
     bs_nuc = np.empty(n_bootstrap)
+    bs_obs = np.empty(n_bootstrap)
     
     for i in range(n_bootstrap):
         # Bootstrap resample
@@ -319,6 +386,10 @@ def _bootstrap_analysis(
         
         # Mean for this bootstrap sample
         bs_mean[i] = y_bs.mean()
+        
+        # Observed (total) uncertainty for this bootstrap sample
+        std_obs_bs = np.std(y_bs, ddof=1)
+        bs_obs[i] = std_obs_bs / y_bs.mean() * 100.0
         
         # Nuclear data uncertainty for this bootstrap sample
         abs_err_bs = sig_bs * y_bs
@@ -330,7 +401,8 @@ def _bootstrap_analysis(
     
     return {
         'mean_tally': bs_mean,
-        'percent_unc_nuclear_data': bs_nuc
+        'percent_unc_nuclear_data': bs_nuc,
+        'percent_unc_observed': bs_obs
     }
 
 
@@ -348,11 +420,16 @@ def _compute_confidence_intervals(
         'percent_unc_nuclear_data': tuple(
             np.percentile(bootstrap_results['percent_unc_nuclear_data'], [lo, hi])
         ),
+        'percent_unc_observed': tuple(
+            np.percentile(bootstrap_results['percent_unc_observed'], [lo, hi])
+        ),
     }
     
     if verbose:
         print(f"\nBootstrap {int(ci_level*100)}% CIs:")
         print(f"  • Mean tally                : {ci['mean_tally'][0]:.5e} – {ci['mean_tally'][1]:.5e}")
+        print(f"  • Observed unc.             : {ci['percent_unc_observed'][0]:.2f}% – "
+              f"{ci['percent_unc_observed'][1]:.2f}%")
         print(f"  • Nuclear-data unc.         : {ci['percent_unc_nuclear_data'][0]:.2f}% – "
               f"{ci['percent_unc_nuclear_data'][1]:.2f}%")
     

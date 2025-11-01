@@ -642,9 +642,12 @@ def plot_legendre_coefficient_uncertainties_from_endf(
                 if uncertainty_type == 'relative':
                     # Plot relative uncertainties as percentages
                     plot_values = np.array(unc_values) * 100  # Convert to percentage
+                    
+                    # Create label with isotope and order, optionally adding custom label
                     isotope_symbol = endf_obj.isotope if hasattr(endf_obj, 'isotope') and endf_obj.isotope else 'Unknown'
-                    base_label = f"{isotope_symbol} - σ$_{{a_{{{order}}}}}$ (%)"
-                    label = f"{base_label} ({endf_label})" if endf_label is not None else base_label
+                    label = f"{isotope_symbol} - (L={order})"
+                    if endf_label is not None:
+                        label = f"{label} ({endf_label})"
                 elif uncertainty_type == 'absolute':
                     # For absolute uncertainties, we need the coefficient values
                     # Extract coefficient values for this order across all energies
@@ -673,8 +676,9 @@ def plot_legendre_coefficient_uncertainties_from_endf(
                         # Convert relative to absolute uncertainties
                         plot_values = np.array(unc_values) * np.array(interpolated_coeffs)
                         isotope_symbol = endf_obj.isotope if hasattr(endf_obj, 'isotope') and endf_obj.isotope else 'Unknown'
-                        base_label = f"{isotope_symbol} - σ$_{{a_{{{order}}}}}$ (absolute)"
-                        label = f"{base_label} ({endf_label})" if endf_label is not None else base_label
+                        label = f"{isotope_symbol} - (L={order})"
+                        if endf_label is not None:
+                            label = f"{label} ({endf_label})"
                     else:
                         print(f"Warning: Could not calculate absolute uncertainties for order {order} in {endf_label}")
                         continue
@@ -783,6 +787,24 @@ def plot_legendre_coefficient_uncertainties_from_endf(
         # Use user-specified energy range directly, allowing extension beyond data range
         e_min, e_max = energy_range
         ax.set_xlim(e_min, e_max)
+        
+        # Manually compute y-limits based on visible data
+        y_values_in_range = []
+        for line in ax.get_lines():
+            xdata = line.get_xdata()
+            ydata = line.get_ydata()
+            # Filter to visible x-range
+            mask = (xdata >= e_min) & (xdata <= e_max)
+            if np.any(mask):
+                y_values_in_range.extend(ydata[mask])
+        
+        if y_values_in_range:
+            y_min = np.min(y_values_in_range)
+            y_max = np.max(y_values_in_range)
+            # Add 5% margin
+            y_range = y_max - y_min
+            if y_range > 0:
+                ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.05 * y_range)
 
     return fig
 

@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import TwoSlopeNorm
 from typing import List, Optional, Union, Tuple, Dict, Any, TYPE_CHECKING
 from ..._plot_settings import setup_plot_style, format_axes
+from ..mf34_covmat import MF34CovMat
 
 if TYPE_CHECKING:
     from .mg_mf34_covmat import MGMF34CovMat
@@ -77,8 +78,8 @@ def plot_mg_legendre_coefficients(
     figsize: Tuple[float, float] = (10, 6),
     legend_loc: str = 'best',
     marker: bool = True,
-    include_uncertainties: bool = False,
-    uncertainty_sigma: float = 1.0,
+    uncertainty: bool = False,
+    sigma: float = 1.0,
     labels: Optional[Union[str, List[str]]] = None,
     **kwargs
 ) -> plt.Figure:
@@ -108,9 +109,9 @@ def plot_mg_legendre_coefficients(
         Legend location
     marker : bool
         Whether to include markers on the plot lines
-    include_uncertainties : bool
+    uncertainty : bool
         Whether to include uncertainty bands if available
-    uncertainty_sigma : float
+    sigma : float
         Number of sigma levels for uncertainty bands
     labels : str or list of str, optional
         Labels for each dataset
@@ -212,11 +213,11 @@ def plot_mg_legendre_coefficients(
             # Base label (without uncertainty)
             base_label = f"{isotope_symbol} - $a_{{{order}}}$"
             # If uncertainties requested: include sigma text on the LINE label (not on fill)
-            if include_uncertainties and getattr(mg_obj, 'relative_matrices', None):
-                if uncertainty_sigma == 1.0:
+            if uncertainty and getattr(mg_obj, 'relative_matrices', None):
+                if sigma == 1.0:
                     base_label += " ±1σ"
                 else:
-                    base_label += f" ±{uncertainty_sigma}σ"
+                    base_label += f" ±{sigma}σ"
             line_label = base_label if len(mg_list) == 1 else f"{base_label} ({mg_label})"
 
             # Prepare step arrays: for where='post', need y length n+1
@@ -237,7 +238,7 @@ def plot_mg_legendre_coefficients(
             ax.step(energy_grid, coeff_steps, **line_kwargs)
 
             # Uncertainty bands (no label; legend handled by line label above)
-            if include_uncertainties and getattr(mg_obj, 'relative_matrices', None):
+            if uncertainty and getattr(mg_obj, 'relative_matrices', None):
                 _plot_mg_uncertainty_bands(
                     ax=ax,
                     mg_obj=mg_obj,
@@ -246,7 +247,7 @@ def plot_mg_legendre_coefficients(
                     order=order,
                     energy_grid=energy_grid,
                     coeffs=coeffs,
-                    uncertainty_sigma=uncertainty_sigma,
+                    sigma=sigma,
                     color=color,
                     label=None
                 )
@@ -309,7 +310,7 @@ def _plot_mg_uncertainty_bands(
     order: int,
     energy_grid: np.ndarray,
     coeffs: np.ndarray,
-    uncertainty_sigma: float,
+    sigma: float,
     color,
     label: Optional[str] = None,
 ):
@@ -327,7 +328,7 @@ def _plot_mg_uncertainty_bands(
         Bin boundaries (length n+1)
     coeffs : np.ndarray
         Coefficient values (length n)
-    uncertainty_sigma : float
+    sigma : float
         Sigma multiplier
     color : matplotlib color
         Band color (matches line color)
@@ -358,7 +359,7 @@ def _plot_mg_uncertainty_bands(
                 diag = np.diag(cov_matrix)
                 if diag.size != coeffs.size:
                     break
-                rel_unc = np.sqrt(diag) * uncertainty_sigma
+                rel_unc = np.sqrt(diag) * sigma
                 abs_unc = rel_unc * np.abs(coeffs)
                 upper = coeffs + abs_unc
                 lower = coeffs - abs_unc
@@ -394,8 +395,8 @@ def plot_mg_vs_endf_comparison(
     legend_loc: str = 'best',
     mg_marker: bool = True,
     endf_native: bool = False,
-    include_uncertainties: bool = False,
-    uncertainty_sigma: float = 1.0,
+    uncertainty: bool = False,
+    sigma: float = 1.0,
     **kwargs
 ) -> plt.Figure:
     """
@@ -434,9 +435,9 @@ def plot_mg_vs_endf_comparison(
         dense log-spaced energy grid is used for the line for smooth appearance; when
         include_uncertainties=True the band will still be computed on native energies and may
         appear slightly coarser or visually offset if interpolation introduces differences.
-    include_uncertainties : bool
+    uncertainty : bool
         If True and covariance data (MF34 / multigroup relative matrices) are available, show ±σ bands.
-    uncertainty_sigma : float
+    sigma : float
         Number of sigma for uncertainty bands (default 1.0)
     **kwargs
         Additional plotting arguments
@@ -457,6 +458,7 @@ def plot_mg_vs_endf_comparison(
     fig = plot_kwargs['_fig']
     ax = plot_kwargs['ax']
     colors = plot_kwargs['_colors']
+    # If only one order is requested we will later use two distinct colors (if available)
     
     # Multigroup energy grid (boundaries) and centers
     mg_energy_grid = np.asarray(mg_covmat.energy_grid, dtype=float)
@@ -511,21 +513,44 @@ def plot_mg_vs_endf_comparison(
 
     # Attempt to access MF34 covariance for ENDF uncertainties once if needed
     mf34_covmat = None
-    if include_uncertainties and 34 in endf.mf and mt in endf.mf[34].mt:
+    if uncertainty and 34 in endf.mf and mt in endf.mf[34].mt:
         try:
             mf34_covmat = endf.mf[34].mt[mt].to_ang_covmat()
         except Exception:
             mf34_covmat = None  # Silent fail
     # Import existing ENDF uncertainty plotting helper (works on native ENDF energies)
-    if include_uncertainties and mf34_covmat is not None:
+    if uncertainty and mf34_covmat is not None:
         try:
             from mcnpy.endf.classes.mf4.plotting import _plot_uncertainty_bands as _plot_endf_uncertainty_bands
         except Exception:
             _plot_endf_uncertainty_bands = None
 
-    # Plot each order (multigroup as step, ENDF as solid)
+    # Flag for single-order special formatting (distinct colors for MG vs ENDF)
+    single_order_mode = len(orders) == 1
+
+    # Simple color adjustment helper (only used if we need a second color but palette has one)
+    from matplotlib import colors as mcolors
+    def _lighten_color(c, factor=0.6):
+        try:
+            r, g, b = mcolors.to_rgb(c)
+            return (1 - factor) + factor * r, (1 - factor) + factor * g, (1 - factor) + factor * b
+        except Exception:
+            return c
+
+    # Pre-compute colors for single-order case
+    if single_order_mode:
+        mg_color = colors[0]
+        if len(colors) > 1:
+            endf_color = colors[1]
+        else:
+            endf_color = _lighten_color(mg_color, 0.4)
+
+    # Plot each order (multigroup as step, ENDF as solid; special case if single order)
     for order_idx, order in enumerate(orders):
-        color = colors[order_idx % len(colors)]
+        if not single_order_mode:
+            color = colors[order_idx % len(colors)]  # same color for MG & ENDF (original behavior)
+            mg_color = color
+            endf_color = color
 
         mg_key = (isotope, mt, order)
         if mg_key in mg_covmat.legendre_coefficients:
@@ -533,23 +558,23 @@ def plot_mg_vs_endf_comparison(
             if mg_coeffs.size == mg_energy_grid.size - 1:
                 mg_steps = np.append(mg_coeffs, mg_coeffs[-1])
                 # Create label with uncertainty notation if uncertainties are enabled
-                line_label = f"{isotope_symbol} - $a_{{{order}}}$"
-                if include_uncertainties:
-                    line_label += f" ±{uncertainty_sigma}σ"
+                line_label = f"MG {isotope_symbol} - $a_{{{order}}}$"
+                if uncertainty:
+                    line_label += f" ±{sigma}σ"
                 ax.step(
                     mg_energy_grid,
                     mg_steps,
                     where='post',
-                    color=color,
+                    color=mg_color,
                     linewidth=2,
                     label=line_label,
                     zorder=3
                 )
                 if mg_marker:
                     centers = mg_energy_centers
-                    ax.plot(centers, mg_coeffs, 'o', color=color, markersize=4, zorder=4)
+                    ax.plot(centers, mg_coeffs, 'o', color=mg_color, markersize=4, zorder=4)
                 # MG uncertainties from relative matrices (diagonal) - using dashed outline
-                if include_uncertainties:
+                if uncertainty:
                     try:
                         # Find matching relative matrix for diagonal uncertainties
                         for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c) in enumerate(zip(
@@ -564,7 +589,7 @@ def plot_mg_vs_endf_comparison(
                                 matrix = mg_covmat.relative_matrices[i]
                                 diag = np.diag(matrix)
                                 if diag.size == mg_coeffs.size:
-                                    rel_unc = np.sqrt(diag) * uncertainty_sigma
+                                    rel_unc = np.sqrt(diag) * sigma
                                     abs_unc = rel_unc * np.abs(mg_coeffs)
                                     upper = mg_coeffs + abs_unc
                                     lower = mg_coeffs - abs_unc
@@ -577,7 +602,7 @@ def plot_mg_vs_endf_comparison(
                                         where='post',
                                         linestyle='--',
                                         linewidth=0.8,
-                                        color=color,
+                                        color=mg_color,
                                         alpha=0.7,
                                         zorder=2,
                                     )
@@ -587,7 +612,7 @@ def plot_mg_vs_endf_comparison(
                                         where='post',
                                         linestyle='--',
                                         linewidth=0.8,
-                                        color=color,
+                                        color=mg_color,
                                         alpha=0.7,
                                         zorder=2,
                                     )
@@ -597,7 +622,7 @@ def plot_mg_vs_endf_comparison(
 
         # Always plot ENDF line for ENDF data
         # Decide whether to use native energies (recommended when uncertainties shown)
-        use_native_for_line = endf_native or (include_uncertainties and mf34_covmat is not None)
+        use_native_for_line = endf_native or (uncertainty and mf34_covmat is not None)
         try:
             if use_native_for_line:
                 # Build coefficient arrays directly from native MF4 data
@@ -614,18 +639,22 @@ def plot_mg_vs_endf_comparison(
                         coeff_values_native.append(coeff_list[order - 1])
                         energy_values_native.append(native_energies[j])
                 if energy_values_native:
-                    # Don't add label for ENDF line (same color as MG, would be redundant)
+                    # Label only in single-order mode (to differentiate colors)
+                    endf_label = None
+                    if single_order_mode:
+                        endf_label = f"ENDF {isotope_symbol} - $a_{{{order}}}$"
                     ax.plot(
                         energy_values_native,
                         coeff_values_native,
                         linestyle='-',  # Always solid line
-                        color=color,
+                        color=endf_color,
                         linewidth=1.4,
                         alpha=0.85,
-                        zorder=2
+                        zorder=2,
+                        label=endf_label
                     )
                     # Uncertainty band exactly aligned with line
-                    if include_uncertainties and mf34_covmat is not None and '_plot_endf_uncertainty_bands' in locals() and _plot_endf_uncertainty_bands is not None:
+                    if uncertainty and mf34_covmat is not None and '_plot_endf_uncertainty_bands' in locals() and _plot_endf_uncertainty_bands is not None:
                         try:
                             isotope_id = int(getattr(mf4_data, 'zaid', isotope))
                             _plot_endf_uncertainty_bands(
@@ -636,8 +665,8 @@ def plot_mg_vs_endf_comparison(
                                 isotope_id,
                                 mt,
                                 order,
-                                uncertainty_sigma,
-                                color,
+                                sigma,
+                                endf_color,
                                 alpha=0.15
                             )
                         except Exception:
@@ -651,18 +680,21 @@ def plot_mg_vs_endf_comparison(
                 )
                 if order in endf_coeffs_dict:
                     endf_coeffs = endf_coeffs_dict[order]
-                    # Don't add label for ENDF line (same color as MG, would be redundant)
+                    endf_label = None
+                    if single_order_mode:
+                        endf_label = f"ENDF {isotope_symbol} - $a_{{{order}}}$"
                     ax.plot(
                         dense_endf_energies,
                         endf_coeffs,
                         linestyle='-',  # Always solid line
-                        color=color,
+                        color=endf_color,
                         linewidth=1.4,
                         alpha=0.75,
-                        zorder=2
+                        zorder=2,
+                        label=endf_label
                     )
                     # If uncertainties requested, still draw band using native energies (may look coarser)
-                    if include_uncertainties and mf34_covmat is not None and '_plot_endf_uncertainty_bands' in locals() and _plot_endf_uncertainty_bands is not None:
+                    if uncertainty and mf34_covmat is not None and '_plot_endf_uncertainty_bands' in locals() and _plot_endf_uncertainty_bands is not None:
                         try:
                             native_energies = getattr(mf4_data, 'legendre_energies', [])
                             native_coeff_lists = getattr(mf4_data, 'legendre_coefficients', [])
@@ -685,8 +717,8 @@ def plot_mg_vs_endf_comparison(
                                     isotope_id,
                                     mt,
                                     order,
-                                    uncertainty_sigma,
-                                    color,
+                                    sigma,
+                                    endf_color,
                                     alpha=0.15
                                 )
                         except Exception:
@@ -720,6 +752,27 @@ def plot_mg_vs_endf_comparison(
         legend_loc=legend_loc
     )
     ax.set_xlim(energy_range)
+    
+    # Manually compute y-limits based on visible data
+    if energy_range is not None:
+        e_min, e_max = energy_range
+        y_values_in_range = []
+        for line in ax.get_lines():
+            xdata = line.get_xdata()
+            ydata = line.get_ydata()
+            # Filter to visible x-range
+            mask = (xdata >= e_min) & (xdata <= e_max)
+            if np.any(mask):
+                y_values_in_range.extend(ydata[mask])
+        
+        if y_values_in_range:
+            y_min = np.min(y_values_in_range)
+            y_max = np.max(y_values_in_range)
+            # Add 5% margin
+            y_range = y_max - y_min
+            if y_range > 0:
+                ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.05 * y_range)
+    
     return fig
 
 
@@ -777,15 +830,19 @@ def plot_mg_vs_endf_uncertainties_comparison(
     plt.Figure
         The matplotlib figure containing the plot
     """
-    # Handle endf_data parameter - convert to MF34CovMat if needed
+    # Handle endf_data parameter - convert to MF34CovMat if needed and capture MF4 for absolute uncertainties
+    endf_mf4_mt = None
     if hasattr(endf_data, 'mf') and 34 in endf_data.mf:
-        # This is an ENDF object, extract MF34CovMat
+        # This is an ENDF object
         if mt in endf_data.mf[34].mt:
             endf_mf34_covmat = endf_data.mf[34].mt[mt].to_ang_covmat()
         else:
             raise ValueError(f"MT {mt} not found in ENDF MF34 data")
+        # Capture MF4 MT object (may not exist for some files)
+        if 4 in endf_data.mf and mt in endf_data.mf[4].mt:
+            endf_mf4_mt = endf_data.mf[4].mt[mt]
     else:
-        # Assume this is already a MF34CovMat object
+        # Assume this is already a MF34CovMat object (no MF4 info for absolute uncertainties)
         endf_mf34_covmat = endf_data
     
     # Setup plot style
@@ -821,8 +878,29 @@ def plot_mg_vs_endf_uncertainties_comparison(
         return fig
     
     # Set energy range
-    if energy_range is None:
-        energy_range = (mg_covmat.energy_grid[0], mg_covmat.energy_grid[-1])
+    user_supplied_energy_range = energy_range is not None
+
+    # Pre-scan ENDF covariance data to collect true bin boundaries for requested orders
+    # so we can extend default energy range to include full ENDF coverage.
+    def _find_endf_boundaries_for_order(l_order: int) -> Optional[np.ndarray]:
+        """Return the raw energy bin boundaries (as stored in MF34) for a diagonal block."""
+        for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c, grid) in enumerate(zip(
+            endf_mf34_covmat.isotope_rows, endf_mf34_covmat.reaction_rows, endf_mf34_covmat.l_rows,
+            endf_mf34_covmat.isotope_cols, endf_mf34_covmat.reaction_cols, endf_mf34_covmat.l_cols,
+            endf_mf34_covmat.energy_grids
+        )):
+            if (iso_r == isotope and iso_c == isotope and mt_r == mt and mt_c == mt and l_r == l_order and l_c == l_order):
+                try:
+                    return np.asarray(grid, dtype=float)
+                except Exception:
+                    return None
+        return None
+
+    mg_min = float(mg_covmat.energy_grid[0]) if len(mg_covmat.energy_grid) else None
+    mg_max = float(mg_covmat.energy_grid[-1]) if len(mg_covmat.energy_grid) else None
+    endf_min = None
+    endf_max = None
+    # We'll gather ENDF boundary extrema for the selected orders (after filtering below)
     
     from mcnpy._utils import zaid_to_symbol
     try:
@@ -830,11 +908,51 @@ def plot_mg_vs_endf_uncertainties_comparison(
     except Exception:
         isotope_symbol = f"Isotope {isotope}"
 
+    # Determine if single order for special formatting
+    single_order_mode = len(orders) == 1
+    from matplotlib import colors as mcolors
+    def _lighten_color(c, factor=0.6):
+        try:
+            r, g, b = mcolors.to_rgb(c)
+            return (1 - factor) + factor * r, (1 - factor) + factor * g, (1 - factor) + factor * b
+        except Exception:
+            return c
+    if single_order_mode:
+        mg_color = colors[0]
+        if len(colors) > 1:
+            endf_color = colors[1]
+        else:
+            endf_color = _lighten_color(mg_color, 0.4)
+
+    # After determining single_order_mode we can finalize default energy range if not user supplied.
+    # (We need the list of orders first; orders filtering happened above.)
+    if not user_supplied_energy_range:
+        for order in orders:
+            boundaries = _find_endf_boundaries_for_order(order)
+            if boundaries is not None and len(boundaries) > 0:
+                bmin = float(boundaries[0]); bmax = float(boundaries[-1])
+                endf_min = bmin if endf_min is None else min(endf_min, bmin)
+                endf_max = bmax if endf_max is None else max(endf_max, bmax)
+        # Compute union of MG and ENDF ranges (ignore None cases gracefully)
+        all_mins = [x for x in [mg_min, endf_min] if x is not None]
+        all_maxs = [x for x in [mg_max, endf_max] if x is not None]
+        if all_mins and all_maxs:
+            energy_range = (min(all_mins), max(all_maxs))
+        elif mg_min is not None and mg_max is not None:
+            energy_range = (mg_min, mg_max)
+        elif endf_min is not None and endf_max is not None:
+            energy_range = (endf_min, endf_max)
+        else:
+            energy_range = (1e-5, 1.0)  # fallback minimal sensible range
+
     # Plot each order
     for order_idx, order in enumerate(orders):
-        color = colors[order_idx % len(colors)]
+        if not single_order_mode:
+            color = colors[order_idx % len(colors)]
+            mg_color = color
+            endf_color = color
 
-        # Plot multigroup uncertainties (dashed step plot)
+    # Plot multigroup uncertainties (dashed step plot unless single-order mode where solid retained)
         mg_key = (isotope, mt, order)
         if mg_key in mg_covmat.legendre_coefficients:
             # Get multigroup uncertainties from diagonal covariance matrix
@@ -866,78 +984,100 @@ def plot_mg_vs_endf_uncertainties_comparison(
                     mg_energy_grid,
                     mg_steps,
                     where='post',
-                    color=color,
+                    color=mg_color,
                     linewidth=2,
-                    linestyle='--',  # Dashed for MG
-                    label=f"MG {isotope_symbol} - L={order}",
+                    linestyle='-' if single_order_mode else '--',  # solid only if single order
+                    label=(f"MG {isotope_symbol} - L={order}" if single_order_mode else f"MG {isotope_symbol} - L={order}"),
                     zorder=3
                 )
                 if mg_marker:
-                    ax.plot(mg_energy_centers, mg_uncertainties, 'o', color=color, markersize=4, zorder=4)
+                    ax.plot(mg_energy_centers, mg_uncertainties, 'o', color=mg_color, markersize=4, zorder=4)
 
-        # Plot ENDF uncertainties (solid step plot)
+        # Plot ENDF uncertainties (solid step plot using true bin boundaries)
         endf_uncertainty_data = endf_mf34_covmat.get_uncertainties_for_legendre_coefficient(isotope, mt, order)
         if endf_uncertainty_data is not None:
-            endf_energies = endf_uncertainty_data['energies']
-            endf_uncertainties = endf_uncertainty_data['uncertainties']
-            
-            # Filter by energy range
-            mask = (endf_energies >= energy_range[0]) & (endf_energies <= energy_range[1])
-            endf_energies_filtered = endf_energies[mask]
-            endf_uncertainties_filtered = endf_uncertainties[mask]
-            
-            if len(endf_energies_filtered) > 0:
-                if uncertainty_type == "relative":
-                    endf_uncertainties_filtered = endf_uncertainties_filtered * 100  # Convert to percentage
-                # elif uncertainty_type == "absolute" - ENDF uncertainties are already relative, so no conversion needed
-                
-                # Create energy grid for step plot - need to add boundaries
-                # Assume log-spaced energy grid and extrapolate boundaries
-                if len(endf_energies_filtered) > 1:
-                    # Calculate energy bin boundaries for step plot
-                    log_energies = np.log(endf_energies_filtered)
-                    log_widths = np.diff(log_energies)
-                    
-                    # Create boundaries
-                    log_boundaries = np.zeros(len(endf_energies_filtered) + 1)
-                    log_boundaries[1:-1] = (log_energies[:-1] + log_energies[1:]) / 2.0
-                    
-                    # Extrapolate first and last boundaries
-                    if len(log_widths) > 0:
-                        log_boundaries[0] = log_energies[0] - log_widths[0] / 2.0
-                        log_boundaries[-1] = log_energies[-1] + log_widths[-1] / 2.0
-                    else:
-                        log_boundaries[0] = log_energies[0] - 0.1
-                        log_boundaries[-1] = log_energies[-1] + 0.1
-                    
-                    energy_boundaries = np.exp(log_boundaries)
-                    
-                    # Create step values
-                    endf_steps = np.append(endf_uncertainties_filtered, endf_uncertainties_filtered[-1])
-                    
-                    ax.step(
-                        energy_boundaries,
-                        endf_steps,
-                        where='post',
-                        linestyle='-',  # Solid for ENDF
-                        color=color,
-                        linewidth=1.4,
-                        alpha=0.7,
-                        label=f"ENDF {isotope_symbol} - L={order}",
-                        zorder=2
-                    )
+            endf_centers = np.asarray(endf_uncertainty_data['energies'], dtype=float)
+            endf_unc = np.asarray(endf_uncertainty_data['uncertainties'], dtype=float)
+
+            # Retrieve true bin boundaries
+            boundaries = _find_endf_boundaries_for_order(order)
+            if boundaries is not None and len(boundaries) == len(endf_unc) + 1:
+                endf_boundaries = boundaries.astype(float)
+            else:
+                # Fallback: reconstruct boundaries approximately (maintain previous behaviour)
+                if len(endf_centers) > 1:
+                    log_e = np.log(endf_centers)
+                    log_w = np.diff(log_e)
+                    log_b = np.zeros(len(endf_centers) + 1)
+                    log_b[1:-1] = (log_e[:-1] + log_e[1:]) / 2.0
+                    log_b[0] = log_e[0] - (log_w[0] / 2.0 if len(log_w) else 0.1)
+                    log_b[-1] = log_e[-1] + (log_w[-1] / 2.0 if len(log_w) else 0.1)
+                    endf_boundaries = np.exp(log_b)
                 else:
-                    # Only one point, plot as a single step
-                    ax.plot(
-                        endf_energies_filtered,
-                        endf_uncertainties_filtered,
-                        linestyle='-',
-                        color=color,
-                        linewidth=1.4,
-                        alpha=0.7,
-                        label=f"ENDF {isotope_symbol} - L={order}",
-                        zorder=2
-                    )
+                    # Single point – create an arbitrary narrow boundary around it
+                    e = endf_centers[0] if len(endf_centers) else 1.0
+                    endf_boundaries = np.array([e * 0.9, e * 1.1])
+
+            # Convert to absolute uncertainties if requested
+            if uncertainty_type == "absolute":
+                if endf_mf4_mt is None:
+                    print(f"Warning: Cannot compute absolute ENDF uncertainties (missing MF4 for MT {mt}); showing relative instead.")
+                else:
+                    try:
+                        native_energies = getattr(endf_mf4_mt, 'legendre_energies', [])
+                        native_coeff_lists = getattr(endf_mf4_mt, 'legendre_coefficients', [])
+                        coeff_vals = []
+                        # Build coefficient values per uncertainty center
+                        for center in endf_centers:
+                            # Find closest native energy index
+                            if not native_energies:
+                                coeff_vals.append(1.0 if order == 0 else 0.0)
+                                continue
+                            idx_closest = int(np.argmin(np.abs(np.asarray(native_energies) - center)))
+                            if order == 0:
+                                coeff_vals.append(1.0)
+                            else:
+                                coeff_list = native_coeff_lists[idx_closest] if idx_closest < len(native_coeff_lists) else []
+                                if (order - 1) < len(coeff_list):
+                                    coeff_vals.append(coeff_list[order - 1])
+                                else:
+                                    coeff_vals.append(0.0)
+                        coeff_vals = np.abs(np.asarray(coeff_vals, dtype=float))
+                        endf_unc = endf_unc * coeff_vals
+                    except Exception as _abs_err:
+                        print(f"Warning: Failed converting ENDF uncertainties to absolute values for L={order}: {_abs_err}")
+            else:
+                # Relative percent conversion
+                endf_unc = endf_unc * 100.0
+
+            # Apply masking ONLY if user explicitly provided an energy range
+            if user_supplied_energy_range:
+                # Mask by bin centers
+                mask = (endf_centers >= energy_range[0]) & (endf_centers <= energy_range[1])
+                if not np.any(mask):
+                    continue
+                # Determine slice indices for boundaries
+                idxs = np.where(mask)[0]
+                i0, i1 = idxs[0], idxs[-1]
+                plot_boundaries = endf_boundaries[i0:i1+2]  # +2 to include upper edge
+                plot_unc = endf_unc[i0:i1+1]
+            else:
+                plot_boundaries = endf_boundaries
+                plot_unc = endf_unc
+
+            # Create step values
+            endf_steps = np.append(plot_unc, plot_unc[-1])
+            ax.step(
+                plot_boundaries,
+                endf_steps,
+                where='post',
+                linestyle='-',
+                color=endf_color,
+                linewidth=1.4,
+                alpha=0.7,
+                label=(f"ENDF {isotope_symbol} - L={order}" if single_order_mode else f"ENDF {isotope_symbol} - L={order}"),
+                zorder=2
+            )
     
     # Format the plot
     # Improved title with reaction name if available
@@ -971,6 +1111,27 @@ def plot_mg_vs_endf_uncertainties_comparison(
         legend_loc=legend_loc
     )
     ax.set_xlim(energy_range)
+    
+    # Manually compute y-limits based on visible data
+    if energy_range is not None:
+        e_min, e_max = energy_range
+        y_values_in_range = []
+        for line in ax.get_lines():
+            xdata = line.get_xdata()
+            ydata = line.get_ydata()
+            # Filter to visible x-range
+            mask = (xdata >= e_min) & (xdata <= e_max)
+            if np.any(mask):
+                y_values_in_range.extend(ydata[mask])
+        
+        if y_values_in_range:
+            y_min = np.min(y_values_in_range)
+            y_max = np.max(y_values_in_range)
+            # Add 5% margin
+            y_range = y_max - y_min
+            if y_range > 0:
+                ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.05 * y_range)
+    
     return fig
 
 

@@ -38,7 +38,7 @@ def plot_uncertainties(
     ax
         optional matplotlib Axes to draw into
     energy_range
-        optional tuple (min_energy, max_energy) to limit the plot range
+        optional tuple (min_energy, max_energy) to limit the plot range (in MeV)
     style
         plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
     figsize
@@ -85,13 +85,21 @@ def plot_uncertainties(
     mt_to_color = {m: colors[i % len(colors)] for i, m in enumerate(sorted(set(mts)))}
     zaid_to_linestyle = {z: linestyles[i % len(linestyles)] for i, z in enumerate(sorted(set(zaids)))}
     
-    # Track if we've determined the x-axis type and values
-    energy_grid = None
-    xs = None
-    use_log_scale = False
+    # Helper function to infer edges from bin centers
+    def _centers_to_edges(centers: np.ndarray) -> np.ndarray:
+        """Infer edges from bin centers for step plotting."""
+        centers = np.asarray(centers, dtype=float)
+        if centers.size == 1:
+            width = max(centers[0] * 0.05, 1e-5)
+            return np.array([max(centers[0] - width, 1e-5), centers[0] + width], dtype=float)
+        diffs = np.diff(centers)
+        left0 = centers[0] - diffs[0] / 2.0
+        rightN = centers[-1] + diffs[-1] / 2.0
+        mid = (centers[:-1] + centers[1:]) / 2.0
+        edges = np.concatenate([[max(left0, 1e-5)], mid, [rightN]])
+        return edges
     
-    # Store min/max y values for axis scaling
-    y_min, y_max = float('inf'), float('-inf')
+    use_log_scale = False
     
     # Plot for each ZAID separately, using filter_by_isotope
     for Z in zaids:
@@ -101,34 +109,38 @@ def plot_uncertainties(
             iso_covmat = covmat.filter_by_isotope(Z)
             
             # Get the necessary data from the filtered matrix
-            G = iso_covmat.num_groups
+            G = int(iso_covmat.num_groups)
             diag = np.sqrt(np.diag(iso_covmat.covariance_matrix))
             pairs = iso_covmat._get_param_pairs()
-            
-            # Set up the x-axis values if not done already
-            if xs is None:
-                xs = list(range(1, G+1))  # group indices
-                
-                # Get energy grid if available
-                if iso_covmat.energy_grid is not None and len(iso_covmat.energy_grid) == G + 1:
-                    # Use mid-point of energy bins for plotting
-                    energy_grid = [(iso_covmat.energy_grid[i] + iso_covmat.energy_grid[i+1]) / 2 for i in range(G)]
-                    xs = energy_grid
-                    use_log_scale = True
-            
-            # Filter by energy range if specified and energy_grid is available
-            energy_mask = slice(None)  # Default: use all points
-            if energy_range is not None and energy_grid is not None:
-                min_e, max_e = energy_range
-                energy_mask = np.where((np.array(energy_grid) >= min_e) & 
-                                    (np.array(energy_grid) <= max_e))[0]
-                if len(energy_mask) == 0:
-                    continue  # Skip this isotope if no points in range
             
             for M in mts:
                 if (Z, M) not in pairs:
                     continue
                     
+                i = pairs.index((Z, M))
+                vals = diag[i*G : (i+1)*G]  # length G
+                
+                # Build energy boundaries for step x
+                boundaries = None
+                if getattr(iso_covmat, "energy_grid", None) is not None:
+                    eg = np.asarray(iso_covmat.energy_grid, dtype=float)
+                    if eg.ndim != 1:
+                        print(f"Warning: unexpected energy_grid shape for ZAID={Z}, MT={M}, skipping")
+                        continue
+                    if eg.size == G + 1:
+                        boundaries = eg
+                    elif eg.size == G:
+                        boundaries = _centers_to_edges(eg)
+                    else:
+                        print(f"Warning: energy_grid length {eg.size} incompatible with groups {G} for ZAID={Z}, MT={M}")
+                # Fallback: fake boundaries on indices
+                if boundaries is None:
+                    boundaries = np.arange(G + 1, dtype=float)
+                
+                # Now plot with G+1 x and G+1 y (last value repeated)
+                y = np.r_[vals * 100.0, (vals[-1] * 100.0 if len(vals) else np.nan)]  # percent
+                x = boundaries
+                
                 # Start with original kwargs for this curve
                 curve_kwargs = {k: v for k, v in step_kwargs.items() 
                                if not k.startswith('_') and k != 'ax'}
@@ -140,24 +152,9 @@ def plot_uncertainties(
                 if 'linestyle' not in step_kwargs:
                     curve_kwargs['linestyle'] = zaid_to_linestyle[Z]
                 
-                i = pairs.index((Z, M))
-                sigma = diag[i*G : (i+1)*G]
-                
-                # Apply energy filter
-                if isinstance(energy_mask, slice):
-                    filtered_xs = xs[energy_mask]
-                    filtered_sigma = sigma[energy_mask]
-                else:
-                    filtered_xs = [xs[i] for i in energy_mask]
-                    filtered_sigma = [sigma[i] for i in energy_mask]
-                
-                # Always plot percentage uncertainty
-                y = np.array(filtered_sigma) * 100
-                
-                # Update min/max for y-axis scaling
-                if len(y) > 0:
-                    y_min = min(y_min, np.min(y))
-                    y_max = max(y_max, np.max(y))
+                if 'linewidth' not in curve_kwargs:
+                    curve_kwargs['linewidth'] = 2.0
+                curve_kwargs['where'] = 'post'  # ensures the final bin extends to x[-1]
                 
                 # Format element symbol and MT (with reaction name if available)
                 el_symbol = zaid_to_symbol(Z)
@@ -172,7 +169,11 @@ def plot_uncertainties(
                         label += f" {reaction_name}"
                 
                 # Add the plot
-                ax.step(filtered_xs, y, label=label, **curve_kwargs)
+                ax.step(x, y, label=label, **curve_kwargs)
+                
+                # If we have real energy edges, use a log energy axis
+                if boundaries is not None and (boundaries > 0).all():
+                    use_log_scale = True
                 
         except Exception as e:
             print(f"Warning: Could not process ZAID={Z}: {str(e)}")
@@ -189,23 +190,57 @@ def plot_uncertainties(
             reaction_name = MT_TO_REACTION.get(mt_val, "")
             mt_part = f"MT={mt_val}"
             if reaction_name:
-                mt_part += f" ({reaction_name})"
+                mt_part += f" {reaction_name}"
             title_parts.append(mt_part)
         if title_parts:
             title = " ".join(title_parts)
     
     # Format the axes
-    format_axes(
+    ax = format_axes(
         ax=ax,
         style=style,
         use_log_scale=use_log_scale,
-        is_energy_axis=(energy_grid is not None),
+        is_energy_axis=use_log_scale,
+        x_label="Energy (MeV)" if use_log_scale else "Group",
         y_label="% uncertainty",
         title=title,
-        legend_loc=legend_loc,
-        y_min=y_min if not np.isinf(y_min) else None,
-        y_max=y_max if not np.isinf(y_max) else None
+        legend_loc=legend_loc
     )
+    
+    # Apply x-range like compare_uncertainties: set limits, don't pre-trim data
+    if energy_range is not None:
+        e_min, e_max = energy_range
+        ax.set_xlim(e_min, e_max)
+        
+        # Recompute y-limits based on visible data region
+        y_values_in_range = []
+        for line in ax.get_lines():
+            xdata = np.asarray(line.get_xdata())
+            ydata = np.asarray(line.get_ydata())
+            if xdata.size != ydata.size:
+                continue
+            mask = (xdata >= e_min) & (xdata <= e_max)
+            if np.any(mask):
+                y_values_in_range.extend(ydata[mask])
+        if y_values_in_range:
+            y_vals = np.asarray(y_values_in_range)
+            y0, y1 = float(np.min(y_vals)), float(np.max(y_vals))
+            if np.isfinite(y0) and np.isfinite(y1) and y1 > y0:
+                pad = 0.05 * (y1 - y0)
+                ax.set_ylim(y0 - pad, y1 + pad)
+    else:
+        # Remove default x-padding when using energy edges
+        # Find min & max x from plotted data and tighten
+        all_x = []
+        for line in ax.get_lines():
+            xd = np.asarray(line.get_xdata())
+            if xd.size:
+                all_x.append((np.min(xd), np.max(xd)))
+        if all_x:
+            xmin = min(v[0] for v in all_x)
+            xmax = max(v[1] for v in all_x)
+            if np.isfinite(xmin) and np.isfinite(xmax) and xmax > xmin:
+                ax.set_xlim(xmin, xmax)
     
     # Ensure figure is displayed only if requested
     if show:
@@ -216,7 +251,7 @@ def plot_uncertainties(
 def compare_uncertainties(
     covmats: List[CovMat],
     zaid: int,
-    mt: Union[int, List[int]],
+    mt: Union[int, tuple, List[Union[int, List[int], tuple]]],
     labels: Optional[List[str]] = None,
     ax: plt.Axes = None,
     *,
@@ -240,14 +275,18 @@ def compare_uncertainties(
     zaid
         Single ZAID to plot from all CovMats
     mt
-        Either a single MT reaction to plot from all CovMats,
-        or a list of MTs (one per CovMat) to compare
+        Can be:
+        - A single int: plots that MT from all CovMats
+        - A tuple of ints: plots all those MTs from all CovMats
+        - A list with one entry per CovMat, where each entry is:
+          - A single int: plots that MT from the corresponding CovMat
+          - A list/tuple of ints: plots all those MTs from the corresponding CovMat
     labels
         Optional list of labels for each CovMat (defaults to "CovMat 1", "CovMat 2", etc.)
     ax
         optional matplotlib Axes to draw into
     energy_range
-        optional tuple (min_energy, max_energy) to limit the plot range
+        optional tuple (min_energy, max_energy) to limit the plot range (in MeV)
     style
         plot style: 'default', 'dark', 'paper', 'publication', 'presentation'
     figsize
@@ -277,162 +316,232 @@ def compare_uncertainties(
     """
     if not covmats:
         raise ValueError("No CovMat objects provided")
-    
-    # Handle MT parameter - either single value or list
+
+    # Normalize MTs to a list of lists
     if isinstance(mt, int):
-        mts = [mt] * len(covmats)
+        # Single int → apply to all CovMats
+        mts_per_covmat = [[mt] for _ in covmats]
+    elif isinstance(mt, tuple):
+        # Tuple of ints → apply all those MTs to all CovMats
+        mts_per_covmat = [list(mt) for _ in covmats]
     else:
+        # mt is a list
         if len(mt) != len(covmats):
-            raise ValueError(f"If mt is a list, it must have the same length as covmats "
-                            f"(got {len(mt)} MT values for {len(covmats)} CovMat objects)")
-        mts = mt
-    
-    # Ensure we have labels for all CovMats
+            raise ValueError(
+                f"If mt is a list, it must have the same length as covmats "
+                f"(got {len(mt)} MT values for {len(covmats)} CovMat objects)"
+            )
+        # Normalize each element to a list
+        mts_per_covmat = []
+        for m in mt:
+            if isinstance(m, int):
+                mts_per_covmat.append([m])
+            elif isinstance(m, (list, tuple)):
+                mts_per_covmat.append(list(m))
+            else:
+                raise ValueError(f"MT element must be int or list of ints, got {type(m)}")
+
+    # Labels
     if labels is None:
-        if len(set(mts)) == 1:
-            # If all MTs are the same, just use CovMat numbers
-            labels = [f"CovMat {i+1}" for i in range(len(covmats))]
-        else:
-            # If different MTs, include the MT number in the label
-            labels = [f"MT={mt_val}" for mt_val in mts]
+        labels = [f"CovMat {i+1}" for i in range(len(covmats))]
     elif len(labels) != len(covmats):
         raise ValueError(f"Expected {len(covmats)} labels, got {len(labels)}")
-    
-    # Convert ZAID to element symbol
+
+    # Helpers
+    def _centers_to_edges(centers: np.ndarray) -> np.ndarray:
+        """Infer edges from bin centers for step plotting."""
+        centers = np.asarray(centers, dtype=float)
+        if centers.size == 1:
+            # Make an arbitrary small bracket around the single center
+            width = max(centers[0] * 0.05, 1e-5)
+            return np.array([max(centers[0] - width, 1e-5), centers[0] + width], dtype=float)
+        diffs = np.diff(centers)
+        left0 = centers[0] - diffs[0] / 2.0
+        rightN = centers[-1] + diffs[-1] / 2.0
+        mid = (centers[:-1] + centers[1:]) / 2.0
+        edges = np.concatenate([[max(left0, 1e-5)], mid, [rightN]])
+        return edges
+
+    # Convert ZAID to symbol (same as before)
     el_symbol = zaid_to_symbol(zaid)
-    
-    # Configure plot style and get plotting utilities
+
+    # Configure style
     step_kwargs['ax'] = ax
-    step_kwargs['_func'] = 'step'  # Hint for setup_plot_style
-    
-    # Always use solid line style for comparison plots
-    if 'linestyle' not in step_kwargs:
-        step_kwargs['linestyle'] = '-'
-        
+    step_kwargs['_func'] = 'step'  # hint for setup_plot_style
+    # Don't set default linestyle here - we'll assign per-covmat below
+
     plot_settings = setup_plot_style(
         style=style, figsize=figsize, dpi=dpi, font_family=font_family, **step_kwargs
     )
-    
-    # Extract settings from the returned dict
     ax = plot_settings['ax']
-    colors = plot_settings.get('_colors', [])
-    fig = plot_settings.get('_fig')
+    fig = plot_settings['_fig']
+    colors = plot_settings.get('_colors') or plt.rcParams.get('axes.prop_cycle', None)
+    if hasattr(colors, 'by_key'):
+        colors = colors.by_key().get('color', ['C0', 'C1', 'C2', 'C3', 'C4', 'C5'])
+    if not colors:
+        colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5']
     
-    # Track axis properties
+    # Get linestyles for different CovMats
+    linestyles = plot_settings.get('_linestyles', ['-', '--', '-.', ':'])
+    if not linestyles:
+        linestyles = ['-', '--', '-.', ':']
+
     use_log_scale = False
-    y_min, y_max = float('inf'), float('-inf')
+
+    # Track all unique MTs for title generation and color mapping
+    all_mts = set()
+    for mt_list in mts_per_covmat:
+        all_mts.update(mt_list)
     
-    # Plot uncertainty from each CovMat
-    for i, (covmat, mt_val, label) in enumerate(zip(covmats, mts, labels)):
-        # First filter the covmat to just include the requested isotope
-        try:
-            # Use filter_by_isotope to ensure we only have data for this isotope
-            iso_covmat = covmat.filter_by_isotope(zaid)
-            
-            # Check if the specified ZAID, MT exists in this filtered CovMat
-            pairs = iso_covmat._get_param_pairs()
-            if (zaid, mt_val) not in pairs:
-                print(f"Warning: ZAID={zaid}, MT={mt_val} not found in {label}, skipping")
-                continue
-            
-            # Get the uncertainty data
-            sigma_index = pairs.index((zaid, mt_val))
-            G = iso_covmat.num_groups
-            diag = np.sqrt(np.diag(iso_covmat.covariance_matrix))
-            sigma = diag[sigma_index*G : (sigma_index+1)*G]
-            
-            # Set up the x-axis values
-            if iso_covmat.energy_grid is not None and len(iso_covmat.energy_grid) == G + 1:
-                # Use mid-point of energy bins for plotting
-                energy_grid = [(iso_covmat.energy_grid[j] + iso_covmat.energy_grid[j+1]) / 2 for j in range(G)]
-                xs = energy_grid
-                use_log_scale = True
-            else:
-                xs = list(range(1, G+1))
-            
-            # Filter by energy range if specified and energy_grid is available
-            if energy_range is not None and 'energy_grid' in locals() and energy_grid is not None:
-                min_e, max_e = energy_range
-                energy_mask = np.where((np.array(energy_grid) >= min_e) & 
-                                    (np.array(energy_grid) <= max_e))[0]
-                if len(energy_mask) == 0:
-                    print(f"Warning: No energy points found in range {min_e} to {max_e} for {label}")
+    # Create MT to color mapping (same MT = same color across all CovMats)
+    mt_to_color = {mt_val: colors[i % len(colors)] for i, mt_val in enumerate(sorted(all_mts))}
+    
+    # Create CovMat to linestyle mapping (different CovMat = different linestyle)
+    covmat_to_linestyle = {i: linestyles[i % len(linestyles)] for i in range(len(covmats))}
+
+    # Plot each series - now we need to iterate over all (covmat, mt_val) pairs
+    for covmat_idx, (covmat, mt_list, label) in enumerate(zip(covmats, mts_per_covmat, labels)):
+        for mt_idx, mt_val in enumerate(mt_list):
+            try:
+                iso_covmat = covmat.filter_by_isotope(zaid)
+
+                # Validate presence of (zaid, mt)
+                pairs = iso_covmat._get_param_pairs()
+                if (zaid, mt_val) not in pairs:
+                    print(f"Warning: ZAID={zaid}, MT={mt_val} not found in {label}, skipping")
                     continue
-                    
-                filtered_xs = [xs[j] for j in energy_mask]
-                filtered_sigma = [sigma[j] for j in energy_mask]
-            else:
-                filtered_xs = xs
-                filtered_sigma = sigma
-            
-            # Convert to percentage uncertainty
-            y = np.array(filtered_sigma) * 100
-            
-            # Track min/max for y-axis scaling
-            if len(y) > 0:
-                y_min = min(y_min, np.min(y))
-                y_max = max(y_max, np.max(y))
-            
-            # Set color for this curve (always use solid line)
-            plot_kwargs = {k: v for k, v in step_kwargs.items() 
-                          if not k.startswith('_') and k != 'ax'}
-            if 'color' not in step_kwargs:
-                plot_kwargs['color'] = colors[i % len(colors)]
-            
-            # Always use solid line style
-            plot_kwargs['linestyle'] = '-'
-            
-            # Enhance label if using different MTs
-            if isinstance(mt, list) and len(set(mt)) > 1:
-                reaction_name = MT_TO_REACTION.get(mt_val, "")
-                # If MTs differ, include MT in label unless it's already there
-                if not label.startswith("MT=") and "MT=" not in label:
-                    if reaction_name:
-                        plot_label = f"{label} (MT={mt_val}, {reaction_name})"
+
+                idx = pairs.index((zaid, mt_val))
+                G = int(iso_covmat.num_groups)
+
+                # Uncertainty (std) per group
+                diag = np.sqrt(np.diag(iso_covmat.covariance_matrix))
+                if diag.size < (idx + 1) * G:
+                    print(f"Warning: covariance diagonal too small for {label}, skipping")
+                    continue
+                vals = diag[idx * G: (idx + 1) * G]  # length G
+
+                # Build energy boundaries for step x
+                boundaries = None
+                if getattr(iso_covmat, "energy_grid", None) is not None:
+                    eg = np.asarray(iso_covmat.energy_grid, dtype=float)
+                    if eg.ndim != 1:
+                        print(f"Warning: unexpected energy_grid shape for {label}, skipping")
+                        continue
+                    if eg.size == G + 1:
+                        boundaries = eg
+                    elif eg.size == G:
+                        boundaries = _centers_to_edges(eg)
                     else:
-                        plot_label = f"{label} (MT={mt_val})"
-                else:
-                    plot_label = label
-            else:
+                        print(f"Warning: energy_grid length {eg.size} incompatible with groups {G} for {label}")
+                # Fallback: fake boundaries on indices
+                if boundaries is None:
+                    boundaries = np.arange(G + 1, dtype=float)
+
+                # Now plot with G+1 x and G+1 y (last value repeated)
+                y = np.r_[vals * 100.0, (vals[-1] * 100.0 if len(vals) else np.nan)]  # percent
+                x = boundaries
+
+                # Style kwargs: use MT for color, CovMat for linestyle
+                plot_kwargs = {k: v for k, v in step_kwargs.items() if not k.startswith('_') and k != 'ax'}
+                
+                # Assign color based on MT (same MT = same color)
+                if 'color' not in plot_kwargs:
+                    plot_kwargs['color'] = mt_to_color[mt_val]
+                
+                # Assign linestyle based on CovMat (different CovMat = different linestyle)
+                if 'linestyle' not in plot_kwargs:
+                    plot_kwargs['linestyle'] = covmat_to_linestyle[covmat_idx]
+                
+                if 'linewidth' not in plot_kwargs:
+                    plot_kwargs['linewidth'] = 2.0
+                plot_kwargs['where'] = 'post'  # ensures the final bin extends to x[-1]
+
+                # Build label for this specific series
                 plot_label = label
-            
-            # Plot the uncertainty
-            ax.step(filtered_xs, y, label=plot_label, where='mid', **plot_kwargs)
-            
-        except Exception as e:
-            print(f"Warning: Error processing {label}: {str(e)}")
-            continue
-    
-    # Generate default title if none provided and all MTs are the same
-    if title is None and len(set(mts)) == 1:
-        mt_desc = ""
-        try:
-            if mts[0] in MT_TO_REACTION:
-                mt_desc = f" ({MT_TO_REACTION[mts[0]]})"
-        except (ImportError, IndexError):
-            pass
-        title = f"{el_symbol}, MT={mts[0]}{mt_desc}"
-    elif title is None:
-        # If different MTs, just use the element symbol
-        title = f"{el_symbol}"
-    
-    # Format the axes
-    format_axes(
+                
+                # If this CovMat has multiple MTs, add MT info to distinguish them
+                if len(mt_list) > 1:
+                    reaction_name = MT_TO_REACTION.get(mt_val, "")
+                    plot_label = f"{label} (MT={mt_val}{', ' + reaction_name if reaction_name else ''})"
+                # If all CovMats have the same single MT, labels are fine as is
+                elif len(all_mts) > 1:
+                    # Multiple different MTs across CovMats - add MT info if not already in label
+                    if "MT=" not in label:
+                        reaction_name = MT_TO_REACTION.get(mt_val, "")
+                        plot_label = f"{label} (MT={mt_val}{', ' + reaction_name if reaction_name else ''})"
+
+                ax.step(x, y, label=plot_label, **plot_kwargs)
+
+                # If we have real energy edges, use a log energy axis
+                if boundaries is not None and (boundaries > 0).all():
+                    use_log_scale = True
+
+            except Exception as e:
+                print(f"Warning: Error processing {label}, MT={mt_val}: {e}")
+                continue
+
+    # Title
+    if title is None:
+        if len(all_mts) == 1:
+            try:
+                mt_val = list(all_mts)[0]
+                mt_desc = f" ({MT_TO_REACTION[mt_val]})" if mt_val in MT_TO_REACTION else ""
+            except Exception:
+                mt_desc = ""
+            title = f"{el_symbol}, MT={mt_val}{mt_desc}"
+        else:
+            title = f"{el_symbol}"
+
+    # Axes formatting (match Legendre plot UX)
+    ax = format_axes(
         ax=ax,
         style=style,
         use_log_scale=use_log_scale,
         is_energy_axis=use_log_scale,
+        x_label="Energy (MeV)" if use_log_scale else "Group",
         y_label="% uncertainty",
         title=title,
-        legend_loc=legend_loc,
-        y_min=y_min if not np.isinf(y_min) else None,
-        y_max=y_max if not np.isinf(y_max) else None
+        legend_loc=legend_loc
     )
-    
-    # Ensure figure is displayed only if requested
+
+    # Apply x-range like the Legendre function: set limits, don't pre-trim data
+    if energy_range is not None:
+        e_min, e_max = energy_range
+        ax.set_xlim(e_min, e_max)
+
+        # Recompute y-limits based on visible data region
+        y_values_in_range = []
+        for line in ax.get_lines():
+            xdata = np.asarray(line.get_xdata())
+            ydata = np.asarray(line.get_ydata())
+            if xdata.size != ydata.size:
+                continue  # should not happen with our step construction
+            mask = (xdata >= e_min) & (xdata <= e_max)
+            if np.any(mask):
+                y_values_in_range.extend(ydata[mask])
+        if y_values_in_range:
+            y_vals = np.asarray(y_values_in_range)
+            y0, y1 = float(np.min(y_vals)), float(np.max(y_vals))
+            if np.isfinite(y0) and np.isfinite(y1) and y1 > y0:
+                pad = 0.05 * (y1 - y0)
+                ax.set_ylim(y0 - pad, y1 + pad)
+    else:
+        # Remove default x-padding when using energy edges
+        # Find min & max x from plotted data and tighten
+        all_x = []
+        for line in ax.get_lines():
+            xd = np.asarray(line.get_xdata())
+            if xd.size:
+                all_x.append((np.min(xd), np.max(xd)))
+        if all_x:
+            xmin = min(v[0] for v in all_x)
+            xmax = max(v[1] for v in all_x)
+            if np.isfinite(xmin) and np.isfinite(xmax) and xmax > xmin:
+                ax.set_xlim(xmin, xmax)
+
     if show:
         finalize_plot(fig)
-    
     return fig
 
 
@@ -468,7 +577,7 @@ def plot_multigroup_xs(
     ax : plt.Axes, optional
         Optional matplotlib Axes to draw into
     energy_range : tuple, optional
-        Optional tuple (min_energy, max_energy) to limit the plot range
+        Optional tuple (min_energy, max_energy) to limit the plot range (in MeV)
     show_uncertainties : bool
         If True, show uncertainty bands as shaded areas around the cross sections
     sigma : float
@@ -529,40 +638,33 @@ def plot_multigroup_xs(
     mt_to_color = {m: colors[i % len(colors)] for i, m in enumerate(sorted(set(mts)))}
     zaid_to_linestyle = {z: linestyles[i % len(linestyles)] for i, z in enumerate(sorted(set(zaids)))}
     
-    # Track if we've determined the x-axis type and values
-    energy_grid = None
-    xs = None
+    # Helper function to infer edges from bin centers
+    def _centers_to_edges(centers: np.ndarray) -> np.ndarray:
+        """Infer edges from bin centers for step plotting."""
+        centers = np.asarray(centers, dtype=float)
+        if centers.size == 1:
+            width = max(centers[0] * 0.05, 1e-5)
+            return np.array([max(centers[0] - width, 1e-5), centers[0] + width], dtype=float)
+        diffs = np.diff(centers)
+        left0 = centers[0] - diffs[0] / 2.0
+        rightN = centers[-1] + diffs[-1] / 2.0
+        mid = (centers[:-1] + centers[1:]) / 2.0
+        edges = np.concatenate([[max(left0, 1e-5)], mid, [rightN]])
+        return edges
+    
     use_log_scale = False
     use_y_log_scale = False
     
-    # Store min/max y values for axis scaling
-    y_min, y_max = float('inf'), float('-inf')
-    
     # Get energy grid setup
-    G = covmat.num_groups
+    G = int(covmat.num_groups)
     if G == 0:
         raise ValueError("Number of energy groups is zero")
     
-    # Set up x-axis values - use consistent approach with energy bin centers
-    if covmat.energy_grid is not None and len(covmat.energy_grid) == G + 1:
-        # Use mid-point of energy bins for plotting
-        energy_grid = [(covmat.energy_grid[i] + covmat.energy_grid[i+1]) / 2 for i in range(G)]
-        xs = energy_grid
-        use_log_scale = True
-    else:
-        xs = list(range(1, G+1))  # group indices
-    
-    # Filter by energy range if specified and energy_grid is available
-    energy_mask = slice(None)  # Default: use all points
-    if energy_range is not None and energy_grid is not None:
-        min_e, max_e = energy_range
-        energy_mask = np.where((np.array(energy_grid) >= min_e) & 
-                              (np.array(energy_grid) <= max_e))[0]
-        if len(energy_mask) == 0:
-            raise ValueError(f"No energy points found in range {min_e} to {max_e}")
-    
     # Store uncertainty data for proper alignment
     uncertainty_data = {}
+    
+    # Track y-axis range for log scale decision
+    y_min, y_max = float('inf'), float('-inf')
     
     # Plot for each ZAID/MT combination
     for Z in zaids:
@@ -578,21 +680,30 @@ def plot_multigroup_xs(
                 print(f"Warning: Cross section data length ({len(xs_data)}) doesn't match num_groups ({G}) for ZAID={Z}, MT={M}")
                 continue
             
-            # Apply energy filter
-            if isinstance(energy_mask, slice):
-                filtered_xs = xs[energy_mask]
-                filtered_xs_data = xs_data[energy_mask]
-            else:
-                filtered_xs = [xs[i] for i in energy_mask]
-                filtered_xs_data = [xs_data[i] for i in energy_mask]
+            # Build energy boundaries for step x
+            boundaries = None
+            if getattr(covmat, "energy_grid", None) is not None:
+                eg = np.asarray(covmat.energy_grid, dtype=float)
+                if eg.ndim != 1:
+                    print(f"Warning: unexpected energy_grid shape for ZAID={Z}, MT={M}, skipping")
+                    continue
+                if eg.size == G + 1:
+                    boundaries = eg
+                elif eg.size == G:
+                    boundaries = _centers_to_edges(eg)
+                else:
+                    print(f"Warning: energy_grid length {eg.size} incompatible with groups {G} for ZAID={Z}, MT={M}")
+            # Fallback: fake boundaries on indices
+            if boundaries is None:
+                boundaries = np.arange(G + 1, dtype=float)
             
-            # Convert to numpy arrays for easier manipulation
-            filtered_xs = np.array(filtered_xs)
-            filtered_xs_data = np.array(filtered_xs_data)
+            # Now plot with G+1 x and G+1 y (last value repeated)
+            y = np.r_[xs_data, (xs_data[-1] if len(xs_data) else np.nan)]
+            x = boundaries
             
             # Update min/max for y-axis scaling
-            if len(filtered_xs_data) > 0 and np.any(filtered_xs_data > 0):
-                positive_data = filtered_xs_data[filtered_xs_data > 0]
+            if len(xs_data) > 0 and np.any(xs_data > 0):
+                positive_data = xs_data[xs_data > 0]
                 y_min = min(y_min, np.min(positive_data))
                 y_max = max(y_max, np.max(positive_data))
             
@@ -607,17 +718,21 @@ def plot_multigroup_xs(
             if 'linestyle' not in step_kwargs:
                 curve_kwargs['linestyle'] = zaid_to_linestyle[Z]
             
+            if 'linewidth' not in curve_kwargs:
+                curve_kwargs['linewidth'] = 2.0
+            curve_kwargs['where'] = 'post'  # ensures the final bin extends to x[-1]
+            
             # Format element symbol and MT (with reaction name if available)
             el_symbol = zaid_to_symbol(Z)
             reaction_name = MT_TO_REACTION.get(M, "")
             
             # Format labels consistently
             if style == 'paper' or style == 'publication':
-                label = f"{el_symbol}, MT={M} ({reaction_name})" if reaction_name else f"{el_symbol}, MT={M}"
+                label = f"{el_symbol}, MT={M} {reaction_name}" if reaction_name else f"{el_symbol}, MT={M}"
             else:
                 label = f"{el_symbol}-{M}"
                 if reaction_name:
-                    label += f" ({reaction_name})"
+                    label += f" {reaction_name}"
             
             # Add sigma information to label if showing uncertainties
             if show_uncertainties and sigma != 1.0:
@@ -625,10 +740,13 @@ def plot_multigroup_xs(
             elif show_uncertainties:
                 label += " (±1σ)"
             
-            # Plot the cross section - force where='mid' for step plots
+            # Plot the cross section
             line_color = curve_kwargs.get('color', mt_to_color[M])
-            curve_kwargs['where'] = 'mid'  # Ensure consistent step positioning
-            ax.step(filtered_xs, filtered_xs_data, label=label, **curve_kwargs)
+            ax.step(x, y, label=label, **curve_kwargs)
+            
+            # If we have real energy edges, use a log energy axis
+            if boundaries is not None and (boundaries > 0).all():
+                use_log_scale = True
             
             # Prepare uncertainty data if requested
             if show_uncertainties:
@@ -643,19 +761,11 @@ def plot_multigroup_xs(
                         diag = np.sqrt(np.diag(iso_covmat.covariance_matrix))
                         rel_sigma = diag[sigma_index*G : (sigma_index+1)*G]
                         
-                        # Apply energy filter to sigma
-                        if isinstance(energy_mask, slice):
-                            filtered_sigma = rel_sigma[energy_mask]
-                        else:
-                            filtered_sigma = [rel_sigma[i] for i in energy_mask]
-                        
-                        filtered_sigma = np.array(filtered_sigma)
-                        
                         # Store for later plotting to ensure proper alignment
                         uncertainty_data[(Z, M)] = {
-                            'xs': filtered_xs.copy(),
-                            'xs_data': filtered_xs_data.copy(),
-                            'sigma': filtered_sigma.copy(),
+                            'boundaries': boundaries.copy(),
+                            'xs_data': xs_data.copy(),
+                            'sigma': rel_sigma.copy(),
                             'color': line_color
                         }
                         
@@ -674,15 +784,18 @@ def plot_multigroup_xs(
                 # Ensure lower bound doesn't go negative
                 lower_bound = np.maximum(lower_bound, np.zeros_like(lower_bound))
                 
+                # Extend bounds to match boundary length (repeat last value)
+                upper_y = np.r_[upper_bound, upper_bound[-1] if len(upper_bound) else np.nan]
+                lower_y = np.r_[lower_bound, lower_bound[-1] if len(lower_bound) else np.nan]
+                
                 # Update y-axis limits to include uncertainty bounds
                 if len(upper_bound) > 0 and np.any(upper_bound > 0):
                     positive_upper = upper_bound[upper_bound > 0]
                     y_max = max(y_max, np.max(positive_upper))
                 
-                # Add shaded uncertainty region with consistent step behavior
-                ax.fill_between(unc_data['xs'], lower_bound, upper_bound, 
-                               color=unc_data['color'], alpha=0.2, step='mid',
-                               interpolate=False)  # Disable interpolation for step consistency
+                # Add shaded uncertainty region with step behavior
+                ax.fill_between(unc_data['boundaries'], lower_y, upper_y, 
+                               color=unc_data['color'], alpha=0.2, step='post')
                 
             except Exception as e:
                 print(f"Warning: Could not add uncertainties for ZAID={Z}, MT={M}: {str(e)}")
@@ -703,7 +816,7 @@ def plot_multigroup_xs(
             reaction_name = MT_TO_REACTION.get(mt_val, "")
             mt_part = f"MT={mt_val}"
             if reaction_name:
-                mt_part += f" ({reaction_name})"
+                mt_part += f" {reaction_name}"
             title_parts.append(mt_part)
         if title_parts:
             title = " ".join(title_parts) + " Cross Sections"
@@ -714,18 +827,83 @@ def plot_multigroup_xs(
     y_label = "Cross Section (barns)"
     
     # Format the axes
-    format_axes(
+    ax = format_axes(
         ax=ax,
         style=style,
         use_log_scale=use_log_scale,
-        is_energy_axis=(energy_grid is not None),
+        is_energy_axis=use_log_scale,
+        x_label="Energy (MeV)" if use_log_scale else "Group",
         y_label=y_label,
         title=title,
-        legend_loc=legend_loc,
-        y_min=y_min if not np.isinf(y_min) else None,
-        y_max=y_max if not np.isinf(y_max) else None,
-        use_y_log_scale=use_y_log_scale
+        legend_loc=legend_loc
     )
+    
+    # Apply y-axis log scale if determined
+    if use_y_log_scale:
+        ax.set_yscale('log')
+    
+    # Apply x-range like compare_uncertainties: set limits, don't pre-trim data
+    if energy_range is not None:
+        e_min, e_max = energy_range
+        ax.set_xlim(e_min, e_max)
+        
+        # Recompute y-limits based on visible data region
+        y_values_in_range = []
+        
+        # Get data from lines
+        for line in ax.get_lines():
+            xdata = np.asarray(line.get_xdata())
+            ydata = np.asarray(line.get_ydata())
+            if xdata.size != ydata.size:
+                continue
+            mask = (xdata >= e_min) & (xdata <= e_max)
+            if np.any(mask):
+                y_values_in_range.extend(ydata[mask])
+        
+        # Also check PolyCollection objects (from fill_between for uncertainty bands)
+        for collection in ax.collections:
+            for path in collection.get_paths():
+                vertices = path.vertices
+                if len(vertices) > 0:
+                    x_verts = vertices[:, 0]
+                    y_verts = vertices[:, 1]
+                    mask = (x_verts >= e_min) & (x_verts <= e_max)
+                    if np.any(mask):
+                        y_values_in_range.extend(y_verts[mask])
+        
+        if y_values_in_range:
+            # Filter out non-positive values if using log scale
+            if use_y_log_scale:
+                y_values_in_range = [y for y in y_values_in_range if y > 0]
+            
+            if y_values_in_range:
+                y_vals = np.asarray(y_values_in_range)
+                y0, y1 = float(np.min(y_vals)), float(np.max(y_vals))
+                
+                if np.isfinite(y0) and np.isfinite(y1) and y1 > y0:
+                    if use_y_log_scale and y0 > 0:
+                        # For log scale, use multiplicative margin
+                        log_range = np.log10(y1) - np.log10(y0)
+                        if log_range > 0:
+                            margin_factor = 10 ** (0.05 * log_range)
+                            ax.set_ylim(y0 / margin_factor, y1 * margin_factor)
+                    else:
+                        # For linear scale, use additive margin
+                        pad = 0.05 * (y1 - y0)
+                        ax.set_ylim(y0 - pad, y1 + pad)
+    else:
+        # Remove default x-padding when using energy edges
+        # Find min & max x from plotted data and tighten
+        all_x = []
+        for line in ax.get_lines():
+            xd = np.asarray(line.get_xdata())
+            if xd.size:
+                all_x.append((np.min(xd), np.max(xd)))
+        if all_x:
+            xmin = min(v[0] for v in all_x)
+            xmax = max(v[1] for v in all_x)
+            if np.isfinite(xmin) and np.isfinite(xmax) and xmax > xmin:
+                ax.set_xlim(xmin, xmax)
     
     # Ensure figure is displayed only if requested
     if show:

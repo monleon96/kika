@@ -299,5 +299,77 @@ class CrossSectionData:
         
         return pd.DataFrame(result)
     
+    def to_plot_data(self, mt: int, **kwargs):
+        """
+        Extract cross section plot data in a format compatible with PlotBuilder.
+        
+        This method provides direct access to cross section data without going through
+        the parent Ace object. It's equivalent to calling ace.to_plot_data('xs', mt=mt).
+        
+        Parameters
+        ----------
+        mt : int
+            MT reaction number
+        **kwargs
+            Additional parameters for styling:
+            - label (str): Custom label (default: auto-generated)
+            - color (str): Line color
+            - linestyle (str): Line style ('-', '--', '-.', ':')
+            - linewidth (float): Line width
+            - marker (str): Marker style ('o', 's', '^', etc.)
+            - markersize (float): Marker size
+            
+        Returns
+        -------
+        PlotData
+            PlotData object compatible with PlotBuilder
+            
+        Examples
+        --------
+        >>> ace = mcnpy.read_ace('fe56.ace')
+        >>> 
+        >>> # Direct access from cross_section object
+        >>> xs_data = ace.cross_section.to_plot_data(mt=2, label='Elastic')
+        >>> 
+        >>> # Use with PlotBuilder
+        >>> from mcnpy.plotting import PlotBuilder
+        >>> fig = (PlotBuilder()
+        ...        .add_data(xs_data)
+        ...        .set_labels(x_label='Energy (MeV)', y_label='XS (barns)')
+        ...        .set_scales(log_x=True, log_y=True)
+        ...        .build())
+        """
+        from mcnpy.plotting import PlotData
+        import numpy as np
+        
+        if not self.has_data:
+            raise ValueError("No cross section data available")
+        
+        if mt not in self.reaction:
+            available_mts = self.mt_numbers
+            raise ValueError(f"MT={mt} not found. Available MT numbers: {available_mts}")
+        
+        reaction = self.reaction[mt]
+        energies = reaction.energies  # In MeV
+        xs_values = reaction.xs_values  # In barns
+        
+        # Get label
+        label = kwargs.get('label', None)
+        if label is None:
+            # Create default label from MT number
+            label = f"MT={mt}"
+        
+        return PlotData(
+            x=np.array(energies),
+            y=np.array(xs_values),
+            label=label,
+            color=kwargs.get('color', None),
+            linestyle=kwargs.get('linestyle', '-'),
+            linewidth=kwargs.get('linewidth', None),
+            marker=kwargs.get('marker', None),
+            markersize=kwargs.get('markersize', None),
+            plot_type='line'
+        )
+    
     def __repr__(self):
         return xs_data_repr(self)

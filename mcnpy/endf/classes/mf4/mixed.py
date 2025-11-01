@@ -113,6 +113,47 @@ class MF4MTMixed(MF4MT):
             return (self._tabulated_cosines[index], self._tabulated_probabilities[index])
         except (ValueError, IndexError):
             return ([], [])
+    
+    def to_plot_data(
+        self,
+        order: int,
+        label: str = None,
+        **styling_kwargs
+    ):
+        """
+        Create a PlotData object for Legendre coefficient data from mixed representation.
+        
+        This method extracts data from the Legendre portion of the mixed representation
+        (LTT=3). The tabulated portion is not used for this plot type.
+        
+        Parameters
+        ----------
+        order : int
+            Legendre polynomial order to extract
+        label : str, optional
+            Custom label for the plot. If None, auto-generates from isotope and order.
+        **styling_kwargs
+            Additional styling kwargs (color, linestyle, linewidth, etc.)
+            
+        Returns
+        -------
+        LegendreCoeffPlotData
+            Plot data object ready to be added to a PlotBuilder
+            
+        Examples
+        --------
+        >>> # Extract Legendre coefficients from mixed representation
+        >>> data = mf4_mixed.to_plot_data(order=1, color='blue')
+        >>> builder = PlotBuilder().add_data(data).build()
+        
+        Notes
+        -----
+        Mixed representation (LTT=3) contains both Legendre coefficients at low energies
+        and tabulated distributions at high energies. This method uses only the Legendre
+        portion. The energy range plotted will correspond to the Legendre energy grid.
+        """
+        from .plot_utils import create_legendre_coeff_plot_data
+        return create_legendre_coeff_plot_data(self, order=order, label=label, **styling_kwargs)
 
 
     # --- CORE: extract coefficients with auto-trim and ENDF interpolation ---

@@ -261,10 +261,6 @@ def perturb_ACE_files(
     matrix_dir = _initialize_master_perturbation_matrix(output_dir, timestamp, num_samples)
     _logger.info(f"[MATRIX] [INIT] Initialized matrix directory: {os.path.basename(matrix_dir)}")
 
-    # Console: Show progress
-    print(f"[INFO] Processing {len(ace_files)} isotope(s)")
-    print(f"[INFO] Matrix directory: {os.path.basename(matrix_dir)}")
-
     # Handle case where there's only one covariance file for multiple ACE files
     if len(cov_files) == 1 and len(ace_files) > 1:
         # Use the same covariance file for all ACE files
@@ -278,9 +274,6 @@ def perturb_ACE_files(
         _logger.info(f"\n{separator}")
         _logger.info(f"[ACE] [PROCESSING] {ace_file}")
         _logger.info(f"{separator}\n")
-
-        # Console: Basic progress
-        print(f"\n[INFO] Processing isotope {i+1}/{len(ace_files)}: {os.path.basename(ace_file)}")
 
         # Check if ACE file exists
         if not os.path.exists(ace_file):
@@ -305,7 +298,6 @@ def perturb_ACE_files(
             }
             skipped_isotopes[zaid] = "ACE file not found"
             _logger.info(f"\n{separator}\n")
-            print(f"[ERROR] ACE file not found for {os.path.basename(ace_file)}")
             continue
 
         # Read ACE file first to get ZAID
@@ -338,7 +330,6 @@ def perturb_ACE_files(
             summary_data[zaid]["warnings"].append(f"No valid covariance file found: {os.path.basename(cov_file)}")
             skipped_isotopes[zaid] = "No valid covariance file found"
             _logger.info(f"\n{separator}\n")
-            print(f"[ERROR] Failed to load covariance for {os.path.basename(ace_file)}")
             continue
 
         _logger.info(f"  Covariance file: {cov_file}")
@@ -353,7 +344,6 @@ def perturb_ACE_files(
             summary_data[zaid]["warnings"].append("No covariance data found in matrix")
             skipped_isotopes[zaid] = "No covariance data found in matrix"
             _logger.info(f"\n{separator}\n")
-            print(f"[WARNING] No covariance data for {os.path.basename(ace_file)}")
             continue
 
         # Apply user-specified block removals before clean_cov
@@ -405,10 +395,40 @@ def perturb_ACE_files(
         summary_data[zaid]["mt_in_cov"] = sorted(mt_in_cov)
         
         mt_in_ace = sorted(set(ace.mt_numbers))
-        if len(mt_list) == 0:
+        
+        # Separate positive and negative MTs from the input list
+        mt_positive = [mt for mt in mt_list if mt > 0]
+        mt_negative = [abs(mt) for mt in mt_list if mt < 0]  # Store as positive for easier comparison
+        
+        # Expand negative MTs to include their associated ranges
+        # If a summary MT (like 4, 103, 107) is excluded, also exclude its range
+        expanded_mt_negative = set(mt_negative)
+        for excluded_mt in mt_negative:
+            for single, rng in MT_GROUPS:
+                if single == excluded_mt:
+                    # Add all MTs in the associated range to the exclusion list
+                    expanded_mt_negative.update(rng)
+                    break
+        
+        # Determine requested MTs based on positive list
+        if len(mt_positive) == 0:
+            # No positive MTs specified: start with all MTs in ACE
             mt_request = mt_in_ace
         else:
-            mt_request = sorted(mt_list)
+            # Positive MTs specified: use only those
+            mt_request = sorted(mt_positive)
+        
+        # Apply exclusions (negative MTs and their associated ranges)
+        if mt_negative:
+            if len(expanded_mt_negative) > len(mt_negative):
+                # Log both the explicitly excluded MTs and the ranges they affect
+                _logger.info(f"[ACE] [MT EXCLUSION] Excluding MTs: {sorted(mt_negative)}")
+                additional = sorted(expanded_mt_negative - set(mt_negative))
+                if additional:
+                    _logger.info(f"[ACE] [MT EXCLUSION] Also excluding associated range MTs: {additional}")
+            else:
+                _logger.info(f"[ACE] [MT EXCLUSION] Excluding MTs: {sorted(mt_negative)}")
+            mt_request = [mt for mt in mt_request if mt not in expanded_mt_negative]
 
         # Save original MT list before processing 
         original_mt_perturb = set(mt_in_cov) & set(mt_request) & set(mt_in_ace)
@@ -426,11 +446,19 @@ def perturb_ACE_files(
             ace_in_range    = [mt for mt in mt_in_ace if mt in rng]
 
             # --- Logic for single element (e.g., 4, 103, 104, etc.) ---
-            if cov_has_single and (list_has_single or (list_in_range and ace_in_range)):
+            # Check if the single MT was explicitly excluded
+            single_is_excluded = single in expanded_mt_negative
+            
+            if cov_has_single and (list_has_single or (list_in_range and ace_in_range)) and not single_is_excluded:
                 mt_perturb.add(single)
             else:
                 if single in mt_perturb:
-                    if not (cov_has_single and (list_has_single or (list_in_range and ace_in_range))):
+                    if single_is_excluded:
+                        if single in mt_negative:
+                            group_removed_mts[single] = f"MT={single} explicitly excluded via negative MT specification"
+                        else:
+                            group_removed_mts[single] = f"MT={single} excluded because summary MT was negatively specified"
+                    elif not (cov_has_single and (list_has_single or (list_in_range and ace_in_range))):
                         group_removed_mts[single] = f"Missing data in covariance or ACE file for MT={single} or its associated range"
                 mt_perturb.discard(single)
                 if cov_has_single:
@@ -438,13 +466,16 @@ def perturb_ACE_files(
 
             # --- Logic for associated range (51-91, 600-649, etc.) ---
             if cov_in_range:
-                if (list_has_single or list_in_range) and ace_in_range:
+                if (list_has_single or list_in_range) and ace_in_range and not single_is_excluded:
                     # Keep only the triple intersection in this range
                     triple = set(cov_in_range) & set(mt_request) & set(mt_in_ace)
                     removed_range = set(cov_in_range) - triple
                     for mt in removed_range:
                         if mt in original_mt_perturb:
-                            group_removed_mts[mt] = f"MT not in triple intersection for range associated with MT={single}"
+                            if mt in expanded_mt_negative:
+                                group_removed_mts[mt] = f"MT={mt} excluded because summary MT={single} was negatively specified"
+                            else:
+                                group_removed_mts[mt] = f"MT not in triple intersection for range associated with MT={single}"
                     
                     mt_perturb.update(triple)
                     # Remove those outside the triple intersection from cov
@@ -456,7 +487,10 @@ def perturb_ACE_files(
                     to_remove = [(mt, 0) for mt in cov_in_range]
                     for mt in cov_in_range:
                         if mt in original_mt_perturb:
-                            group_removed_mts[mt] = f"MT range removed because required data missing in ACE or request list"
+                            if single_is_excluded and mt in expanded_mt_negative:
+                                group_removed_mts[mt] = f"MT={mt} excluded because summary MT={single} was negatively specified"
+                            else:
+                                group_removed_mts[mt] = f"MT range removed because required data missing in ACE or request list"
                     
                     cov = cov.remove_matrix(zaid, to_remove)
                     for mt in cov_in_range:
@@ -486,9 +520,6 @@ def perturb_ACE_files(
 
         # Save pre-autofix MT list
         pre_autofix_mts = list(mt_perturb)
-        
-        # Console: Show sample generation start
-        print(f"[INFO] Generating {num_samples} samples for ZAID {zaid}")
         
         try:
             factors, mt_perturb_final, fix_info = generate_samples(
@@ -520,7 +551,6 @@ def perturb_ACE_files(
                 skipped_isotopes[zaid] = str(e)
                 
                 _logger.info(f"\n{separator}\n")
-                print(f"[ERROR] Soft autofix and decomposition failed for {os.path.basename(ace_file)}")
                 continue
             elif isinstance(e, CovarianceFixError):
                 _logger.error(f"[ACE] [ERROR] Covariance matrix fixing failed for isotope {zaid}")
@@ -532,7 +562,6 @@ def perturb_ACE_files(
                 skipped_isotopes[zaid] = str(e)
                 
                 _logger.info(f"\n{separator}\n")
-                print(f"[ERROR] Covariance fix failed for {os.path.basename(ace_file)}")
                 continue
             else:
                 # Re-raise other exceptions
@@ -589,7 +618,6 @@ def perturb_ACE_files(
             for j in range(num_samples):
                 _write_sample_summary(factors[j], j, energy_grid, mt_perturb_final, iso_dir, base)
             _logger.info(f"\n{separator}\n")
-            print(f"[INFO] Completed dry run for ZAID {zaid}")
             continue
 
         # =====================================================================
@@ -616,7 +644,6 @@ def perturb_ACE_files(
                 pool.join()
                 
             _logger.info(f"  Completed generating {num_samples} samples")
-            print(f"[INFO] Completed ACE generation for ZAID {zaid}")
         else:
             # For sequential processing, show periodic progress updates
             _logger.info(f"  Generating samples (progress updates every {report_interval} samples)")
@@ -628,8 +655,6 @@ def perturb_ACE_files(
                 if (i + 1) % report_interval == 0 or i + 1 == num_samples:
                     progress = (i + 1) / num_samples * 100
                     _logger.info(f"  Progress: {i + 1}/{num_samples} samples ({progress:.1f}%)")
-            
-            print(f"[INFO] Completed ACE generation for ZAID {zaid}")
 
         # ====== End of ACE file processing ======
         _logger.info(f"\n{separator}")

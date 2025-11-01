@@ -636,6 +636,113 @@ class CovMat:
             "contributions": contribs
         }
     
+    def get_uncertainty(
+        self,
+        zaid: int,
+        mt: int,
+        energy_mev: Optional[float] = None
+    ) -> Union[float, np.ndarray]:
+        """
+        Get relative uncertainty (standard deviation / mean) for a specific isotope and reaction.
+        
+        The covariance matrices store relative covariances, so the square root of the
+        diagonal elements directly gives relative uncertainties (as fractions).
+        
+        Parameters
+        ----------
+        zaid : int
+            Isotope identifier (e.g., 26056 for Fe-56)
+        mt : int
+            Reaction MT number
+        energy_mev : float, optional
+            Specific energy in MeV. If provided, returns uncertainty at that energy.
+            If None, returns array of uncertainties for all energy groups.
+        
+        Returns
+        -------
+        float or np.ndarray
+            Relative uncertainty (as fraction, e.g., 0.05 for 5%).
+            If energy_mev is provided, returns a single float.
+            If energy_mev is None, returns array of uncertainties for all groups.
+        
+        Raises
+        ------
+        ValueError
+            If the specified (zaid, mt) pair is not found in the covariance data
+        """
+        # Filter to get only this isotope's data
+        try:
+            iso_covmat = self.filter_by_isotope(zaid)
+        except Exception as e:
+            raise ValueError(f"Could not filter covariance data for ZAID={zaid}: {e}")
+        
+        # Get parameter pairs and find the index for this (zaid, mt) pair
+        pairs = iso_covmat._get_param_pairs()
+        if (zaid, mt) not in pairs:
+            raise ValueError(
+                f"No covariance data found for ZAID={zaid}, MT={mt}. "
+                f"Available pairs: {pairs}"
+            )
+        
+        # Get the diagonal of the covariance matrix (relative variances)
+        G = iso_covmat.num_groups
+        full_cov = iso_covmat.covariance_matrix
+        diag = np.sqrt(np.diag(full_cov))  # Relative standard deviations
+        
+        # Find the block index for this (zaid, mt) pair
+        block_idx = pairs.index((zaid, mt))
+        
+        # Extract the uncertainties for this reaction
+        uncertainties = diag[block_idx * G : (block_idx + 1) * G]
+        
+        # If specific energy requested, find the corresponding group
+        if energy_mev is not None:
+            if self.energy_grid is None:
+                raise ValueError("No energy grid available in covariance data")
+            
+            energy_grid = np.array(self.energy_grid)
+            
+            # Detect units: if first value > 1000, assume eV, otherwise MeV
+            if energy_grid[0] > 1000:
+                # Grid is in eV, convert input energy to eV
+                energy_to_match = energy_mev * 1e6
+            else:
+                # Grid is already in MeV
+                energy_to_match = energy_mev
+            
+            # Find the bin index (energy grid has G+1 boundaries for G groups)
+            group_idx = None
+            for i in range(len(energy_grid) - 1):
+                if energy_grid[i] <= energy_to_match < energy_grid[i+1]:
+                    group_idx = i
+                    break
+            
+            # Check upper boundary edge case
+            if group_idx is None:
+                tolerance = 1e-3 if energy_grid[0] <= 1000 else 1e3
+                if abs(energy_to_match - energy_grid[-1]) < tolerance:
+                    group_idx = len(energy_grid) - 2
+            
+            if group_idx is None:
+                if energy_grid[0] > 1000:
+                    raise ValueError(
+                        f"Energy {energy_mev} MeV ({energy_to_match:.4e} eV) is outside "
+                        f"covariance energy range: {energy_grid[0]/1e6:.4f} - "
+                        f"{energy_grid[-1]/1e6:.4f} MeV"
+                    )
+                else:
+                    raise ValueError(
+                        f"Energy {energy_mev} MeV is outside covariance energy range: "
+                        f"{energy_grid[0]:.4f} - {energy_grid[-1]:.4f} MeV"
+                    )
+            
+            return float(uncertainties[group_idx])
+        
+        # Return all uncertainties
+        return uncertainties
+    
+
+    
     def plot_uncertainties(
         self,
         zaid: Union[int, Sequence[int]],
@@ -666,6 +773,145 @@ class CovMat:
             legend_loc=legend_loc,
             **step_kwargs,
         )
+    
+    def to_plot_data(
+        self,
+        zaid: int,
+        mt: int,
+        sigma: float = 1.0,
+        label: str = None,
+        **styling_kwargs
+    ):
+        """
+        Create PlotData objects for multigroup cross sections with uncertainties.
+        
+        This unified method extracts both nominal cross section data and uncertainty data.
+        Both are returned as PlotData objects that can be plotted independently or combined.
+        
+        Parameters
+        ----------
+        zaid : int
+            Isotope identifier (ZAID)
+        mt : int
+            Reaction MT number
+        sigma : float, optional
+            Number of sigma levels for uncertainty bands (default: 1.0 for 1σ).
+        label : str, optional
+            Custom label for the plot. If None, auto-generates from ZAID and MT.
+        **styling_kwargs
+            Additional styling kwargs (color, linestyle, linewidth, etc.)
+            
+        Returns
+        -------
+        tuple of (MultigroupXSPlotData, MultigroupUncertaintyPlotData)
+            - xs_data: Cross section data for plotting (or None if not available)
+            - unc_data: Uncertainty data as percentages (or None if not available)
+            
+        Raises
+        ------
+        ValueError
+            If the specified (zaid, mt) pair is not found in either cross sections or covariance data
+            
+        Examples
+        --------
+        >>> # Extract data
+        >>> covmat = read_njoy_covmat('file.gendf')
+        >>> xs_data, unc_data = covmat.to_plot_data(zaid=26056, mt=2)
+        >>> 
+        >>> # Use with PlotBuilder:
+        >>> from mcnpy.plotting import PlotBuilder
+        >>> 
+        >>> # Option 1: Plot just cross sections
+        >>> fig1 = PlotBuilder().add_data(xs_data).build()
+        >>> 
+        >>> # Option 2: Plot cross sections with uncertainty shading
+        >>> fig2 = PlotBuilder().add_data(xs_data, uncertainty=unc_data).build()
+        >>> 
+        >>> # Option 3: Plot just uncertainties as a line
+        >>> fig3 = PlotBuilder().add_data(unc_data).build()
+        """
+        from mcnpy.plotting import MultigroupUncertaintyPlotData
+        from mcnpy._utils import zaid_to_symbol
+        
+        # Extract cross section data (will add sigma notation to label if uncertainties exist)
+        xs_data = self._extract_xs_data(zaid, mt, label, sigma, **styling_kwargs)
+        
+        # Extract uncertainty data as MultigroupUncertaintyPlotData
+        unc_data = None
+        key = (zaid, mt)
+        
+        # Find the diagonal covariance matrix
+        for i, (iso_r, mt_r, iso_c, mt_c) in enumerate(zip(
+            self.isotope_rows, self.reaction_rows,
+            self.isotope_cols, self.reaction_cols
+        )):
+            if iso_r == zaid and mt_r == mt and iso_c == zaid and mt_c == mt:
+                # Found diagonal block - extract uncertainties
+                cov_matrix = self.matrices[i]
+                diag = np.diag(cov_matrix)
+                
+                # Get cross sections for this reaction (needed for creating MultigroupUncertaintyPlotData)
+                if key in self.cross_sections:
+                    xs = np.asarray(self.cross_sections[key], dtype=float)
+                    
+                    # IMPORTANT: The covariance matrix from GENDF is already relative!
+                    # sqrt(diag) gives us the relative standard deviation (fractional)
+                    # We should NOT divide by xs again!
+                    rel_unc = np.sqrt(diag)
+                    
+                    # Ensure finite values
+                    rel_unc = np.where(np.isfinite(rel_unc), rel_unc, 0.0)
+                    
+                    # Convert to percentage and apply sigma multiplier
+                    rel_unc_pct = rel_unc * 100.0 * sigma
+                    
+                    # For step plots with 'post', we need G+1 points (bin edges)
+                    # with the last y-value repeated to show all G bins properly
+                    if self.energy_grid is not None:
+                        energy_edges = np.asarray(self.energy_grid, dtype=float)
+                        # Use energy edges (G+1 points) for x-axis
+                        x_values = energy_edges
+                        # Extend y-values to G+1 by repeating the last value
+                        y_values = np.r_[rel_unc_pct, rel_unc_pct[-1]]
+                    else:
+                        # Fallback: use indices as edges
+                        x_values = np.arange(len(rel_unc_pct) + 1, dtype=float)
+                        y_values = np.r_[rel_unc_pct, rel_unc_pct[-1]]
+                    
+                    # Generate label (for uncertainty data line plot)
+                    if label is None:
+                        try:
+                            isotope_symbol = zaid_to_symbol(zaid)
+                        except Exception:
+                            isotope_symbol = f"ZAID {zaid}"
+                        
+                        reaction_name = MT_TO_REACTION.get(mt, f"MT={mt}")
+                        
+                        sigma_str = f"{sigma}σ" if sigma != 1.0 else "1σ"
+                        label = f"{isotope_symbol} {reaction_name} Uncertainty ({sigma_str})"
+                    
+                    # Create MultigroupUncertaintyPlotData
+                    unc_data = MultigroupUncertaintyPlotData(
+                        x=x_values,
+                        y=y_values,
+                        label=label,
+                        zaid=zaid,
+                        mt=mt,
+                        uncertainty_type='relative',
+                        energy_bins=energy_edges if self.energy_grid is not None else None,
+                        step_where='post',
+                        **styling_kwargs
+                    )
+                break
+        
+        # Check if at least one of them is available
+        if xs_data is None and unc_data is None:
+            raise ValueError(
+                f"No data found for ZAID={zaid}, MT={mt}. "
+                "Neither cross sections nor covariance data available."
+            )
+        
+        return xs_data, unc_data
     
     def plot_multigroup_xs(
         self,
@@ -1310,6 +1556,91 @@ class CovMat:
             "clamp_iter": iter_num,
         }
         return current, log
+
+    def _extract_xs_data(
+        self,
+        zaid: int,
+        mt: int,
+        label: str = None,
+        sigma: float = 1.0,
+        **styling_kwargs
+    ):
+        """Extract cross section data."""
+        from mcnpy.plotting import MultigroupXSPlotData
+        from mcnpy._utils import zaid_to_symbol
+        
+        # Check if cross section data exists
+        if (zaid, mt) not in self.cross_sections:
+            # Cross sections not available, return None
+            return None
+        
+        # Get cross section data
+        xs_data = self.cross_sections[(zaid, mt)]
+        G = int(self.num_groups)
+        
+        if len(xs_data) != G:
+            raise ValueError(
+                f"Cross section data length ({len(xs_data)}) does not match num_groups ({G})"
+            )
+        
+        # Get energy boundaries
+        energy_bins = None
+        if hasattr(self, "energy_grid") and self.energy_grid is not None:
+            eg = np.asarray(self.energy_grid, dtype=float)
+            if eg.size == G + 1:
+                energy_bins = eg
+            elif eg.size == G:
+                # Infer boundaries from centers
+                diffs = np.diff(eg)
+                left0 = eg[0] - diffs[0] / 2.0
+                rightN = eg[-1] + diffs[-1] / 2.0
+                mid = (eg[:-1] + eg[1:]) / 2.0
+                energy_bins = np.concatenate([[max(left0, 1e-5)], mid, [rightN]])
+        
+        # For step plots, we need G+1 points (repeat the last value)
+        if energy_bins is not None and len(energy_bins) == G + 1:
+            x = energy_bins
+            y = np.r_[xs_data, xs_data[-1]]
+        else:
+            # Fallback to group indices
+            x = np.arange(G + 1, dtype=float)
+            y = np.r_[xs_data, xs_data[-1]]
+            energy_bins = None
+        
+        # Check if uncertainty data exists for this (zaid, mt) pair
+        has_uncertainty = False
+        for i, (iso_r, mt_r, iso_c, mt_c) in enumerate(zip(
+            self.isotope_rows, self.reaction_rows,
+            self.isotope_cols, self.reaction_cols
+        )):
+            if iso_r == zaid and mt_r == mt and iso_c == zaid and mt_c == mt:
+                has_uncertainty = True
+                break
+        
+        # Generate label if not provided
+        if label is None:
+            isotope_symbol = zaid_to_symbol(zaid)
+            reaction_name = MT_TO_REACTION.get(mt, "")
+            if reaction_name:
+                label = f"{isotope_symbol} MT={mt} {reaction_name}"
+            else:
+                label = f"{isotope_symbol} MT={mt}"
+            
+            # Add sigma notation if uncertainties are available
+            if has_uncertainty:
+                sigma_suffix = f" (±{sigma}σ)" if sigma != 1.0 else " (±1σ)"
+                label += sigma_suffix
+        
+        # Create and return the plot data
+        return MultigroupXSPlotData(
+            x=x,
+            y=y,
+            label=label,
+            zaid=zaid,
+            mt=mt,
+            energy_bins=energy_bins,
+            **styling_kwargs
+        )
 
 
     #------------------------------------------------------------------

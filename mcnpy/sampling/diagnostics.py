@@ -2,6 +2,9 @@ import math
 import numpy as np
 from typing import List, Optional, Tuple, Dict, Any
 
+# Import shared logger getter
+from mcnpy.sampling.utils import _get_logger
+
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
@@ -45,12 +48,8 @@ def _diagnostics_samples_linear(
     if not verbose:
         return results
 
-    # Try to get logger from ace_perturbation module
-    try:
-        from mcnpy.sampling.ace_perturbation import _get_logger
-        logger = _get_logger()
-    except:
-        logger = None
+    # Get logger from shared utils
+    logger = _get_logger()
 
     separator = "-" * 60
     log_msg = f"\n[SAMPLING] [LINEAR SPACE DIAGNOSTICS]\n{separator}"
@@ -209,12 +208,8 @@ def _diagnostics_samples_log(
     if not verbose:
         return results
 
-    # Try to get logger from ace_perturbation module
-    try:
-        from mcnpy.sampling.ace_perturbation import _get_logger
-        logger = _get_logger()
-    except:
-        logger = None
+    # Get logger from shared utils
+    logger = _get_logger()
 
     separator = "-" * 60
     log_msg = f"\n[SAMPLING] [LOG SPACE DIAGNOSTICS]\n{separator}"
@@ -350,12 +345,8 @@ def _diagnostics_covariance(
     separator = "-" * 60
     log_msg = f"\n[COVARIANCE] [STRUCTURE DIAGNOSTICS]\n{separator}"
     
-    # Try to get logger from ace_perturbation module
-    try:
-        from mcnpy.sampling.ace_perturbation import _get_logger
-        logger = _get_logger()
-    except:
-        logger = None
+    # Get logger from shared utils
+    logger = _get_logger()
     
     if logger:
         logger.info(log_msg)

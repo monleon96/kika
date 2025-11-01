@@ -81,6 +81,45 @@ class MF4MTLegendre(MF4MT):
         return {e: c for e, c in zip(self._energies, self._legendre_coeffs)}
     
     # --- Main API: interpolated Legendre coefficients at E ---
+    def to_plot_data(
+        self,
+        order: int,
+        label: str = None,
+        **styling_kwargs
+    ):
+        """
+        Create a PlotData object for this Legendre coefficient data.
+        
+        This is a convenience method to easily convert MF4 data into a plottable format
+        using the new plotting infrastructure.
+        
+        Parameters
+        ----------
+        order : int
+            Legendre polynomial order to extract
+        label : str, optional
+            Custom label for the plot. If None, auto-generates from isotope and order.
+        **styling_kwargs
+            Additional styling kwargs (color, linestyle, linewidth, etc.)
+            
+        Returns
+        -------
+        LegendreCoeffPlotData
+            Plot data object ready to be added to a PlotBuilder
+            
+        Examples
+        --------
+        >>> # Method 1: Using this convenience method
+        >>> data = mf4_obj.to_plot_data(order=1, color='blue')
+        >>> builder = PlotBuilder().add_data(data).build()
+        >>> 
+        >>> # Method 2: Using utility function (equivalent)
+        >>> from mcnpy.endf.classes.mf4.plot_utils import create_legendre_coeff_plot_data
+        >>> data = create_legendre_coeff_plot_data(mf4_obj, order=1, color='blue')
+        """
+        from .plot_utils import create_legendre_coeff_plot_data
+        return create_legendre_coeff_plot_data(self, order=order, label=label, **styling_kwargs)
+    
     def extract_legendre_coefficients(
         self,
         energy: Union[float, np.ndarray],

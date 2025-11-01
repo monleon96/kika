@@ -853,3 +853,66 @@ class MF34MT(MT):
 
 
         return ang_covmat
+    
+    def to_plot_data(
+        self,
+        order: int,
+        uncertainty_type: str = 'relative',
+        label: str = None,
+        **styling_kwargs
+    ):
+        """
+        Create a PlotData object for Legendre coefficient uncertainties.
+        
+        This is a convenience method to easily convert MF34 uncertainty data into
+        a plottable format using the new plotting infrastructure. It automatically
+        converts the MF34MT data to an MF34CovMat and extracts the uncertainty
+        for the specified Legendre order.
+        
+        Parameters
+        ----------
+        order : int
+            Legendre polynomial order
+        uncertainty_type : str, default 'relative'
+            Type of uncertainty: 'relative' (%) or 'absolute'
+        label : str, optional
+            Custom label for the plot. If None, auto-generates from isotope and order.
+        **styling_kwargs
+            Additional styling kwargs (color, linestyle, linewidth, etc.)
+            
+        Returns
+        -------
+        LegendreUncertaintyPlotData
+            Plot data object ready to be added to a PlotBuilder
+            
+        Raises
+        ------
+        ValueError
+            If uncertainty data is not available for the specified order
+            
+        Examples
+        --------
+        >>> # Extract uncertainty data from MF34MT
+        >>> mf34_mt2 = endf.mf[34].mt[2]
+        >>> unc_data = mf34_mt2.to_plot_data(order=1)
+        >>> 
+        >>> # Build a plot
+        >>> from mcnpy.plotting import PlotBuilder
+        >>> fig = PlotBuilder().add_data(unc_data).build()
+        """
+        # Convert to MF34CovMat
+        mf34_covmat = self.to_ang_covmat()
+        
+        # Extract isotope and MT from this object
+        isotope = int(self._za)
+        mt = self.number
+        
+        # Delegate to MF34CovMat's to_plot_data method
+        return mf34_covmat.to_plot_data(
+            isotope=isotope,
+            mt=mt,
+            order=order,
+            uncertainty_type=uncertainty_type,
+            label=label,
+            **styling_kwargs
+        )

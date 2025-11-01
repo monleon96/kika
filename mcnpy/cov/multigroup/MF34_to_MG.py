@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Union, Optional, Callable, Any
-from scipy import integrate, interpolate
+from scipy import integrate, interpolate, special
 import warnings
 
 from ..mf34_covmat import MF34CovMat
@@ -42,9 +42,43 @@ class WeightingFunction:
         return np.sqrt(energy) * np.exp(-energy / kT)
     
     @staticmethod
+    def maxwellian_antiderivative(energy: Union[float, np.ndarray], temperature: float = 2.53e-2) -> Union[float, np.ndarray]:
+        """Antiderivative of Maxwellian: ∫ sqrt(E) e^{-E/kT} dE = (kT)^{3/2} Γ(3/2) * gammainc(3/2, E/kT)."""
+        kT = temperature
+        x = np.asarray(energy) / kT
+        return (kT ** 1.5) * special.gamma(1.5) * special.gammainc(1.5, x)
+    
+    @staticmethod
     def fission_spectrum(energy: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         """Simplified fission spectrum phi(E) = sqrt(E) * exp(-E/1.29e6)."""
         return np.sqrt(energy) * np.exp(-energy / 1.29e6)  # 1.29 MeV average
+    
+    @staticmethod
+    def fission_spectrum_antiderivative(energy: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        """Antiderivative of fission spectrum with kT≈1.29 MeV."""
+        kT = 1.29e6  # 1.29 MeV in eV
+        x = np.asarray(energy) / kT
+        return (kT ** 1.5) * special.gamma(1.5) * special.gammainc(1.5, x)
+
+    # --- New lethargy (phi=1/E) weighting for log-energy (flat in lethargy) averaging ---
+    @staticmethod
+    def lethargy(energy: Union[float, np.ndarray], epsilon: float = 1e-30) -> Union[float, np.ndarray]:
+        """Lethargy weighting function phi(E)=1/E (flat per unit lethargy).
+
+        This produces group averages consistent with a uniform distribution in lethargy
+        u = ln(E). A tiny epsilon prevents division by zero for any accidental
+        non-positive energies.
+        """
+        if isinstance(energy, np.ndarray):
+            return 1.0 / np.maximum(energy, epsilon)
+        return 1.0 / max(energy, epsilon)
+
+    @staticmethod
+    def lethargy_antiderivative(energy: Union[float, np.ndarray], epsilon: float = 1e-30) -> Union[float, np.ndarray]:
+        """Antiderivative of 1/E: Phi(E)=ln(E). Safe for vector/scalar inputs."""
+        if isinstance(energy, np.ndarray):
+            return np.log(np.maximum(energy, epsilon))
+        return float(np.log(max(energy, epsilon)))
 
 
 def compute_energy_rebin_operator(coarse_energy_grid: np.ndarray, 
@@ -295,8 +329,9 @@ def compute_base_cell_means(base_energy_grid: np.ndarray,
     
     A_{l,i} = integral(phi(E) * a_l(E) dE) / integral(phi(E) dE) over [E_i, E_{i+1}]
     
-    This optimized version pre-computes coefficient interpolation functions to avoid
-    repeated evaluations during numerical integration.
+    Uses native MF4 energy breakpoints for accurate integration. For lethargy weighting,
+    applies analytic integration over linear segments. Ensures l>0 coefficients are zero
+    outside the native MF4 energy range.
     
     Parameters
     ----------
@@ -317,91 +352,120 @@ def compute_base_cell_means(base_energy_grid: np.ndarray,
         Dictionary mapping Legendre orders to base-cell means arrays
     """
     N_base = len(base_energy_grid) - 1
-    base_means = {}
-    
-    # Pre-compute coefficient interpolation functions for efficiency
-    # Sample energies across the energy range to build interpolation functions
-    E_min = base_energy_grid[0]
-    E_max = base_energy_grid[-1]
-    
-    # Use a reasonable number of sample points (adaptive based on data complexity)
-    n_sample_points = 100  # Can be adjusted based on needs
-    sample_energies = np.logspace(np.log10(max(E_min, 1e-10)), np.log10(E_max), n_sample_points)
-    
-    # Pre-compute coefficients at sample points using MF4 object methods
-    max_order = max(legendre_orders) if legendre_orders else 0
-    # Use zero outside the MF4 range so tail averages do not inherit the last value
-    sample_coeffs = mf4_data.extract_legendre_coefficients(sample_energies, max_order, out_of_range="zero")
-    
-    # Build interpolation functions for each required Legendre order
-    coeff_interp_funcs = {}
-    for l in legendre_orders:
-        if l in sample_coeffs and len(sample_coeffs[l]) > 1:
-            # Create interpolation function with boundary hold at the lower end.
-            # For the upper tail assume anisotropy damps to zero (orders > 0) to avoid
-            # spurious constant extrapolation when the MG grid extends beyond MF4 data.
-            left_val = float(sample_coeffs[l][0])
-            right_val = float(sample_coeffs[l][-1])
-            right_fill = right_val if l == 0 else 0.0
-            coeff_interp_funcs[l] = interpolate.interp1d(
-                sample_energies, sample_coeffs[l],
-                kind='linear', bounds_error=False, fill_value=(left_val, right_fill)
-            )
-        else:
-            # Constant or no data available
-            const_val = sample_coeffs.get(l, [0.0])[0] if l in sample_coeffs else 0.0
-            coeff_interp_funcs[l] = lambda E, val=const_val: np.full_like(E, val, dtype=float)
-    
-    # Compute base-cell means for each Legendre order
+    base_means: Dict[int, np.ndarray] = {}
+
+    if not legendre_orders:
+        return base_means
+
+    max_order = max(legendre_orders)
+
+    # Extract full native MF4 energy grid for Legendre coefficients if available
+    if hasattr(mf4_data, 'legendre_energies'):
+        native_E = np.array(mf4_data.legendre_energies, dtype=float)
+    else:
+        # Fallback: derive from first requested order using evaluation at base grid edges
+        native_E = np.unique(base_energy_grid)
+
+    # Evaluate coefficients at native energies directly using MF4-provided method
+    coeffs_native = mf4_data.extract_legendre_coefficients(native_E, max_order, out_of_range="zero")
+
+    # Helper to evaluate a_l(E) piecewise linearly between native points
+    def eval_coeff(l: int, energies: np.ndarray) -> np.ndarray:
+        values = coeffs_native.get(l)
+        if values is None:
+            return np.zeros_like(energies)
+        # Outside range: l==0 hold left value on low side, zero for l>0; zero on high side for l>0, hold for l==0
+        E0 = native_E[0]
+        E1 = native_E[-1]
+        vals = np.zeros_like(energies)
+        inside = (energies >= E0) & (energies <= E1)
+        # Interpolate inside using numpy.interp (linear)
+        vals[inside] = np.interp(energies[inside], native_E, values)
+        # Low side extrapolation
+        low_mask = energies < E0
+        if np.any(low_mask):
+            vals[low_mask] = values[0] if l == 0 else 0.0
+        # High side extrapolation
+        high_mask = energies > E1
+        if np.any(high_mask):
+            vals[high_mask] = values[-1] if l == 0 else 0.0
+        return vals
+
+    is_constant_weight = phi_func == WeightingFunction.constant
+    is_lethargy_weight = phi_func == WeightingFunction.lethargy
+
+    # Precompute logs of native energy for lethargy analytic segment integration
+    if is_lethargy_weight:
+        log_native_E = np.log(native_E)
+
     for l in legendre_orders:
         means = np.zeros(N_base)
-        coeff_func = coeff_interp_funcs[l]
-        
+        a_l_native = coeffs_native.get(l)
+        if a_l_native is None:
+            base_means[l] = means
+            continue
+
         for i in range(N_base):
-            E_i = base_energy_grid[i]
-            E_i_plus_1 = base_energy_grid[i + 1]
-            
-            # Skip zero-width cells
-            if E_i_plus_1 <= E_i:
-                means[i] = 0.0
+            E_lo = base_energy_grid[i]
+            E_hi = base_energy_grid[i + 1]
+            if E_hi <= E_lo:
                 continue
-            
-            # Compute denominator (normalization)
-            denominator = phi_antiderivative(E_i_plus_1) - phi_antiderivative(E_i)
-            
-            if abs(denominator) < 1e-15:
-                means[i] = 0.0
+
+            # Denominator
+            denom = phi_antiderivative(E_hi) - phi_antiderivative(E_lo)
+            if abs(denom) < 1e-30:
                 continue
-            
-            # For constant weighting function, can use analytical approach
-            if phi_func == WeightingFunction.constant:
-                # phi(E) = 1, so integral becomes: integral(a_l(E) dE) / (E_{i+1} - E_i)
-                # Use higher resolution sampling to properly capture MF4 variations
-                
-                # Use at least 50 points per base cell, or higher for wide cells
-                cell_width = E_i_plus_1 - E_i
-                n_quad_points = max(50, int(cell_width / (1e6)))  # At least 1 point per MeV
-                E_quad = np.linspace(E_i, E_i_plus_1, n_quad_points)
-                a_l_values = coeff_func(E_quad)
-                
-                # Simple trapezoidal integration
-                numerator = np.trapezoid(a_l_values, E_quad)
-                means[i] = numerator / (E_i_plus_1 - E_i)
+
+            # Build segment mesh: native points within (E_lo,E_hi) plus boundaries
+            # Identify indices of native_E inside interval
+            inside_idx = np.where((native_E > E_lo) & (native_E < E_hi))[0]
+            segment_E = np.concatenate(([E_lo], native_E[inside_idx], [E_hi]))
+            # Ensure strictly increasing
+            segment_E = np.unique(segment_E)
+
+            # Evaluate coefficient values at segment_E
+            a_vals = eval_coeff(l, segment_E)
+
+            if is_constant_weight:
+                # phi=1 -> integral a(E) dE exact via trapezoid on linear segments
+                numer = integrate.trapezoid(a_vals, segment_E)
+                means[i] = numer / (E_hi - E_lo)
+            elif is_lethargy_weight:
+                # Analytic integral over each linear segment for a(E)/E
+                seg_numer = 0.0
+                for k in range(len(segment_E) - 1):
+                    e0 = segment_E[k]
+                    e1 = segment_E[k + 1]
+                    if e1 <= e0:
+                        continue
+                    a0 = a_vals[k]
+                    a1 = a_vals[k + 1]
+                    if a0 == a1:
+                        # a(E)=a0 constant -> a0 * ln(e1/e0)
+                        seg_numer += a0 * (np.log(e1) - np.log(e0))
+                    else:
+                        m = (a1 - a0) / (e1 - e0)
+                        # Integral (a0 + m (E-e0))/E dE from e0 to e1
+                        # = a0 ln(e1/e0) + m[(e1 - e0) - e0 ln(e1/e0)]
+                        ln_ratio = np.log(e1) - np.log(e0)
+                        seg_numer += a0 * ln_ratio + m * ((e1 - e0) - e0 * ln_ratio)
+                means[i] = seg_numer / (np.log(E_hi) - np.log(E_lo))
             else:
-                # General case: use numerical integration with optimized integrand
-                def integrand(E):
-                    # E can be scalar or array
-                    a_l_E = coeff_func(E)
-                    if isinstance(a_l_E, np.ndarray):
-                        a_l_E = a_l_E.item() if a_l_E.size == 1 else a_l_E[0]
-                    return phi_func(E) * a_l_E
-                
-                # Use numerical integration with moderate precision
-                numerator, _ = integrate.quad(integrand, E_i, E_i_plus_1, limit=50)
-                means[i] = numerator / denominator
-        
+                # General weighting: numeric integration on segment mesh refined with midpoints
+                # Build a refined mesh with midpoints for better accuracy
+                refined_E = []
+                for k in range(len(segment_E) - 1):
+                    refined_E.append(segment_E[k])
+                    refined_E.append(0.5 * (segment_E[k] + segment_E[k + 1]))
+                refined_E.append(segment_E[-1])
+                refined_E = np.array(refined_E)
+                a_ref = eval_coeff(l, refined_E)
+                integrand = phi_func(refined_E) * a_ref
+                numer = integrate.trapezoid(integrand, refined_E)
+                means[i] = numer / denom
+
         base_means[l] = means
-    
+
     return base_means
 
 
@@ -554,7 +618,9 @@ def collapse_absolute_covariance(absolute_base_matrix: np.ndarray,
 def enforce_matrix_quality(matrix: np.ndarray, 
                           matrix_type: str = "relative",
                           clip_small_negatives: bool = False,
-                          symmetrize: bool = True) -> np.ndarray:
+                          symmetrize: bool = True,
+                          project_to_psd: bool = False,
+                          psd_floor: float = 0.0) -> np.ndarray:
     """
     Apply quality checks and corrections to covariance matrices.
     
@@ -568,6 +634,11 @@ def enforce_matrix_quality(matrix: np.ndarray,
         Whether to clip small negative diagonal elements to zero
     symmetrize : bool, optional
         Whether to enforce symmetry
+    project_to_psd : bool, optional
+        Whether to project matrix to nearest positive semi-definite matrix
+        using Higham-style eigenvalue clipping
+    psd_floor : float, optional
+        Minimum eigenvalue for PSD projection (default 0.0)
         
     Returns
     -------
@@ -588,12 +659,20 @@ def enforce_matrix_quality(matrix: np.ndarray,
             warnings.warn(f"Clipped {np.sum(small_negatives)} small negative diagonal elements to zero")
             np.fill_diagonal(result, np.where(small_negatives, 0.0, diagonal))
     
+    # Optional PSD projection by clipping negative eigenvalues (Higham-style)
+    if project_to_psd:
+        w, v = np.linalg.eigh(result)
+        w_clipped = np.maximum(w, psd_floor)
+        result = (v @ np.diag(w_clipped) @ v.T)
+        result = (result + result.T) / 2.0  # Re-symmetrize after reconstruction
+    
     return result
 
 
 def MF34_to_MG(endf_object,
                energy_grid: Union[str, List[float], np.ndarray],
                weighting_function: Union[str, Callable] = "constant",
+               relative_normalization: str = "mf34_cell",
                isotope: Optional[int] = None,
                mt: Optional[int] = None) -> MGMF34CovMat:
     """
@@ -614,9 +693,16 @@ def MF34_to_MG(endf_object,
     weighting_function : str or Callable, optional
         Weighting function for multigroup collapse:
         - "constant": phi(E) = 1 (default)
+        - "lethargy": phi(E) = 1/E
         - "maxwellian": Maxwellian spectrum
         - "fission": Fission spectrum
         - Callable: Custom function
+    relative_normalization : str, optional
+        Normalization scheme for relative covariances:
+        - "mf34_cell": Use MF34-derived MG means (ENDF-preserving, default)
+          Reproduces evaluator's percent uncertainties within MF34 bins
+        - "mg_cell": Use MG-grid means from MF4 (physics-preserving)
+          Exposes within-cell energy variation of coefficients
     isotope : int, optional
         Specific isotope to process (if None, process all)
     mt : int, optional
@@ -661,13 +747,17 @@ def MF34_to_MG(endf_object,
             phi_func = WeightingFunction.constant
             phi_antiderivative = WeightingFunction.constant_antiderivative
             weight_desc = "constant"
+        elif weighting_function == "lethargy":
+            phi_func = WeightingFunction.lethargy
+            phi_antiderivative = WeightingFunction.lethargy_antiderivative
+            weight_desc = "lethargy"
         elif weighting_function == "maxwellian":
             phi_func = WeightingFunction.maxwellian
-            phi_antiderivative = None  # Would need custom implementation
+            phi_antiderivative = WeightingFunction.maxwellian_antiderivative
             weight_desc = "maxwellian"
         elif weighting_function == "fission":
             phi_func = WeightingFunction.fission_spectrum
-            phi_antiderivative = None  # Would need custom implementation
+            phi_antiderivative = WeightingFunction.fission_spectrum_antiderivative
             weight_desc = "fission spectrum"
         else:
             raise ValueError(f"Unknown weighting function: {weighting_function}")
@@ -676,14 +766,15 @@ def MF34_to_MG(endf_object,
         phi_antiderivative = None  # User must provide if needed
         weight_desc = "custom"
     
-    # For now, only support constant weighting (others need antiderivative implementation)
-    if phi_antiderivative is None and weight_desc != "constant":
-        raise NotImplementedError(f"Antiderivative for {weight_desc} weighting not implemented")
+    # Check if antiderivative is available for custom functions
+    if phi_antiderivative is None and weight_desc == "custom":
+        raise NotImplementedError(f"Custom weighting functions require providing the antiderivative")
     
     # Create result object
     result = MGMF34CovMat()
     result.energy_grid = mg_energy_edges
     result.weighting_function = weight_desc
+    result.relative_normalization = relative_normalization
     
     # Process each matrix in the MF34 covariance data
     for i in range(mf34_covmat.num_matrices):
@@ -717,17 +808,19 @@ def MF34_to_MG(endf_object,
         mf4_mt_data_row = mf4_data.mt[reaction_row]
         mf4_mt_data_col = mf4_data.mt[reaction_col]
         
-        # Use the MF4 energy grid for base cell computations (where angular distributions are defined)
-        # This provides the correct physics-based averaging, bypassing the coarse MF34 grid
+        # Extract physics energy grids for accurate means computation
         if hasattr(mf4_mt_data_row, 'legendre_energies'):
-            physics_energy_grid = np.array(mf4_mt_data_row.legendre_energies)
+            physics_energy_grid_row = np.array(mf4_mt_data_row.legendre_energies, dtype=float)
         else:
-            # Fallback to MF34 grid if MF4 doesn't have energy grid info
-            physics_energy_grid = np.array(mf34_covmat.energy_grids[i])
-            warnings.warn(f"Using MF34 energy grid as fallback for MT{reaction_row}")
-        
-        # For covariance matrix compatibility, we need to work with the original MF34 grid structure
-        # but we'll compute the multigroup means using the finer physics grid
+            physics_energy_grid_row = np.array(mf34_covmat.energy_grids[i], dtype=float)
+            warnings.warn(f"Using MF34 energy grid as fallback for MT{reaction_row} (row)")
+
+        if hasattr(mf4_mt_data_col, 'legendre_energies'):
+            physics_energy_grid_col = np.array(mf4_mt_data_col.legendre_energies, dtype=float)
+        else:
+            physics_energy_grid_col = np.array(mf34_covmat.energy_grids[i], dtype=float)
+            if reaction_col != reaction_row:
+                warnings.warn(f"Using MF34 energy grid as fallback for MT{reaction_col} (col)")
         mf34_energy_grid = np.array(mf34_covmat.energy_grids[i])
         
         # Validate frame consistency for both row and column
@@ -736,53 +829,25 @@ def MF34_to_MG(endf_object,
         validate_frame_consistency(mf4_frame_row, frame)
         validate_frame_consistency(mf4_frame_col, frame)
         
-        # Compute overlap weights using the physics energy grid
-        overlap_weights = compute_overlap_weights(
-            physics_energy_grid, mg_energy_edges, phi_func, phi_antiderivative
-        )
-        
-        # Compute base-cell means for row and column channels separately using physics grid
+        # Compute MG means directly on the MG grid (not via intermediate physics grid)
+        # This avoids the issue where coarse MF4/MF34 grids assign the same value to multiple MG bins
         legendre_orders_row = [l_row]
-        legendre_orders_col = [l_col] if l_col != l_row else []
-        
-        # Compute base means for row channel using the physics energy grid
-        base_means_row = compute_base_cell_means(
-            physics_energy_grid, mf4_mt_data_row, legendre_orders_row, phi_func, phi_antiderivative
+        legendre_orders_col = [l_col] if (l_col != l_row or reaction_col != reaction_row) else []
+
+        mg_base_means_row = compute_base_cell_means(
+            mg_energy_edges, mf4_mt_data_row, legendre_orders_row, phi_func, phi_antiderivative
         )
-        
-        # Compute base means for column channel (if different)
-        if l_col != l_row or reaction_col != reaction_row:
-            base_means_col = compute_base_cell_means(
-                physics_energy_grid, mf4_mt_data_col, legendre_orders_col or [l_col], phi_func, phi_antiderivative
+        if legendre_orders_col:
+            mg_base_means_col = compute_base_cell_means(
+                mg_energy_edges, mf4_mt_data_col, legendre_orders_col, phi_func, phi_antiderivative
             )
         else:
-            # Same channel, reuse row data
-            base_means_col = base_means_row
+            mg_base_means_col = mg_base_means_row
         
-        # Grab convenient references for the row/column base means
-        base_means_row_vals = base_means_row[l_row]
-        if base_means_col is base_means_row:
-            base_means_col_vals = base_means_row_vals
-        else:
-            base_means_col_vals = base_means_col[l_col]
+        mg_means_row_vals = mg_base_means_row[l_row]
+        mg_means_col_vals = mg_base_means_col[l_col] if mg_base_means_col is not mg_base_means_row else mg_means_row_vals
 
-        # Compute multigroup means separately for the row and column channels. Using a
-        # single dictionary keyed only by Legendre order lets cross-reaction data
-        # overwrite each other depending on MF34 matrix ordering, so we evaluate the
-        # two channels independently to preserve their reaction-specific averages.
-        mg_means_row_dict = compute_mg_means(base_means_row, overlap_weights)
-        mg_means_row_vals = mg_means_row_dict[l_row]
-
-        if base_means_col is base_means_row:
-            mg_means_col_vals = mg_means_row_vals
-        else:
-            mg_means_col_dict = compute_mg_means(base_means_col, overlap_weights)
-            mg_means_col_vals = mg_means_col_dict[l_col]
-
-        # Now implement the proper covariance mapping algorithm following NJOY methodology
-        # Step 1: We already have accurate means on target grid T (mg_means_row/col_vals)
-        
-        # Step 2: Compute coarse means on MF34 grid H for covariance conversion
+        # Compute MF34-grid means for covariance conversion
         mf34_overlap_weights = compute_overlap_weights(
             mf34_energy_grid, mg_energy_edges, phi_func, phi_antiderivative
         )
@@ -791,59 +856,83 @@ def MF34_to_MG(endf_object,
             mf34_energy_grid, mf4_mt_data_row, legendre_orders_row, phi_func, phi_antiderivative
         )
         
-        if base_means_col is base_means_row:
+        if mg_base_means_col is mg_base_means_row:
             mf34_base_means_col = mf34_base_means_row
         else:
             mf34_base_means_col = compute_base_cell_means(
                 mf34_energy_grid, mf4_mt_data_col, legendre_orders_col or [l_col], phi_func, phi_antiderivative
             )
         
-        # These are needed only for MF34 grid covariance conversion
         mf34_means_row_vals = mf34_base_means_row[l_row]
-        if mf34_base_means_col is mf34_base_means_row:
-            mf34_means_col_vals = mf34_means_row_vals
-        else:
-            mf34_means_col_vals = mf34_base_means_col[l_col]
+        mf34_means_col_vals = mf34_base_means_col[l_col] if mf34_base_means_col is not mf34_base_means_row else mf34_means_row_vals
         
-        # Step 3: Build energy rebin operator H→T
+        # Use MF34-cell *averaged* Legendre coefficients to de-normalize relative → absolute
+        # This is consistent with how MF34 covariances are defined and avoids bias.
+        # (Previously used midpoint values, which caused systematic under/over-estimation)
+        point_row_vals = mf34_means_row_vals
+        point_col_vals = mf34_means_col_vals
+        
         rebin_operator = compute_energy_rebin_operator(
             mf34_energy_grid, mg_energy_edges, phi_func, phi_antiderivative
         )
         
-        # Step 4: Process covariance matrix
+        # Process covariance matrix
         base_matrix = mf34_covmat.matrices[i]
         
         if is_relative:
-            # Step 4a: Convert relative to absolute on H grid using coarse means
-            absolute_coarse = convert_relative_to_absolute_covariance(
-                base_matrix, mf34_means_row_vals, mf34_means_col_vals
+            # Robust path: convert relative MF34 covariance to absolute on MF34 grid,
+            # collapse absolute covariance to MG, then compute relative matrices using
+            # the selected normalization scheme.
+            # 1) Absolute on MF34 grid using MF34 cell-averaged Legendre coefficients
+            absolute_mf34 = convert_relative_to_absolute_covariance(
+                base_matrix, point_row_vals, point_col_vals
             )
+            # 2) Collapse absolute covariance to MG using MF34→MG overlap weights
+            absolute_fine = collapse_absolute_covariance(
+                absolute_mf34, mf34_overlap_weights
+            )
+            # 3a) Relative using MF34-derived MG means (ENDF-preserving normalization)
+            mf34_mg_means_row = compute_mg_means(mf34_base_means_row, mf34_overlap_weights)[l_row]
+            if mf34_base_means_col is mf34_base_means_row:
+                mf34_mg_means_col = mf34_mg_means_row
+            else:
+                mf34_mg_means_col = compute_mg_means(mf34_base_means_col, mf34_overlap_weights)[l_col]
+            relative_fine_endf_norm = convert_absolute_to_relative_covariance(
+                absolute_fine, mf34_mg_means_row, mf34_mg_means_col
+            )
+            # 3b) Relative using MG-grid means from MF4 (physics-preserving normalization)
+            relative_fine_phys = convert_absolute_to_relative_covariance(
+                absolute_fine,
+                mg_means_row_vals,
+                mg_means_col_vals if mg_base_means_col is not mg_base_means_row else mg_means_row_vals
+            )
+
+            # Select normalization scheme based on user choice
+            if relative_normalization.lower() == "mg_cell":
+                relative_fine = relative_fine_phys
+                mg_means_row_vals_to_store = mg_means_row_vals
+                mg_means_col_vals_to_store = mg_means_col_vals if mg_base_means_col is not mg_base_means_row else mg_means_row_vals
+            else:  # "mf34_cell" (default, ENDF-preserving)
+                relative_fine = relative_fine_endf_norm
+                mg_means_row_vals_to_store = mg_means_row_vals
+                mg_means_col_vals_to_store = mg_means_col_vals if mg_base_means_col is not mg_base_means_row else mg_means_row_vals
         else:
-            # Already absolute on H grid
-            absolute_coarse = base_matrix
+            # For absolute input: map to MG grid then derive relative using physics-grid means
+            absolute_fine = map_covariance_matrix(base_matrix, rebin_operator)
+            relative_fine = convert_absolute_to_relative_covariance(
+                absolute_fine, mg_means_row_vals, mg_means_col_vals
+            )
+            mg_means_row_vals_to_store = mg_means_row_vals
+            mg_means_col_vals_to_store = mg_means_col_vals
         
-        # Step 4b: Map absolute covariance H→T
-        absolute_fine = map_covariance_matrix(absolute_coarse, rebin_operator)
-        
-        # Step 5: Convert back to relative using accurate means on T
-        relative_fine = convert_absolute_to_relative_covariance(
-            absolute_fine, mg_means_row_vals, mg_means_col_vals
-        )
-        
-        # Final matrices
-        mg_absolute = absolute_fine
-        mg_relative = relative_fine
-        
-        # Apply quality checks
-        mg_relative = enforce_matrix_quality(mg_relative, "relative")
-        mg_absolute = enforce_matrix_quality(mg_absolute, "absolute")
-        
-        # Add to result
+        # Apply quality checks and add to result
+        mg_relative = enforce_matrix_quality(relative_fine, "relative", project_to_psd=True)
+        mg_absolute = enforce_matrix_quality(absolute_fine, "absolute", project_to_psd=True)
         result.add_matrix(
             isotope_row, reaction_row, l_row,
             isotope_col, reaction_col, l_col,
             mg_relative, mg_absolute,
-            mg_means_row_vals, mg_means_col_vals,
+            mg_means_row_vals_to_store, mg_means_col_vals_to_store,
             frame
         )
     
