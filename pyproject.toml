@@ -33,6 +33,7 @@ streamlit = "^1.40.0"
 streamlit-authenticator = "^0.3.3"
 extra-streamlit-components = "^0.1.71"
 pillow = "^11.0.0"
+passlib = {version = "^1.7.4", extras = ["bcrypt"]}
 
 [tool.poetry.group.docs.dependencies]
 sphinx = "^8.2.1"
