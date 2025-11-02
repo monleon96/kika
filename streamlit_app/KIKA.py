@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Configure page
 st.set_page_config(
-    page_title="KIKA - Nuclear Data Viewer",
+    page_title="KIKA",
     page_icon="⚛️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -39,9 +39,7 @@ st.markdown("""
     .main-header {
         font-size: 3rem;
         font-weight: bold;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: #667eea;
         margin-bottom: 0.5rem;
     }
     .subtitle {
@@ -92,23 +90,35 @@ with col2:
     st.markdown("### 📈 ENDF Data Viewer")
     st.markdown("""
     Explore ENDF-6 format evaluated nuclear data:
-    - **MF/MT file sections**
-    - **Reaction data visualization**
-    - **Comparison with ACE data**
+    - **Angular distributions** (MF4 Legendre expansions)
+    - **Uncertainty bands** (MF34 covariance data)
+    - **Library comparisons** with uncertainties
     """)
-    st.info("🚧 Coming soon in next update!")
-    # if st.button("Open ENDF Viewer →", key="endf_btn", disabled=True):
-    #     st.switch_page("pages/2_📈_ENDF_Viewer.py")
+    if st.button("Open ENDF Viewer →", key="endf_btn"):
+        st.switch_page("pages/2_📈_ENDF_Viewer.py")
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("---")
 
 # Additional features row
-col3, col4 = st.columns(2)
+col3, col4, col5 = st.columns(3)
 
 with col3:
     st.markdown('<div class="feature-box">', unsafe_allow_html=True)
-    st.markdown("### 🔥 Covariance Data")
+    st.markdown("### 🔧 NJOY Processing")
+    st.markdown("""
+    Generate ACE files from ENDF data:
+    - **ENDF to ACE conversion**
+    - **Temperature selection**
+    - **Automatic versioning**
+    """)
+    if st.button("Open NJOY →", key="njoy_btn"):
+        st.switch_page("pages/3_🔧_NJOY_Processing.py")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col4:
+    st.markdown('<div class="feature-box">', unsafe_allow_html=True)
+    st.markdown("### 📂 Covariance Data")
     st.markdown("""
     Analyze nuclear data uncertainties:
     - **Covariance matrices**
@@ -118,17 +128,17 @@ with col3:
     st.info("🚧 Coming soon!")
     st.markdown('</div>', unsafe_allow_html=True)
 
-with col4:
+with col5:
     st.markdown('<div class="feature-box">', unsafe_allow_html=True)
     st.markdown("### ⚙️ Settings")
     st.markdown("""
     Configure your experience:
-    - **Plot styling preferences**
+    - **NJOY configuration**
+    - **Plot styling**
     - **Export options**
-    - **User profile** (future)
     """)
     if st.button("Open Settings →", key="settings_btn"):
-        st.switch_page("pages/3_⚙️_Settings.py")
+        st.switch_page("pages/5_⚙️_Settings.py")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Footer
@@ -143,18 +153,19 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Sidebar info
+# Sidebar with global file management
+from components.file_sidebar import render_file_upload_sidebar
+
+render_file_upload_sidebar()
+
 with st.sidebar:
-    st.markdown("### 👤 User Info")
-    st.info("Authentication coming soon!")
-    
     st.markdown("---")
     st.markdown("### 📚 Quick Start")
     st.markdown("""
-    1. Navigate to **ACE Viewer**
-    2. Upload your ACE files
-    3. Select data type and parameters
-    4. Generate and download plots
+    1. **Upload files** using the uploader above
+    2. Navigate to **ACE** or **ENDF Viewer**
+    3. Select loaded files and configure plots
+    4. Generate and export visualizations
     """)
     
     st.markdown("---")
@@ -162,13 +173,14 @@ with st.sidebar:
     with st.expander("Supported file formats"):
         st.markdown("""
         - **ACE**: `.ace`, `.02c`, `.20c`, etc.
-        - **ENDF**: `.endf`, `.endf6` (coming soon)
-        - **Covariance**: Various formats (coming soon)
+        - **ENDF**: `.txt`, `.endf`, `.endf6`
+        - **Auto-detection** tries both formats
         """)
     
-    with st.expander("Keyboard shortcuts"):
+    with st.expander("File management"):
         st.markdown("""
-        - `Ctrl + S`: Save plot
-        - `Ctrl + R`: Refresh data
-        - `Ctrl + /`: Toggle sidebar
+        - Files uploaded on any page are **globally accessible**
+        - Use **Auto** mode for automatic type detection
+        - Specify type manually for faster upload
+        - Remove files individually or clear all at once
         """)

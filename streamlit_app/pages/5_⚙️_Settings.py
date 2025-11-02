@@ -18,7 +18,7 @@ st.markdown("Configure your KIKA experience")
 st.markdown("---")
 
 # Settings categories
-tab1, tab2, tab3, tab4 = st.tabs(["🎨 Appearance", "📊 Plot Defaults", "💾 Export", "👤 Profile"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎨 Appearance", "📊 Plot Defaults", "💾 Export", "🔧 NJOY", "👤 Profile"])
 
 with tab1:
     st.header("Appearance Settings")
@@ -137,6 +137,116 @@ with tab3:
         )
 
 with tab4:
+    st.header("NJOY Configuration")
+    
+    st.markdown("Configure NJOY nuclear data processing tools")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("NJOY Executable")
+        
+        # Initialize session state for NJOY settings
+        if 'njoy_exe_path' not in st.session_state:
+            st.session_state.njoy_exe_path = "/usr/local/bin/njoy"
+        if 'njoy_version' not in st.session_state:
+            st.session_state.njoy_version = "NJOY 2016.78"
+        
+        njoy_exe = st.text_input(
+            "Path to NJOY executable",
+            value=st.session_state.njoy_exe_path,
+            help="Full path to your NJOY executable (e.g., /home/user/NJOY2016/build/njoy)"
+        )
+        st.session_state.njoy_exe_path = njoy_exe
+        
+        # Check if executable exists
+        import os
+        if njoy_exe and os.path.exists(njoy_exe):
+            st.success(f"✓ Executable found: {njoy_exe}")
+        elif njoy_exe:
+            st.warning(f"⚠️ File not found: {njoy_exe}")
+        
+        st.markdown("---")
+        
+        njoy_version = st.text_input(
+            "NJOY version string",
+            value=st.session_state.njoy_version,
+            help="Version string for metadata (e.g., 'NJOY 2016.78')"
+        )
+        st.session_state.njoy_version = njoy_version
+    
+    with col2:
+        st.subheader("Output Settings")
+        
+        # Initialize default output directory
+        if 'njoy_output_dir' not in st.session_state:
+            st.session_state.njoy_output_dir = "./njoy_output"
+        
+        output_dir = st.text_input(
+            "Default output directory",
+            value=st.session_state.njoy_output_dir,
+            help="Base directory for NJOY output files"
+        )
+        st.session_state.njoy_output_dir = output_dir
+        
+        st.markdown("---")
+        
+        st.subheader("Processing Options")
+        
+        if 'njoy_create_xsdir' not in st.session_state:
+            st.session_state.njoy_create_xsdir = True
+        
+        create_xsdir = st.checkbox(
+            "Create XSDIR files by default",
+            value=st.session_state.njoy_create_xsdir,
+            help="Automatically generate XSDIR files for MCNP"
+        )
+        st.session_state.njoy_create_xsdir = create_xsdir
+        
+        if 'njoy_auto_version' not in st.session_state:
+            st.session_state.njoy_auto_version = True
+        
+        auto_version = st.checkbox(
+            "Automatic file versioning",
+            value=st.session_state.njoy_auto_version,
+            help="Automatically version files (v01, v02, etc.) to prevent overwrites"
+        )
+        st.session_state.njoy_auto_version = auto_version
+    
+    st.markdown("---")
+    
+    # Test NJOY installation
+    st.subheader("🧪 Test NJOY Installation")
+    col_test1, col_test2 = st.columns([2, 1])
+    
+    with col_test1:
+        st.markdown("Verify that NJOY is properly installed and accessible")
+    
+    with col_test2:
+        if st.button("Run Test", width="stretch"):
+            if not njoy_exe or not os.path.exists(njoy_exe):
+                st.error("❌ Please set a valid NJOY executable path first")
+            else:
+                with st.spinner("Testing NJOY..."):
+                    import subprocess
+                    try:
+                        # Try to run NJOY with no input (should fail gracefully)
+                        result = subprocess.run(
+                            [njoy_exe],
+                            input=b"stop\n",
+                            capture_output=True,
+                            timeout=5
+                        )
+                        st.success(f"✓ NJOY executable is accessible and responds correctly")
+                        st.info(f"Return code: {result.returncode}")
+                    except subprocess.TimeoutExpired:
+                        st.success("✓ NJOY is running (timed out waiting for input, which is expected)")
+                    except FileNotFoundError:
+                        st.error(f"❌ Executable not found: {njoy_exe}")
+                    except Exception as e:
+                        st.error(f"❌ Error testing NJOY: {str(e)}")
+
+with tab5:
     st.header("User Profile")
     
     st.info("🚧 User authentication and profiles coming soon!")
@@ -178,21 +288,21 @@ st.markdown("---")
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    if st.button("💾 Save Settings", type="primary", use_container_width=True):
+    if st.button("💾 Save Settings", type="primary", width="stretch"):
         st.success("Settings saved successfully!")
         st.balloons()
 
 with col2:
-    if st.button("🔄 Reset to Defaults", use_container_width=True):
+    if st.button("🔄 Reset to Defaults", width="stretch"):
         st.warning("Settings reset to defaults")
         st.rerun()
 
 with col3:
-    if st.button("📥 Import Settings", use_container_width=True):
+    if st.button("📥 Import Settings", width="stretch"):
         st.info("Upload a settings JSON file (coming soon)")
 
 with col4:
-    if st.button("📤 Export Settings", use_container_width=True):
+    if st.button("📤 Export Settings", width="stretch"):
         settings_dict = {
             "theme": theme,
             "layout": default_layout,

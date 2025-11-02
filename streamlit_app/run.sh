@@ -52,7 +52,7 @@ echo ""
 cd "$SCRIPT_DIR"
 
 if [ "$USE_POETRY" = true ]; then
-    poetry run streamlit run app.py
+    poetry run streamlit run KIKA.py
 else
-    streamlit run app.py
+    streamlit run KIKA.py
 fi
