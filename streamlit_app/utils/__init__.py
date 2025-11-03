@@ -20,6 +20,29 @@ from .file_utils import (
     FileManager,
 )
 
+from .auth import (
+    require_user,
+    get_current_user,
+    render_account_sidebar,
+    logout_user,
+    update_user_password,
+    list_all_users,
+    set_user_active,
+    send_verification_email,
+    resend_verification_email,
+    mark_email_verified,
+    handle_verification_query,
+)
+
+from .user_settings import (
+    get_current_settings,
+    update_setting,
+    reset_settings_to_defaults,
+    collect_settings_snapshot,
+    save_user_settings,
+    bootstrap_user_settings,
+)
+
 __all__ = [
     # Session state
     'init_session_state',
@@ -35,4 +58,23 @@ __all__ = [
     'format_file_size',
     'validate_ace_file',
     'FileManager',
+    # Auth
+    'require_user',
+    'get_current_user',
+    'render_account_sidebar',
+    'logout_user',
+    'update_user_password',
+    'list_all_users',
+    'set_user_active',
+    'send_verification_email',
+    'resend_verification_email',
+    'mark_email_verified',
+    'handle_verification_query',
+    # User settings
+    'get_current_settings',
+    'update_setting',
+    'reset_settings_to_defaults',
+    'collect_settings_snapshot',
+    'save_user_settings',
+    'bootstrap_user_settings',
 ]

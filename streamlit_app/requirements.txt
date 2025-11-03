@@ -6,6 +6,8 @@ streamlit>=1.40.0
 streamlit-authenticator>=0.3.3
 extra-streamlit-components>=0.1.71
 pillow>=11.0.0
+passlib[bcrypt]>=1.7.4
+itsdangerous>=2.2.0
 
 # These should come from the main mcnpy installation
 # but listed here for reference

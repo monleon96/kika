@@ -24,9 +24,14 @@ import numpy as np
 from components.saved_configs import render_saved_configs_sidebar
 from components.clear_cache import render_clear_cache_button
 from utils.config_history import save_configuration
+from utils.auth import handle_verification_query, require_user, render_account_sidebar
 
 # Page config
 st.set_page_config(page_title="ACE Viewer - KIKA", page_icon="📊", layout="wide")
+
+handle_verification_query()
+current_user = require_user()
+render_account_sidebar(current_user)
 
 # Custom CSS
 st.markdown("""

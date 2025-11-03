@@ -10,6 +10,7 @@ docs/build/
 
 # Personal docs
 _README.md
+.env
 
 # Directories
 myworkspace/

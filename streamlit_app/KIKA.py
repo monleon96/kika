@@ -12,6 +12,8 @@ from pathlib import Path
 # Add parent directory to path to import mcnpy
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from utils.auth import handle_verification_query, require_user, render_account_sidebar
+
 # Configure page
 st.set_page_config(
     page_title="KIKA",
@@ -32,6 +34,10 @@ st.set_page_config(
         """
     }
 )
+
+handle_verification_query()
+current_user = require_user()
+render_account_sidebar(current_user)
 
 # Custom CSS for better styling
 st.markdown("""
