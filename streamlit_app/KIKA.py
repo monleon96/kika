@@ -8,11 +8,15 @@ Powered by MCNPy
 import streamlit as st
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Add parent directory to path to import mcnpy
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils.auth import handle_verification_query, require_user, render_account_sidebar
+from utils.backend_auth import handle_verification_query, require_user, render_account_sidebar
 
 # Configure page
 st.set_page_config(
