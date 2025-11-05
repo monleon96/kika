@@ -1,0 +1,27 @@
+[package]
+name = "kika"
+version = "0.1.0"
+description = "KIKA - Nuclear Data Viewer Desktop Application"
+authors = ["Juan Antonio Monleon <juanmonleon96@gmail.com>"]
+license = "GPL-3.0"
+repository = "https://github.com/monleon96/MCNPy"
+default-run = "kika"
+edition = "2021"
+rust-version = "1.60"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+tauri-build = { version = "1.5.5" }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "1.8.1", features = ["dialog-open", "fs-read-file", "http-request", "shell-open"] }
+reqwest = { version = "0.11", features = ["json", "blocking"] }
+
+[features]
+# this feature is used for production builds or when `devPath` points to the filesystem and the built-in dev server is disabled.
+# If you use cargo directly instead of tauri's cli you can use this feature flag to switch between tauri's `dev` and `build` modes.
+# DO NOT REMOVE!!
+custom-protocol = [ "tauri/custom-protocol" ]
