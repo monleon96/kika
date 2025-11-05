@@ -25,7 +25,7 @@ import numpy as np
 from components.saved_configs import render_saved_configs_sidebar
 from components.clear_cache import render_clear_cache_button
 from utils.config_history import save_configuration
-from utils.auth import handle_verification_query, require_user, render_account_sidebar
+from utils.backend_auth import handle_verification_query, require_user, render_account_sidebar
 
 # Page config
 st.set_page_config(page_title="ENDF Viewer - KIKA", page_icon="📈", layout="wide")

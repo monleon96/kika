@@ -19,7 +19,7 @@ import mcnpy
 from mcnpy.njoy.run_njoy import run_njoy
 from mcnpy.endf.read_endf import read_endf
 from mcnpy._constants import NDLIBRARY_TO_SUFFIX
-from utils.auth import handle_verification_query, require_user, render_account_sidebar
+from utils.backend_auth import handle_verification_query, require_user, render_account_sidebar
 
 # Page config
 st.set_page_config(page_title="NJOY Processing - KIKA", page_icon="🔧", layout="wide")

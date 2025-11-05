@@ -20,7 +20,7 @@ from .file_utils import (
     FileManager,
 )
 
-from .auth import (
+from .backend_auth import (
     require_user,
     get_current_user,
     render_account_sidebar,

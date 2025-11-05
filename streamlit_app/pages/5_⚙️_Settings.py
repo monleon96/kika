@@ -17,7 +17,7 @@ import streamlit as st
 # Add repository root so user settings/auth utilities are importable
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from utils.auth import handle_verification_query, render_account_sidebar, require_user
+from utils.backend_auth import handle_verification_query, render_account_sidebar, require_user
 from utils.user_settings import (
     DEFAULT_SETTINGS,
     collect_settings_snapshot,

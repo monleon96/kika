@@ -24,7 +24,7 @@ import numpy as np
 from components.saved_configs import render_saved_configs_sidebar
 from components.clear_cache import render_clear_cache_button
 from utils.config_history import save_configuration
-from utils.auth import handle_verification_query, require_user, render_account_sidebar
+from utils.backend_auth import handle_verification_query, require_user, render_account_sidebar
 
 # Page config
 st.set_page_config(page_title="ACE Viewer - KIKA", page_icon="📊", layout="wide")
@@ -177,6 +177,61 @@ with tab_viewer:
         st.info("👈 Upload ACE files from the sidebar to get started. The plotting interface will be ready once files are loaded.")
 
     # Always show plotting interface (whether or not files are loaded)
+    # Function to reset figure settings to defaults based on current data type
+    def reset_figure_settings_to_defaults():
+        """Reset figure settings to default values based on current data type"""
+        # Get current data type from session state
+        current_data_type = st.session_state.get('data_type_select', 'Cross Section')
+        
+        # Define defaults based on data type
+        default_fig_width = 10
+        default_fig_height = 6
+        default_title_fontsize = 14
+        default_label_fontsize = 12
+        default_tick_fontsize = 10
+        default_legend_fontsize = 10
+        
+        if current_data_type == "Cross Section":
+            default_title = "Cross Section Comparison"
+            default_x_label = "Energy (MeV)"
+            default_y_label = "Cross Section (barns)"
+            default_log_x = True
+            default_log_y = True
+        else:  # Angular Distribution
+            default_title = "Angular Distribution Comparison"
+            default_x_label = "cos(θ)"
+            default_y_label = "Probability Density"
+            default_log_x = False
+            default_log_y = False
+        
+        # Set all figure settings to defaults in session state
+        st.session_state.plot_title = default_title
+        st.session_state.x_label = default_x_label
+        st.session_state.y_label = default_y_label
+        st.session_state.fig_width = default_fig_width
+        st.session_state.fig_height = default_fig_height
+        st.session_state.title_fontsize = default_title_fontsize
+        st.session_state.label_fontsize = default_label_fontsize
+        st.session_state.legend_fontsize = default_legend_fontsize
+        st.session_state.show_legend = True
+        st.session_state.legend_loc = "best"
+        st.session_state.log_x = default_log_x
+        st.session_state.log_y = default_log_y
+        st.session_state.show_grid = True
+        st.session_state.grid_alpha = 0.3
+        st.session_state.show_minor_grid = False
+        st.session_state.minor_grid_alpha = 0.15
+        st.session_state.tick_fontsize_x = default_tick_fontsize
+        st.session_state.tick_fontsize_y = default_tick_fontsize
+        st.session_state.max_ticks_x = 10
+        st.session_state.max_ticks_y = 10
+        st.session_state.rotate_x = 0
+        st.session_state.rotate_y = 0
+        st.session_state.x_min = ""
+        st.session_state.x_max = ""
+        st.session_state.y_min = ""
+        st.session_state.y_max = ""
+    
     # Function to reset all plot settings to defaults
     def reset_all_plot_settings():
         """Reset all plot settings to default values"""
@@ -184,22 +239,8 @@ with tab_viewer:
         st.session_state.plot_selections = []
         st.session_state.selection_id_counter = 0
         
-        # Reset all figure settings to defaults
-        keys_to_delete = [
-            'plot_title', 'x_label', 'y_label',
-            'fig_width', 'fig_height',
-            'title_fontsize', 'label_fontsize', 'legend_fontsize',
-            'show_legend', 'legend_loc',
-            'log_x', 'log_y',
-            'show_grid', 'grid_alpha', 'show_minor_grid', 'minor_grid_alpha',
-            'tick_fontsize_x', 'tick_fontsize_y',
-            'max_ticks_x', 'max_ticks_y',
-            'rotate_x', 'rotate_y',
-            'x_min', 'x_max', 'y_min', 'y_max'
-        ]
-        for key in keys_to_delete:
-            if key in st.session_state:
-                del st.session_state[key]
+        # Reset figure settings
+        reset_figure_settings_to_defaults()
         
         # Also clear current config tracking
         if 'ace_current_config_id' in st.session_state:
@@ -218,9 +259,11 @@ with tab_viewer:
     
     # Callback function to reset all selections when data type changes
     def reset_on_data_type_change():
-        """Reset plot selections and ID counter when data type changes"""
+        """Reset plot selections, ID counter, and figure settings when data type changes"""
         st.session_state.plot_selections = []
         st.session_state.selection_id_counter = 0
+        # Reset figure settings to match new data type
+        reset_figure_settings_to_defaults()
     
     # Data type selection
     data_type = st.selectbox(

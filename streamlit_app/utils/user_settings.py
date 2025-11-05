@@ -1,9 +1,12 @@
 """
 User settings management for the Streamlit UI.
 
-Handles default values, persistence to SQLite, and synchronization with the
-Streamlit session state so that other parts of the app can continue to read
-from `st.session_state.njoy_exe_path` and similar keys.
+Handles default values and synchronization with the Streamlit session state
+so that other parts of the app can continue to read from `st.session_state.njoy_exe_path`
+and similar keys.
+
+Note: Settings are currently stored in session state only. For persistent storage,
+a backend endpoint should be added to kika-backend in the future.
 """
 
 from __future__ import annotations
@@ -14,8 +17,6 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, MutableMapping, Sequence, Tuple
 
 import streamlit as st
-
-from .db import db_cursor
 
 
 USER_SETTINGS_KEY = "user_settings"
@@ -111,54 +112,31 @@ def normalize_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
 def load_user_settings(user_id: int | None) -> Dict[str, Any]:
     """
     Load settings for the given user id (or defaults for guests).
+    
+    Note: Currently returns defaults for all users. Backend persistence
+    should be implemented in the future.
     """
-    if user_id is None:
-        return get_default_settings()
-
-    with db_cursor() as cursor:
-        cursor.execute(
-            "SELECT settings_json FROM user_settings WHERE user_id = ?",
-            (user_id,),
-        )
-        row = cursor.fetchone()
-
-    if row and row["settings_json"]:
-        try:
-            saved = json.loads(row["settings_json"])
-        except json.JSONDecodeError:
-            saved = {}
-    else:
-        saved = {}
-
-    return normalize_settings(saved)
+    # TODO: Load from backend API when user settings endpoints are available
+    return get_default_settings()
 
 
 def save_user_settings(user_id: int | None, settings: Dict[str, Any]) -> Tuple[bool, str]:
     """
     Persist settings for a specific user. Guests cannot persist settings.
+    
+    Note: Currently only saves to session state. Backend persistence
+    should be implemented in the future.
     """
     if user_id is None:
         return False, "Guest sessions use temporary settings and cannot be saved."
 
     normalized = normalize_settings(settings)
-    payload = json.dumps(normalized)
-    timestamp = datetime.utcnow().isoformat(timespec="seconds")
-
-    with db_cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO user_settings (user_id, settings_json, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE
-            SET settings_json = excluded.settings_json,
-                updated_at = excluded.updated_at
-            """,
-            (user_id, payload, timestamp),
-        )
-
-    # Keep the in-memory copy aligned with what we saved.
+    
+    # TODO: Save to backend API when user settings endpoints are available
+    # For now, just keep in session state
     st.session_state[USER_SETTINGS_KEY] = normalized
-    return True, "Settings saved successfully."
+    
+    return True, "Settings saved to session (temporary until backend persistence is added)."
 
 
 def _apply_settings_to_session_state(settings: Dict[str, Any]) -> None:

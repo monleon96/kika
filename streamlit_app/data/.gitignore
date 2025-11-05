@@ -5,3 +5,6 @@
 # SQLite database storing accounts and user preferences
 kika.db
 
+
+# Deprecated SQLite database (replaced by kika-backend PostgreSQL)
+kika.db

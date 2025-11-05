@@ -3,14 +3,16 @@
 
 # Core dependencies (should already be installed with mcnpy)
 streamlit>=1.40.0
-streamlit-authenticator>=0.3.3
 extra-streamlit-components>=0.1.71
 pillow>=11.0.0
-passlib[bcrypt]>=1.7.4
-itsdangerous>=2.2.0
+requests>=2.31.0  # For API client to communicate with kika-backend
+
+# Removed: streamlit-authenticator, passlib, itsdangerous
+# (authentication now handled by kika-backend)
 
 # These should come from the main mcnpy installation
 # but listed here for reference
 matplotlib>=3.10.0
 numpy>=1.26.0
 pandas>=2.2.0
+python-dotenv
