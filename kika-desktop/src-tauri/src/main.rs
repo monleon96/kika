@@ -2,22 +2,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::Manager;
-use serde::{Deserialize, Serialize};
+use std::env;
 
 // Backend URL configuration
-const BACKEND_URL: &str = "http://localhost:8000";
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ApiResponse {
-    success: bool,
-    message: String,
-    data: Option<serde_json::Value>,
+// Defaults to production but can be overridden with KIKA_BACKEND_URL env var
+fn get_backend_url() -> String {
+    env::var("KIKA_BACKEND_URL")
+        .unwrap_or_else(|_| "https://kika-backend.onrender.com".to_string())
 }
 
 // Test backend connection
 #[tauri::command]
 async fn check_backend_health() -> Result<bool, String> {
-    let url = format!("{}/healthz", BACKEND_URL);
+    let backend_url = get_backend_url();
+    let url = format!("{}/healthz", backend_url);
     
     match reqwest::get(&url).await {
         Ok(response) => Ok(response.status().is_success()),
@@ -32,7 +30,8 @@ async fn call_backend_api(
     method: String,
     body: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    let url = format!("{}{}", BACKEND_URL, endpoint);
+    let backend_url = get_backend_url();
+    let url = format!("{}{}", backend_url, endpoint);
     let client = reqwest::Client::new();
     
     let response = match method.as_str() {

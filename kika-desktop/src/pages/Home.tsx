@@ -7,10 +7,13 @@ import {
   CardContent,
   Alert,
   CircularProgress,
+  Button,
 } from '@mui/material';
 import { invoke } from '@tauri-apps/api/tauri';
+import { useNavigate } from 'react-router-dom';
 
 export const Home: React.FC = () => {
+  const navigate = useNavigate();
   const [backendStatus, setBackendStatus] = useState<boolean | null>(null);
   const [checking, setChecking] = useState(true);
 
@@ -53,15 +56,11 @@ export const Home: React.FC = () => {
               </Box>
             ) : backendStatus ? (
               <Alert severity="success">
-                ✓ Backend is running and healthy (http://localhost:8000)
+                ✓ Backend is running and healthy
               </Alert>
             ) : (
               <Alert severity="error">
-                ✗ Backend is not responding. Please start the Python backend:
-                <Box component="pre" sx={{ mt: 1, p: 1, bgcolor: 'grey.100', borderRadius: 1 }}>
-                  cd ../kika-backend{'\n'}
-                  python app.py
-                </Box>
+                ✗ Backend is not responding. Please check your internet connection.
               </Alert>
             )}
           </CardContent>
@@ -78,13 +77,18 @@ export const Home: React.FC = () => {
               <Typography variant="h6" gutterBottom>
                 📊 ACE Data Viewer
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" color="text.secondary" paragraph>
                 Upload and visualize ACE format nuclear data files with cross sections
                 and angular distributions.
               </Typography>
-              <Typography variant="caption" color="warning.main" sx={{ mt: 2, display: 'block' }}>
-                🚧 Coming soon - Migration in progress
-              </Typography>
+              <Button
+                variant="contained"
+                fullWidth
+                onClick={() => navigate('/ace-viewer')}
+                sx={{ mt: 1 }}
+              >
+                Open ACE Viewer →
+              </Button>
             </CardContent>
           </Card>
 

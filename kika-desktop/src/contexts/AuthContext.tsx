@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { BACKEND_URL } from '../config';
 
 export interface User {
   email: string;
@@ -46,8 +47,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const login = async (email: string, password: string) => {
     try {
-      // This will be replaced with actual API call via Tauri
-      const response = await fetch('http://localhost:8000/login', {
+      const response = await fetch(`${BACKEND_URL}/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -57,7 +57,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       if (response.ok) {
         // Fetch user details
-        const userResponse = await fetch(`http://localhost:8000/users/${email}`);
+        const userResponse = await fetch(`${BACKEND_URL}/users/${email}`);
         if (userResponse.ok) {
           const userData: User = await userResponse.json();
           setUser(userData);

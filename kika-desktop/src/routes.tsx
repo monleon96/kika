@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Home } from './pages/Home';
 import { Login } from './pages/Login';
+import { ACEViewer } from './pages/ACEViewer';
 import { useAuth } from './contexts/AuthContext';
 
 // Protected route wrapper
@@ -33,6 +34,7 @@ export const AppRoutes: React.FC = () => {
         }
       >
         <Route index element={<Home />} />
+        <Route path="ace-viewer" element={<ACEViewer />} />
         {/* More routes will be added here as we migrate pages */}
       </Route>
     </Routes>
