@@ -176,7 +176,7 @@ def parse_sensitivity_text(text: str) -> SensitivityFile:
         # Edge case: if only one bin but input used _BIN_0, keep full_name with suffix
         if len(all_bins) == 1 and (0 in ed_bins) and (0 in int_bins):
             # If original text had explicit suffix, prefer that name
-            had_suffix = any(re.search(rf"ADJ_PERT_{re.escape(base)}_BIN_0_SENS\s*=", text))
+            had_suffix = re.search(rf"ADJ_PERT_{re.escape(base)}_BIN_0_SENS\s*=", text) is not None
             if had_suffix:
                 responses = [Response(base_name=base, bin_index=0, full_name=f"{base}_BIN_0")]
         data[base] = SensitivitySet(responses=responses, energy_dependent=ed_stack, integrated=int_stack)

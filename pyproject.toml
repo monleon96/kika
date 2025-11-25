@@ -49,6 +49,13 @@ myst-parser = "^4.0.1"
 sphinx-autobuild = "^2024.10.3"
 sphinx-rtd-theme = "^3.0.2"
 
+[tool.poetry.group.server]
+optional = true
+[tool.poetry.group.server.dependencies]
+fastapi = "^0.109.0"
+uvicorn = {version = "^0.27.0", extras = ["standard"]}
+python-multipart = "^0.0.6"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

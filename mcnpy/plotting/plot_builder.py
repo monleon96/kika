@@ -87,6 +87,9 @@ class PlotBuilder:
         self._x_lim: Optional[Tuple[float, float]] = None
         self._y_lim: Optional[Tuple[float, float]] = None
         self._grid: bool = True
+        self._grid_alpha: float = 0.3  # Alpha (transparency) for major grid
+        self._show_minor_grid: bool = False  # Whether to show minor grid
+        self._minor_grid_alpha: float = 0.15  # Alpha for minor grid
         
         # Font size configuration
         self._title_fontsize: Optional[float] = None
@@ -292,14 +295,26 @@ class PlotBuilder:
         self._legend_loc = loc
         return self
     
-    def set_grid(self, grid: bool = True) -> 'PlotBuilder':
+    def set_grid(
+        self, 
+        grid: bool = True,
+        alpha: float = 0.3,
+        show_minor: bool = False,
+        minor_alpha: float = 0.15
+    ) -> 'PlotBuilder':
         """
-        Enable or disable grid.
+        Configure grid display settings.
         
         Parameters
         ----------
         grid : bool
-            Whether to show grid
+            Whether to show major grid
+        alpha : float
+            Alpha (transparency) for major grid lines. Range: 0.0-1.0
+        show_minor : bool
+            Whether to show minor grid lines
+        minor_alpha : float
+            Alpha (transparency) for minor grid lines. Range: 0.0-1.0
             
         Returns
         -------
@@ -307,6 +322,9 @@ class PlotBuilder:
             Self for method chaining
         """
         self._grid = grid
+        self._grid_alpha = alpha
+        self._show_minor_grid = show_minor
+        self._minor_grid_alpha = minor_alpha
         return self
     
     def set_tick_params(
@@ -712,6 +730,15 @@ class PlotBuilder:
                     self.fig.tight_layout()
                 except:
                     pass  # If tight_layout fails, just continue
+        
+        # Apply grid configuration
+        if self._grid:
+            self.ax.grid(True, which='major', alpha=self._grid_alpha)
+            if self._show_minor_grid:
+                self.ax.minorticks_on()
+                self.ax.grid(True, which='minor', linestyle=':', alpha=self._minor_grid_alpha, linewidth=0.5)
+        else:
+            self.ax.grid(False)
         
         # Finalize
         if show:

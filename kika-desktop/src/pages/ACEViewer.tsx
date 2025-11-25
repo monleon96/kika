@@ -1,22 +1,183 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import {
-  Container,
   Typography,
   Box,
   Paper,
   Tabs,
   Tab,
   Alert,
+  Chip,
+  Button,
+  CircularProgress,
 } from '@mui/material';
-import { FileUpload } from '../components/FileUpload';
+import { UploadFile, Folder } from '@mui/icons-material';
+import { PlotViewer, type LoadedACEFile } from '../components/PlotViewer';
+import { useFileWorkspace } from '../contexts/FileWorkspaceContext';
 
+// Check if running in Tauri
+const isTauri = '__TAURI__' in window;
+
+// File upload prompt component
+const FileUploadPrompt: React.FC = () => {
+  const { addFiles } = useFileWorkspace();
+  const [uploading, setUploading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFiles = useCallback(async (fileList: FileList) => {
+    setUploading(true);
+    try {
+      const filesArray = Array.from(fileList);
+      const filesData = await Promise.all(
+        filesArray.map(async file => ({
+          name: file.name,
+          path: file.name,
+          content: await file.text(),
+        }))
+      );
+      await addFiles(filesData);
+    } catch (error) {
+      console.error('Error uploading files:', error);
+    } finally {
+      setUploading(false);
+    }
+  }, [addFiles]);
+
+  const handleTauriFileSelect = useCallback(async () => {
+    setUploading(true);
+    try {
+      const { open: openDialog } = await import('@tauri-apps/api/dialog');
+      const { readTextFile } = await import('@tauri-apps/api/fs');
+
+      const selected = await openDialog({
+        multiple: true,
+        filters: [
+          {
+            name: 'Nuclear Data Files',
+            extensions: ['ace', 'endf', 'endf6', '02c', '03c', '20c', '21c', '70c', '80c'],
+          },
+        ],
+      });
+
+      if (!selected || !Array.isArray(selected) || selected.length === 0) {
+        setUploading(false);
+        return;
+      }
+
+      const filesData = await Promise.all(
+        selected.map(async (filePath: string) => {
+          const fileName = filePath.split(/[\\/]/).pop() || 'unknown';
+          const content = await readTextFile(filePath);
+          return { name: fileName, path: filePath, content };
+        })
+      );
+
+      await addFiles(filesData);
+    } catch (error) {
+      console.error('Error selecting files:', error);
+    } finally {
+      setUploading(false);
+    }
+  }, [addFiles]);
+
+  const handleDrag = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFiles(e.dataTransfer.files);
+    }
+  }, [handleFiles]);
+
+  const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleFiles(e.target.files);
+    }
+  }, [handleFiles]);
+
+  const openFileDialog = useCallback(() => {
+    if (isTauri) {
+      handleTauriFileSelect();
+    } else {
+      fileInputRef.current?.click();
+    }
+  }, [handleTauriFileSelect]);
+
+  return (
+    <Paper
+      sx={{
+        p: 6,
+        textAlign: 'center',
+        bgcolor: dragActive ? 'action.hover' : 'background.paper',
+        border: dragActive ? '3px dashed' : '3px dashed',
+        borderColor: dragActive ? 'primary.main' : 'grey.300',
+        transition: 'all 0.2s',
+      }}
+      onDragEnter={handleDrag}
+      onDragLeave={handleDrag}
+      onDragOver={handleDrag}
+      onDrop={handleDrop}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".ace,.endf,.endf6,.02c,.03c,.20c,.21c,.70c,.80c"
+        onChange={handleFileInputChange}
+        style={{ display: 'none' }}
+      />
+
+      <Folder sx={{ fontSize: 80, color: 'grey.400', mb: 2 }} />
+      
+      <Typography variant="h5" gutterBottom>
+        No ACE Files Loaded
+      </Typography>
+      
+      <Typography variant="body1" color="text.secondary" paragraph>
+        Upload ACE files to start visualizing nuclear data
+      </Typography>
+
+      <Button
+        variant="contained"
+        size="large"
+        startIcon={uploading ? <CircularProgress size={20} /> : <UploadFile />}
+        onClick={openFileDialog}
+        disabled={uploading}
+        sx={{ mt: 2 }}
+      >
+        {uploading ? 'Uploading...' : 'Upload ACE Files'}
+      </Button>
+
+      <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 2 }}>
+        Drop files here or click to browse
+      </Typography>
+
+      <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 1 }}>
+        Supported formats: .ace, .02c, .03c, .20c, .21c, .70c, .80c
+      </Typography>
+    </Paper>
+  );
+};
+
+// TabPanel component
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
   value: number;
 }
 
-function TabPanel(props: TabPanelProps) {
+const TabPanel: React.FC<TabPanelProps> = (props) => {
   const { children, value, index, ...other } = props;
   return (
     <div
@@ -29,24 +190,30 @@ function TabPanel(props: TabPanelProps) {
       {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
     </div>
   );
-}
+};
 
 export const ACEViewer: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
-  const [loadedFiles, setLoadedFiles] = useState<{ name: string; path: string }[]>([]);
+  const { getFilesByType } = useFileWorkspace();
 
   const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
   };
 
-  const handleFileSelect = (file: { name: string; path: string; content: string }) => {
-    console.log('File selected:', file);
-    setLoadedFiles(prev => [...prev, { name: file.name, path: file.path }]);
-    // TODO: Parse ACE file content using MCNPy
-  };
+  // Convert workspace files to LoadedACEFile format
+  const loadedFiles: LoadedACEFile[] = useMemo(() => {
+    const aceFiles = getFilesByType('ace');
+    return aceFiles.map(file => ({
+      name: file.name,
+      path: file.path,
+      content: file.content,
+      info: file.metadata && 'atomic_weight_ratio' in file.metadata ? file.metadata : undefined,
+      error: file.error,
+    }));
+  }, [getFilesByType]);
 
   return (
-    <Container maxWidth="lg">
+    <Box sx={{ width: '100%', px: 3 }}>
       <Box sx={{ my: 4 }}>
         <Typography variant="h3" component="h1" gutterBottom>
           📊 ACE Data Viewer
@@ -114,20 +281,34 @@ export const ACEViewer: React.FC = () => {
 
                   {loadedFiles.length > 0 && (
                     <Box sx={{ mt: 2 }}>
-                      <Typography variant="body2" fontWeight="bold">
+                      <Typography variant="body2" fontWeight="bold" gutterBottom>
                         Loaded files:
                       </Typography>
                       {loadedFiles.map((file, idx) => (
-                        <Typography key={idx} variant="body2" sx={{ ml: 1 }}>
-                          • {file.name}
-                        </Typography>
+                        <Box key={idx} sx={{ ml: 1, mb: 1 }}>
+                          <Typography variant="body2">
+                            • {file.name}
+                          </Typography>
+                          {file.info && (
+                            <Box sx={{ ml: 2, display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.5 }}>
+                              <Chip label={file.info.zaid} size="small" color="primary" />
+                              <Chip label={`${file.info.temperature.toFixed(1)} K`} size="small" />
+                              <Chip label={`${file.info.available_reactions.length} reactions`} size="small" />
+                            </Box>
+                          )}
+                          {file.error && (
+                            <Alert severity="error" sx={{ mt: 0.5, py: 0 }}>
+                              {file.error}
+                            </Alert>
+                          )}
+                        </Box>
                       ))}
                     </Box>
                   )}
 
                   {loadedFiles.length === 0 && (
                     <Alert severity="info" sx={{ mt: 2 }}>
-                      Upload ACE files to get started
+                      Open the File Workspace (📁 icon in top bar) to upload ACE files
                     </Alert>
                   )}
                 </Paper>
@@ -137,7 +318,8 @@ export const ACEViewer: React.FC = () => {
                     Getting Started
                   </Typography>
                   <Box component="ol" sx={{ pl: 2 }}>
-                    <li>Upload ACE files using the file picker below</li>
+                    <li>Open the <strong>File Workspace</strong> from the top bar (📁 icon)</li>
+                    <li>Upload ACE files (they will be available across all tabs)</li>
                     <li>Go to the <strong>Viewer</strong> tab</li>
                     <li>Add data series and configure styling</li>
                     <li>Customize labels, scales, and appearance</li>
@@ -147,16 +329,15 @@ export const ACEViewer: React.FC = () => {
               </Box>
             </Box>
 
-            <Paper sx={{ p: 3, mt: 4, bgcolor: 'primary.light', color: 'primary.contrastText' }}>
+            <Paper sx={{ p: 3, mt: 4, bgcolor: 'info.light' }}>
               <Typography variant="h6" gutterBottom>
-                📁 Upload ACE Files
+                📁 File Workspace
               </Typography>
-              <FileUpload
-                accept={['ace', '02c', '03c', '20c', '21c', '70c', '80c']}
-                onFileSelect={handleFileSelect}
-                label="Select an ACE format file"
-                maxSizeMB={50}
-              />
+              <Typography variant="body2">
+                Files are now managed in the global File Workspace. Click the 📁 folder icon
+                in the top navigation bar to open the workspace and upload ACE or ENDF files.
+                All uploaded files will be available across all viewers and tabs!
+              </Typography>
             </Paper>
 
             <Box sx={{ mt: 3, p: 2, bgcolor: 'info.light', borderRadius: 1 }}>
@@ -196,21 +377,17 @@ export const ACEViewer: React.FC = () => {
 
           <TabPanel value={tabValue} index={1}>
             <Typography variant="h5" gutterBottom>
-              🎨 Plot Configuration
+              🎨 Plot Viewer
             </Typography>
 
             {loadedFiles.length === 0 ? (
-              <Alert severity="warning">
-                No files loaded. Please upload ACE files from the Home tab first.
-              </Alert>
+              <FileUploadPrompt />
             ) : (
-              <Alert severity="info">
-                🚧 Viewer functionality coming soon - Migration in progress
-              </Alert>
+              <PlotViewer files={loadedFiles} />
             )}
           </TabPanel>
         </Paper>
       </Box>
-    </Container>
+    </Box>
   );
 };

@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import {
-  Container,
   Typography,
   Box,
   Card,
@@ -9,12 +8,12 @@ import {
   CircularProgress,
   Button,
 } from '@mui/material';
-import { invoke } from '@tauri-apps/api/tauri';
 import { useNavigate } from 'react-router-dom';
+import { checkMCNPyHealth } from '../services/mcnpyService';
 
 export const Home: React.FC = () => {
   const navigate = useNavigate();
-  const [backendStatus, setBackendStatus] = useState<boolean | null>(null);
+  const [mcnpyStatus, setMcnpyStatus] = useState<boolean | null>(null);
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
@@ -23,18 +22,18 @@ export const Home: React.FC = () => {
 
   const checkBackend = async () => {
     try {
-      const isHealthy = await invoke<boolean>('check_backend_health');
-      setBackendStatus(isHealthy);
+      const isHealthy = await checkMCNPyHealth();
+      setMcnpyStatus(isHealthy);
     } catch (error) {
-      console.error('Error checking backend:', error);
-      setBackendStatus(false);
+      console.error('Error checking MCNPy server:', error);
+      setMcnpyStatus(false);
     } finally {
       setChecking(false);
     }
   };
 
   return (
-    <Container maxWidth="lg">
+    <Box sx={{ width: '100%', px: 3 }}>
       <Box sx={{ my: 4 }}>
         <Typography variant="h3" component="h1" gutterBottom>
           Welcome to KIKA
@@ -43,7 +42,7 @@ export const Home: React.FC = () => {
           Nuclear Data Visualization & Analysis Platform
         </Typography>
 
-        {/* Backend Status */}
+        {/* MCNPy Server Status */}
         <Card sx={{ mb: 3 }}>
           <CardContent>
             <Typography variant="h6" gutterBottom>
@@ -52,15 +51,18 @@ export const Home: React.FC = () => {
             {checking ? (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                 <CircularProgress size={20} />
-                <Typography>Checking backend connection...</Typography>
+                <Typography>Checking MCNPy server connection...</Typography>
               </Box>
-            ) : backendStatus ? (
+            ) : mcnpyStatus ? (
               <Alert severity="success">
-                ✓ Backend is running and healthy
+                ✓ MCNPy Server is running and healthy (http://localhost:8001)
               </Alert>
             ) : (
-              <Alert severity="error">
-                ✗ Backend is not responding. Please check your internet connection.
+              <Alert severity="warning">
+                ⚠️ MCNPy Server is not responding. Make sure the server is running:
+                <Box component="code" sx={{ display: 'block', mt: 1, p: 1, bgcolor: 'rgba(0,0,0,0.1)', borderRadius: 1, fontSize: '0.85em' }}>
+                  cd MCNPy && ./start-dev.sh
+                </Box>
               </Alert>
             )}
           </CardContent>
@@ -101,9 +103,14 @@ export const Home: React.FC = () => {
                 Explore ENDF-6 format evaluated nuclear data with uncertainty bands
                 and library comparisons.
               </Typography>
-              <Typography variant="caption" color="warning.main" sx={{ mt: 2, display: 'block' }}>
-                🚧 Coming soon - Migration in progress
-              </Typography>
+              <Button
+                variant="contained"
+                fullWidth
+                onClick={() => navigate('/endf-viewer')}
+                sx={{ mt: 1 }}
+              >
+                Open ENDF Viewer →
+              </Button>
             </CardContent>
           </Card>
 
@@ -142,6 +149,6 @@ export const Home: React.FC = () => {
           </Typography>
         </Box>
       </Box>
-    </Container>
+    </Box>
   );
 };

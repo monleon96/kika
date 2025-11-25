@@ -225,10 +225,207 @@ class UncertaintyResult:
         return "\n".join(lines)
 
 
+def _format_nuclide(zaid: int) -> str:
+    """Format a ZAID as a human-readable nuclide string."""
+    z = zaid // 1000
+    a = zaid % 1000
+    
+    if z in ATOMIC_NUMBER_TO_SYMBOL:
+        return f"{ATOMIC_NUMBER_TO_SYMBOL[z]}-{a}"
+    else:
+        return f"Z{z}-{a}"
+
+
+def _merge_covariance_matrices(
+    sens_data: List[SDFReactionData],
+    cov_mat_list: List[CovMat],
+    verbose: bool
+) -> Tuple[Optional[CovMat], Set[int]]:
+    """Merge multiple CovMat objects into one, checking for missing isotopes.
+    
+    Parameters
+    ----------
+    sens_data : List[SDFReactionData]
+        Sensitivity data to check against
+    cov_mat_list : List[CovMat]
+        List of covariance matrices to merge
+    verbose : bool
+        Whether to print detailed information
+        
+    Returns
+    -------
+    merged_cov_mat : CovMat or None
+        Merged covariance matrix, or None if no data found
+    missing_isotopes : Set[int]
+        Set of ZAIDs that were not found in any covariance matrix
+    """
+    if not cov_mat_list:
+        return None, set()
+    
+    # Get all isotopes needed from sensitivity data
+    needed_isotopes = {r.zaid for r in sens_data}
+    
+    # Get all available isotopes from covariance matrices
+    available_isotopes = set()
+    for cov_mat in cov_mat_list:
+        reactions_by_iso = cov_mat.reactions_by_isotope()
+        available_isotopes.update(reactions_by_iso.keys())
+    
+    # Find missing isotopes
+    missing_isotopes = needed_isotopes - available_isotopes
+    
+    if verbose and len(cov_mat_list) > 1:
+        logger.info(f"  Merging {len(cov_mat_list)} covariance matrices...")
+        logger.info(f"  Found data for {len(available_isotopes)} isotopes")
+    
+    # If only one matrix, return it directly
+    if len(cov_mat_list) == 1:
+        return cov_mat_list[0], missing_isotopes
+    
+    # Merge multiple matrices - combine all data into first matrix
+    # All matrices should have the same energy grid (will be validated later)
+    base_mat = cov_mat_list[0]
+    
+    # Create new lists to hold merged data
+    merged_isotope_rows = list(base_mat.isotope_rows)
+    merged_reaction_rows = list(base_mat.reaction_rows)
+    merged_isotope_cols = list(base_mat.isotope_cols)
+    merged_reaction_cols = list(base_mat.reaction_cols)
+    merged_matrices = list(base_mat.matrices)
+    
+    # Add data from other matrices
+    for cov_mat in cov_mat_list[1:]:
+        # Check if matrices need to be added (avoid duplicates)
+        for i in range(len(cov_mat.isotope_rows)):
+            key = (cov_mat.isotope_rows[i], cov_mat.reaction_rows[i],
+                   cov_mat.isotope_cols[i], cov_mat.reaction_cols[i])
+            
+            # Check if this combination already exists
+            already_exists = False
+            for j in range(len(merged_isotope_rows)):
+                existing_key = (merged_isotope_rows[j], merged_reaction_rows[j],
+                              merged_isotope_cols[j], merged_reaction_cols[j])
+                if key == existing_key:
+                    already_exists = True
+                    break
+            
+            if not already_exists:
+                merged_isotope_rows.append(cov_mat.isotope_rows[i])
+                merged_reaction_rows.append(cov_mat.reaction_rows[i])
+                merged_isotope_cols.append(cov_mat.isotope_cols[i])
+                merged_reaction_cols.append(cov_mat.reaction_cols[i])
+                merged_matrices.append(cov_mat.matrices[i])
+    
+    # Create merged CovMat object
+    merged_cov_mat = CovMat(
+        energy_grid=base_mat.energy_grid,
+        isotope_rows=merged_isotope_rows,
+        reaction_rows=merged_reaction_rows,
+        isotope_cols=merged_isotope_cols,
+        reaction_cols=merged_reaction_cols,
+        matrices=merged_matrices
+    )
+    
+    return merged_cov_mat, missing_isotopes
+
+
+def _merge_legendre_covariance_matrices(
+    sens_data: List[SDFReactionData],
+    cov_mat_list: List[MGMF34CovMat],
+    verbose: bool
+) -> Tuple[Optional[MGMF34CovMat], Set[int]]:
+    """Merge multiple MGMF34CovMat objects into one, checking for missing isotopes.
+    
+    Parameters
+    ----------
+    sens_data : List[SDFReactionData]
+        Sensitivity data to check against
+    cov_mat_list : List[MGMF34CovMat]
+        List of Legendre covariance matrices to merge
+    verbose : bool
+        Whether to print detailed information
+        
+    Returns
+    -------
+    merged_cov_mat : MGMF34CovMat or None
+        Merged Legendre covariance matrix, or None if no data found
+    missing_isotopes : Set[int]
+        Set of ZAIDs that were not found in any covariance matrix
+    """
+    if not cov_mat_list:
+        return None, set()
+    
+    # Get all isotopes needed from sensitivity data
+    needed_isotopes = {r.zaid for r in sens_data}
+    
+    # Get all available isotopes from Legendre covariance matrices
+    available_isotopes = set()
+    for cov_mat in cov_mat_list:
+        available_isotopes.update(cov_mat.isotope_rows)
+        available_isotopes.update(cov_mat.isotope_cols)
+    
+    # Find missing isotopes
+    missing_isotopes = needed_isotopes - available_isotopes
+    
+    if verbose and len(cov_mat_list) > 1:
+        logger.info(f"  Merging {len(cov_mat_list)} Legendre covariance matrices...")
+        logger.info(f"  Found data for {len(available_isotopes)} isotopes")
+    
+    # If only one matrix, return it directly
+    if len(cov_mat_list) == 1:
+        return cov_mat_list[0], missing_isotopes
+    
+    # Merge multiple matrices
+    base_mat = cov_mat_list[0]
+    
+    # Create new lists to hold merged data
+    merged_isotope_rows = list(base_mat.isotope_rows)
+    merged_reaction_rows = list(base_mat.reaction_rows)
+    merged_isotope_cols = list(base_mat.isotope_cols)
+    merged_reaction_cols = list(base_mat.reaction_cols)
+    merged_matrices = list(base_mat.relative_matrices)
+    
+    # Add data from other matrices
+    for cov_mat in cov_mat_list[1:]:
+        # Check if matrices need to be added (avoid duplicates)
+        for i in range(len(cov_mat.isotope_rows)):
+            key = (cov_mat.isotope_rows[i], cov_mat.reaction_rows[i],
+                   cov_mat.isotope_cols[i], cov_mat.reaction_cols[i])
+            
+            # Check if this combination already exists
+            already_exists = False
+            for j in range(len(merged_isotope_rows)):
+                existing_key = (merged_isotope_rows[j], merged_reaction_rows[j],
+                              merged_isotope_cols[j], merged_reaction_cols[j])
+                if key == existing_key:
+                    already_exists = True
+                    break
+            
+            if not already_exists:
+                merged_isotope_rows.append(cov_mat.isotope_rows[i])
+                merged_reaction_rows.append(cov_mat.reaction_rows[i])
+                merged_isotope_cols.append(cov_mat.isotope_cols[i])
+                merged_reaction_cols.append(cov_mat.reaction_cols[i])
+                merged_matrices.append(cov_mat.relative_matrices[i])
+    
+    # Create merged MGMF34CovMat object
+    merged_cov_mat = MGMF34CovMat(
+        energy_grid=base_mat.energy_grid,
+        isotope_rows=merged_isotope_rows,
+        reaction_rows=merged_reaction_rows,
+        isotope_cols=merged_isotope_cols,
+        reaction_cols=merged_reaction_cols,
+        relative_matrices=merged_matrices,
+        legendre_indices=base_mat.legendre_indices
+    )
+    
+    return merged_cov_mat, missing_isotopes
+
+
 def sandwich_uncertainty_propagation(
     sdf_data: SDFData,
-    cov_mat: Optional[CovMat] = None,
-    legendre_cov_mat: Optional[MGMF34CovMat] = None,
+    cov_mat: Optional[Union[CovMat, List[CovMat]]] = None,
+    legendre_cov_mat: Optional[Union[MGMF34CovMat, List[MGMF34CovMat]]] = None,
     reaction_filter: Optional[Dict[int, List[int]]] = None,
     energy_tolerance: float = 1e-6,
     verbose: bool = False
@@ -241,6 +438,7 @@ def sandwich_uncertainty_propagation(
     - Conversion from absolute to relative sensitivities (to match relative covariances)
     - Matrix construction and sandwich formula application
     - Individual contribution analysis and cross-correlation effects
+    - Multiple covariance matrices for different isotopes
     
     The function supports both cross-section and Legendre moment sensitivities:
     - Cross-section sensitivities (MT < 1000) use the regular CovMat covariance matrix
@@ -253,12 +451,16 @@ def sandwich_uncertainty_propagation(
         Sensitivity data containing sensitivity coefficients for various reactions.
         Can contain both cross-section sensitivities (MT < 1000) and Legendre 
         moment sensitivities (MT >= 4000, where MT = 4000 + L order).
-    cov_mat : CovMat, optional
+    cov_mat : CovMat or List[CovMat], optional
         Covariance matrix data for nuclear cross sections (in relative form).
         Used for cross-section sensitivities (MT < 1000).
-    legendre_cov_mat : MGMF34CovMat, optional
+        Can be a single CovMat or a list of CovMat objects for different isotopes.
+        When a list is provided, the function will search for each isotope's data
+        across all provided matrices.
+    legendre_cov_mat : MGMF34CovMat or List[MGMF34CovMat], optional
         Covariance matrix data for Legendre moments (in relative form).
         Used for Legendre moment sensitivities (MT >= 4000).
+        Can be a single matrix or a list of matrices for different isotopes.
     reaction_filter : Dict[int, List[int]], optional
         Dictionary mapping ZAID to list of MT numbers to include in propagation.
         If None, all matching reactions between sensitivity and covariance data are used.
@@ -305,19 +507,27 @@ def sandwich_uncertainty_propagation(
     if cov_mat is None and legendre_cov_mat is None:
         raise ValueError("At least one covariance matrix (cov_mat or legendre_cov_mat) must be provided")
     
+    # Convert single matrices to lists for uniform handling
+    cov_mat_list = [cov_mat] if isinstance(cov_mat, CovMat) else (cov_mat if cov_mat is not None else [])
+    legendre_cov_mat_list = [legendre_cov_mat] if isinstance(legendre_cov_mat, MGMF34CovMat) else (legendre_cov_mat if legendre_cov_mat is not None else [])
+    
     # Validate that provided covariance matrices contain data
-    if cov_mat is not None and not cov_mat.matrices:
-        raise ValueError("Cross-section covariance matrix contains no data")
-        
-    if legendre_cov_mat is not None and not legendre_cov_mat.relative_matrices:
-        raise ValueError("Legendre covariance matrix contains no data")
+    for i, cm in enumerate(cov_mat_list):
+        if not cm.matrices:
+            raise ValueError(f"Cross-section covariance matrix {i} contains no data")
+    
+    for i, lcm in enumerate(legendre_cov_mat_list):
+        if not lcm.relative_matrices:
+            raise ValueError(f"Legendre covariance matrix {i} contains no data")
     
     if verbose:
         logger.info("✓ Input validation complete")
-        if cov_mat is not None:
-            logger.info(f"  Cross-section covariances: {len(cov_mat.matrices)} matrices")
-        if legendre_cov_mat is not None:
-            logger.info(f"  Legendre covariances: {len(legendre_cov_mat.relative_matrices)} matrices")
+        if cov_mat_list:
+            total_matrices = sum(len(cm.matrices) for cm in cov_mat_list)
+            logger.info(f"  Cross-section covariances: {len(cov_mat_list)} files with {total_matrices} total matrices")
+        if legendre_cov_mat_list:
+            total_matrices = sum(len(lcm.relative_matrices) for lcm in legendre_cov_mat_list)
+            logger.info(f"  Legendre covariances: {len(legendre_cov_mat_list)} files with {total_matrices} total matrices")
     
     # Separate sensitivities by type
     xs_sensitivities = [r for r in sdf_data.data if r.mt < 4000]  # Cross-section sensitivities
@@ -336,81 +546,117 @@ def sandwich_uncertainty_propagation(
     results = []
     
     # Step 2a: Handle cross-section sensitivities
-    if xs_sensitivities and cov_mat is not None:
+    if xs_sensitivities and cov_mat_list:
         if verbose:
             logger.info("Processing cross-section sensitivities...")
         
-        # Match energy grids for cross-sections
-        xs_energy_mapping = _match_energy_grids(
-            sdf_data.pert_energies, 
-            cov_mat.energy_grid,
-            energy_tolerance,
+        # Merge covariance matrices and check for missing isotopes
+        merged_cov_mat, missing_isotopes = _merge_covariance_matrices(
+            xs_sensitivities,
+            cov_mat_list,
             verbose
         )
         
-        if not xs_energy_mapping:
-            raise ValueError("No matching energy groups found between sensitivity and cross-section covariance data")
-        
-        # Find matching cross-section reactions
-        xs_matching_reactions = _find_matching_reactions(
-            xs_sensitivities, 
-            cov_mat, 
-            reaction_filter,
-            verbose,
-            "cross-section"
-        )
-        
-        if xs_matching_reactions:
-            # Build matrices for cross-sections
-            xs_result = {
-                'type': 'cross_section',
-                'energy_mapping': xs_energy_mapping,
-                'matching_reactions': xs_matching_reactions,
-                'sdf_data': xs_sensitivities,
-                'cov_mat': cov_mat
-            }
-            results.append(xs_result)
-            
+        # Warn about missing isotopes
+        if missing_isotopes:
+            missing_str = ", ".join([_format_nuclide(zaid) for zaid in missing_isotopes])
+            warnings.warn(
+                f"No covariance data found for the following isotopes in cross-section sensitivities: {missing_str}. "
+                "These isotopes will be excluded from uncertainty propagation."
+            )
             if verbose:
-                logger.info(f"✓ Cross-section processing complete: {len(xs_matching_reactions)} reactions")
+                logger.warning(f"⚠ Missing covariance data for {len(missing_isotopes)} isotopes: {missing_str}")
+        
+        if merged_cov_mat is not None:
+            # Match energy grids for cross-sections
+            xs_energy_mapping = _match_energy_grids(
+                sdf_data.pert_energies, 
+                merged_cov_mat.energy_grid,
+                energy_tolerance,
+                verbose
+            )
+            
+            if not xs_energy_mapping:
+                raise ValueError("No matching energy groups found between sensitivity and cross-section covariance data")
+            
+            # Find matching cross-section reactions
+            xs_matching_reactions = _find_matching_reactions(
+                xs_sensitivities, 
+                merged_cov_mat, 
+                reaction_filter,
+                verbose,
+                "cross-section"
+            )
+            
+            if xs_matching_reactions:
+                # Build matrices for cross-sections
+                xs_result = {
+                    'type': 'cross_section',
+                    'energy_mapping': xs_energy_mapping,
+                    'matching_reactions': xs_matching_reactions,
+                    'sdf_data': xs_sensitivities,
+                    'cov_mat': merged_cov_mat
+                }
+                results.append(xs_result)
+                
+                if verbose:
+                    logger.info(f"✓ Cross-section processing complete: {len(xs_matching_reactions)} reactions")
     
     # Step 2b: Handle Legendre sensitivities  
-    if leg_sensitivities and legendre_cov_mat is not None:
+    if leg_sensitivities and legendre_cov_mat_list:
         if verbose:
             logger.info("Processing Legendre moment sensitivities...")
         
-        # Match energy grids for Legendre coefficients
-        leg_energy_mapping = _match_energy_grids(
-            sdf_data.pert_energies, 
-            legendre_cov_mat.energy_grid,
-            energy_tolerance,
+        # Merge Legendre covariance matrices and check for missing isotopes
+        merged_leg_cov_mat, missing_leg_isotopes = _merge_legendre_covariance_matrices(
+            leg_sensitivities,
+            legendre_cov_mat_list,
             verbose
         )
         
-        if not leg_energy_mapping:
-            raise ValueError("No matching energy groups found between sensitivity and Legendre covariance data")
-        
-        # Find matching Legendre reactions
-        leg_matching_reactions = _find_matching_legendre_reactions(
-            leg_sensitivities, 
-            legendre_cov_mat, 
-            reaction_filter,
-            verbose
-        )
-        
-        if leg_matching_reactions:
-            # Build matrices for Legendre moments
-            leg_result = {
-                'type': 'legendre',
-                'energy_mapping': leg_energy_mapping,
-                'matching_reactions': leg_matching_reactions,
-                'sdf_data': leg_sensitivities,
-                'cov_mat': legendre_cov_mat
-            }
-            results.append(leg_result)
-            
+        # Warn about missing isotopes
+        if missing_leg_isotopes:
+            missing_str = ", ".join([_format_nuclide(zaid) for zaid in missing_leg_isotopes])
+            warnings.warn(
+                f"No Legendre covariance data found for the following isotopes: {missing_str}. "
+                "These isotopes will be excluded from uncertainty propagation."
+            )
             if verbose:
-                logger.info(f"✓ Legendre processing complete: {len(leg_matching_reactions)} reactions")
+                logger.warning(f"⚠ Missing Legendre covariance data for {len(missing_leg_isotopes)} isotopes: {missing_str}")
+        
+        if merged_leg_cov_mat is not None:
+            # Match energy grids for Legendre coefficients
+            leg_energy_mapping = _match_energy_grids(
+                sdf_data.pert_energies, 
+                merged_leg_cov_mat.energy_grid,
+                energy_tolerance,
+                verbose
+            )
+            
+            if not leg_energy_mapping:
+                raise ValueError("No matching energy groups found between sensitivity and Legendre covariance data")
+            
+            # Find matching Legendre reactions
+            leg_matching_reactions = _find_matching_legendre_reactions(
+                leg_sensitivities, 
+                merged_leg_cov_mat, 
+                reaction_filter,
+                verbose
+            )
+            
+            if leg_matching_reactions:
+                # Build matrices for Legendre moments
+                leg_result = {
+                    'type': 'legendre',
+                    'energy_mapping': leg_energy_mapping,
+                    'matching_reactions': leg_matching_reactions,
+                    'sdf_data': leg_sensitivities,
+                    'cov_mat': merged_leg_cov_mat
+                }
+                results.append(leg_result)
+                
+                if verbose:
+                    logger.info(f"✓ Legendre processing complete: {len(leg_matching_reactions)} reactions")
     
     # Check if we have any valid results
     if not results:

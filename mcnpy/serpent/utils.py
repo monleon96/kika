@@ -63,6 +63,16 @@ def parse_perturbation_label(raw: str, index: int) -> Perturbation:
                 mt=mt,
                 short_label=f"MT={mt}",
             )
+    # inelastic scattering (SERPENT sometimes uses labels like 'inl scatt xs')
+    # map these to MT=4 so downstream code treats them correctly
+    if re.fullmatch(r"(?:inl|inel(?:astic)?)\s+scatt(?:er)?\s+xs", s):
+        return Perturbation(
+            index=index,
+            raw_label=raw,
+            category=PertCategory.MT_XS,
+            mt=4,
+            short_label="MT=4 (inelastic)",
+        )
     # <channel> leg mom N (current format for Legendre moments)
     m = re.fullmatch(r"(\w+)\s+leg\s+mom\s+(\d+)", s)
     if m:

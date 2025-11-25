@@ -575,6 +575,15 @@ class MF34CovMat:
             else:
                 label = f"{isotope_symbol} MT={mt} L={order} (σ abs)"
         
+        # For step plots with histogram data:
+        # - energies has N+1 bin boundaries
+        # - uncertainties has N values (one per bin)
+        # For proper step plotting with where='post', we need to duplicate the last
+        # uncertainty value so that the last bin is drawn extending to the last boundary
+        if len(energies) == len(uncertainties) + 1:
+            # Append the last uncertainty value to match the energy boundaries length
+            uncertainties = np.append(uncertainties, uncertainties[-1])
+        
         # Create and return PlotData object
         return LegendreUncertaintyPlotData(
             x=energies,
@@ -640,6 +649,12 @@ class MF34CovMat:
         """
         Extract standard uncertainties (square root of diagonal variance) for Legendre coefficient(s).
         
+        **IMPORTANT**: MF34 data is typically stored as RELATIVE covariances (fractional uncertainties δA_ℓ/A_ℓ).
+        This method returns the uncertainties as stored in MF34, along with an 'is_relative' flag.
+        
+        To convert relative uncertainties to absolute: σ_abs = σ_rel × |A_ℓ|
+        where A_ℓ are the Legendre coefficients from ENDF MF=4 data.
+        
         Parameters
         ----------
         isotope : int
@@ -648,21 +663,28 @@ class MF34CovMat:
             Reaction MT number
         l_coefficient : int or list of int
             Legendre coefficient index (L value) or list of L values
-        return_relative : bool, optional
-            If True, return relative uncertainties (fractional). If False, return the raw
-            square root of diagonal variance elements (default behavior).
             
         Returns
         -------
         dict or dict of dicts
-            For single int: Dictionary containing 'energies' and 'uncertainties' arrays if found, None otherwise.
+            For single int: Dictionary containing:
+                - 'energies': np.ndarray - Energy bin boundaries (N+1 points for N bins) in eV or MeV
+                - 'uncertainties': np.ndarray - Uncertainties (√diagonal of covariance) for each bin
+                - 'is_relative': bool - True if relative (δA_ℓ/A_ℓ), False if absolute (δA_ℓ)
             For list of ints: Dictionary mapping L coefficient to uncertainty data (or None if not found).
-            The uncertainties are the square root of the diagonal elements of the covariance matrix.
-            Note: MF34 covariance data is typically stored as relative covariances (fractional uncertainties).
+            
+        Notes
+        -----
+        - If is_relative=True, you must convert to absolute uncertainties by multiplying
+          by the Legendre coefficients A_ℓ from ENDF MF=4 before using in propagation formulas.
+        - The LB flag in ENDF-6 format determines if data is relative (LB=1,2,5) or absolute (LB=0).
+        - Energies are returned as BIN BOUNDARIES, not bin centers. Each uncertainty value applies
+          to the energy bin defined by consecutive boundary pairs [E[i], E[i+1]).
         """
         # Handle single coefficient case
         if isinstance(l_coefficient, int):
             # Find the matrix for this specific (isotope, mt, l_coefficient) combination
+            matrix_is_relative = None
             for i, (iso_r, mt_r, l_r, iso_c, mt_c, l_c, energy_grid, matrix) in enumerate(zip(
                 self.isotope_rows, self.reaction_rows, self.l_rows,
                 self.isotope_cols, self.reaction_cols, self.l_cols,
@@ -672,6 +694,9 @@ class MF34CovMat:
                 if (iso_r == isotope and iso_c == isotope and 
                     mt_r == mt and mt_c == mt and 
                     l_r == l_coefficient and l_c == l_coefficient):
+                    
+                    # Store whether this matrix is relative
+                    matrix_is_relative = self.is_relative[i]
                     
                     # Extract diagonal elements (variances) and take square root
                     diagonal_variances = np.diag(matrix)
@@ -683,31 +708,38 @@ class MF34CovMat:
                     
                     uncertainties = np.sqrt(diagonal_variances)
                     
-                    # Handle energy grid vs matrix size difference
-                    # Energy grid defines bin boundaries (N+1 points), matrix defines bin uncertainties (N×N)
+                    # Energy grid contains bin boundaries directly
                     energy_array = np.array(energy_grid)
                     
+                    # Ensure we have the correct number of boundaries for uncertainties
                     if len(energy_array) == len(uncertainties) + 1:
-                        # Standard case: energy grid has bin boundaries, calculate bin centers
-                        energy_array = (energy_array[:-1] + energy_array[1:]) / 2.0
-                    elif len(energy_array) == len(uncertainties):
-                        # Energy points already represent bin centers or midpoints
+                        # Perfect: N+1 boundaries for N uncertainties
                         pass
-                    elif len(energy_array) > len(uncertainties):
-                        # More energy points than uncertainty values - truncate energy grid
-                        if len(energy_array) == len(uncertainties) + 1:
-                            # Convert to bin centers
-                            energy_array = (energy_array[:-1] + energy_array[1:]) / 2.0
-                        else:
-                            # Simple truncation
-                            energy_array = energy_array[:len(uncertainties)]
-                    else:
-                        # More uncertainty values than energy points - truncate uncertainties
-                        uncertainties = uncertainties[:len(energy_array)]
+                    elif len(energy_array) > len(uncertainties) + 1:
+                        # Too many energy points - truncate to N+1 boundaries
+                        import warnings
+                        warnings.warn(
+                            f"MF34 data for isotope={isotope}, MT={mt}, L={l_coefficient}: "
+                            f"Energy grid has {len(energy_array)} points but only {len(uncertainties)} uncertainties. "
+                            f"Expected {len(uncertainties) + 1} energy points. Truncating energy grid.",
+                            UserWarning
+                        )
+                        energy_array = energy_array[:len(uncertainties) + 1]
+                    elif len(energy_array) < len(uncertainties) + 1:
+                        # Too few energy points - truncate uncertainties to match
+                        import warnings
+                        warnings.warn(
+                            f"MF34 data for isotope={isotope}, MT={mt}, L={l_coefficient}: "
+                            f"Energy grid has {len(energy_array)} points but {len(uncertainties)} uncertainties. "
+                            f"Expected {len(uncertainties) + 1} energy points. Truncating uncertainties.",
+                            UserWarning
+                        )
+                        uncertainties = uncertainties[:len(energy_array) - 1]
                     
                     return {
-                        'energies': energy_array,
-                        'uncertainties': uncertainties
+                        'energies': energy_array,  # Bin boundaries (N+1 points for N bins)
+                        'uncertainties': uncertainties,
+                        'is_relative': matrix_is_relative
                     }
             
             return None

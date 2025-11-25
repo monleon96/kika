@@ -14,7 +14,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, loginAsGuest } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -34,6 +34,11 @@ export const Login: React.FC = () => {
     }
 
     setLoading(false);
+  };
+
+  const handleGuestLogin = () => {
+    loginAsGuest();
+    navigate('/');
   };
 
   return (
@@ -92,10 +97,20 @@ export const Login: React.FC = () => {
               >
                 {loading ? 'Signing in...' : 'Sign In'}
               </Button>
+
+              <Button
+                fullWidth
+                variant="outlined"
+                size="large"
+                onClick={handleGuestLogin}
+                sx={{ mt: 2 }}
+              >
+                🚀 Continue as Guest
+              </Button>
             </Box>
 
             <Typography variant="body2" align="center" sx={{ mt: 3 }} color="text.secondary">
-              Contact your administrator for account access
+              Guest mode: Full access without account. Data not saved to cloud.
             </Typography>
           </CardContent>
         </Card>

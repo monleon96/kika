@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { theme } from './theme';
 import { AppRoutes } from './routes';
 import { AuthProvider } from './contexts/AuthContext';
+import { FileWorkspaceProvider } from './contexts/FileWorkspaceContext';
 
 // Create a client for React Query
 const queryClient = new QueryClient({
@@ -22,7 +23,9 @@ function App() {
         <CssBaseline />
         <BrowserRouter>
           <AuthProvider>
-            <AppRoutes />
+            <FileWorkspaceProvider>
+              <AppRoutes />
+            </FileWorkspaceProvider>
           </AuthProvider>
         </BrowserRouter>
       </ThemeProvider>

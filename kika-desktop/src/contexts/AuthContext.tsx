@@ -5,11 +5,13 @@ export interface User {
   email: string;
   verified: boolean;
   is_active: boolean;
+  is_guest?: boolean;
 }
 
 interface AuthContextType {
   user: User | null;
   login: (email: string, password: string) => Promise<{ success: boolean; message: string }>;
+  loginAsGuest: () => void;
   logout: () => void;
   isLoading: boolean;
 }
@@ -72,13 +74,29 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const loginAsGuest = () => {
+    const guestUser: User = {
+      email: 'guest@local',
+      verified: true,
+      is_active: true,
+      is_guest: true,
+    };
+    setUser(guestUser);
+    localStorage.setItem('kika_user', JSON.stringify(guestUser));
+  };
+
   const logout = () => {
     setUser(null);
     localStorage.removeItem('kika_user');
+    // Clean up all session data including saved plot configurations
+    // This is especially important for guest users
+    localStorage.removeItem('kikaAcePlotterConfigs'); // ACE plot configs
+    localStorage.removeItem('kikaEndfViewerConfigs'); // ENDF plot configs
+    localStorage.removeItem('workspaceFiles'); // Legacy file storage
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, login, loginAsGuest, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );
