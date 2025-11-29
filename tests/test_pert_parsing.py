@@ -1,5 +1,5 @@
 import pytest
-from mcnpy.input.parse_input import read_mcnp, _read_PERT
+from kika.input.parse_input import read_mcnp, _read_PERT
 
 
 def test_input_parsing_single_card(tmp_path):

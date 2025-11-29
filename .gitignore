@@ -10,6 +10,18 @@ docs/build/
 
 # Personal docs
 _README.md
+.env
 
 # Directories
 myworkspace/
+kika/ace/files/
+kika/cov/files/
+kika/sampling/perturbed_ace_files/
+kika/sampling/new_perturbed_ace_files/
+kika/sampling/new_perturbed_ace_files2/
+kika/sampling/test_endf_pert/
+kika/sampling/test_ace_pert/
+kika/sampling/testing/
+kika/endf/files/
+kika/ace/work.ipynb
+kika/endf/classes/mf4/debug_example.ipynb

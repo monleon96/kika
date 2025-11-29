@@ -1,7 +1,7 @@
-Sensitivity Analysis with MCNPy
+Sensitivity Analysis with KIKA
 ===============================
 
-This tutorial covers how to use MCNPy for sensitivity analysis using MCNP perturbation calculations.
+This tutorial covers how to use KIKA for sensitivity analysis using MCNP perturbation calculations.
 
 Overview of Sensitivity Analysis
 --------------------------------
@@ -13,7 +13,7 @@ Sensitivity analysis using MCNP involves:
 3. Processing the results to obtain sensitivity coefficients
 4. Analyzing and visualizing the sensitivity profiles
 
-MCNPy provides tools for the last two steps in this process.
+KIKA provides tools for the last two steps in this process.
 
 Computing Sensitivity Coefficients
 ----------------------------------
@@ -22,7 +22,7 @@ Start by computing sensitivity coefficients from MCNP perturbation results:
 
 .. code-block:: python
 
-   from mcnpy.sensitivities import compute_sensitivity
+   from kika.sensitivities import compute_sensitivity
    
    # Compute sensitivity data for a specific nuclide
    sensitivity = compute_sensitivity(
@@ -112,7 +112,7 @@ Create visualizations of your sensitivity profiles:
 Working with Taylor Coefficients
 --------------------------------
 
-MCNPy can analyze nonlinearity in sensitivity coefficients using Taylor coefficients:
+KIKA can analyze nonlinearity in sensitivity coefficients using Taylor coefficients:
 
 .. code-block:: python
 
@@ -165,7 +165,7 @@ For advanced analysis, convert sensitivity data to pandas DataFrames:
 Comparing Multiple Sensitivity Datasets
 ---------------------------------------
 
-MCNPy provides tools for comparing sensitivity profiles from different nuclides:
+KIKA provides tools for comparing sensitivity profiles from different nuclides:
 
 .. code-block:: python
 
@@ -187,7 +187,7 @@ MCNPy provides tools for comparing sensitivity profiles from different nuclides:
    )
    
    # Compare sensitivity profiles
-   from mcnpy.sensitivities import plot_sens_comparison
+   from kika.sensitivities import plot_sens_comparison
    
    plot_sens_comparison(
        sens_list=[sens_fe56, sens_h1],
@@ -203,7 +203,7 @@ Generate Sensitivity Data Files (SDF) compatible with SCALE:
 
 .. code-block:: python
 
-   from mcnpy.sensitivities.sdf import create_sdf_data
+   from kika.sensitivities.sdf import create_sdf_data
    
    # Create SDF data from sensitivity datasets
    sdf_data = create_sdf_data(

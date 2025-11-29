@@ -1,16 +1,16 @@
 Quickstart Guide
 ================
 
-This guide will help you get started with MCNPy by walking through basic usage examples.
+This guide will help you get started with KIKA by walking through basic usage examples.
 
 Installation
 ------------
 
-Install MCNPy using pip (requires Python 3.12 or later):
+Install KIKA using pip (requires Python 3.12 or later):
 
 .. code-block:: bash
 
-   pip install mcnpy
+   pip install kika-nd
 
 
 To upgrade to the latest version:
@@ -21,17 +21,17 @@ To upgrade to the latest version:
 
       pip cache purge
 
-2. Upgrade MCNPy:
+2. Upgrade KIKA:
 
    .. code-block:: bash
 
-      pip install --upgrade mcnpy
+      pip install --upgrade kika-nd
 
 3. Verify the installation:
 
    .. code-block:: bash
 
-      pip show mcnpy
+      pip show kika-nd
 
    This command will display the package information, including the currently installed version.
 
@@ -40,11 +40,11 @@ To upgrade to the latest version:
 Basic Usage
 -----------
 
-Import the MCNPy package:
+Import the KIKA package:
 
 .. code-block:: python
 
-   import mcnpy
+   import kika
 
 Working with MCNP Input Files
 -----------------------------
@@ -53,7 +53,7 @@ Parse an MCNP input file:
 
 .. code-block:: python
 
-   from mcnpy import read_mcnp
+   from kika import read_mcnp
    
    # Parse an input file
    input_data = read_mcnp('path/to/input_file.i')
@@ -83,7 +83,7 @@ Parse and analyze MCNP tally files:
 
 .. code-block:: python
 
-   from mcnpy import read_mctal
+   from kika import read_mctal
    
    # Parse a mctal file
    mctal = read_mctal('path/to/mctal_file')
@@ -105,7 +105,7 @@ Process perturbation data for sensitivity analysis:
 
 .. code-block:: python
 
-   from mcnpy.sensitivities import compute_sensitivity
+   from kika.sensitivities import compute_sensitivity
    
    # Compute sensitivity data
    sensdata = compute_sensitivity(
@@ -129,7 +129,7 @@ Create and process Sensitivity Data Files (SDF) compatible with SCALE:
 
 .. code-block:: python
 
-   from mcnpy.sensitivities.sdf import compute_sensitivity, create_sdf_data
+   from kika.sensitivities.sdf import compute_sensitivity, create_sdf_data
    
    # Read the sensitivity data for each set
    sensdata1 = compute_sensitivity('path/to/input_file1', 'path/to/mctal_file1', 4, [pertuberd_nuclide], 'label-1')
@@ -156,3 +156,45 @@ Next Steps
 ----------
 
 For more detailed examples, see the :doc:`tutorials/index`.
+
+
+Working with ACE Files
+----------------------
+
+Parse ACE format nuclear data files:
+
+.. code-block:: python
+
+   from kika import read_ace
+   
+   # Read an ACE file
+   ace_data = read_ace('path/to/ace_file')
+
+
+Working with Covariance Matrices
+--------------------------------
+
+Read and process covariance matrices from SCALE or NJOY:
+
+.. code-block:: python
+
+   from kika import read_scale_covmat, read_njoy_covmat
+   
+   # Read a SCALE covariance matrix
+   covmat = read_scale_covmat('path/to/scale_covmat')
+   
+   # Read an NJOY covariance matrix
+   covmat = read_njoy_covmat('path/to/njoy_covmat')
+
+
+Working with ENDF Files
+-----------------------
+
+Read Evaluated Nuclear Data Files:
+
+.. code-block:: python
+
+   from kika.endf import read_endf
+   
+   # Read an ENDF file
+   endf_data = read_endf('path/to/endf_file')

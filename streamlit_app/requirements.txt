@@ -1,0 +1,18 @@
+# KIKA Streamlit UI Requirements
+# Install with: pip install -r requirements.txt
+
+# Core dependencies (should already be installed with kika)
+streamlit>=1.40.0
+extra-streamlit-components>=0.1.71
+pillow>=11.0.0
+requests>=2.31.0  # For API client to communicate with kika-backend
+
+# Removed: streamlit-authenticator, passlib, itsdangerous
+# (authentication now handled by kika-backend)
+
+# These should come from the main kika installation
+# but listed here for reference
+matplotlib>=3.10.0
+numpy>=1.26.0
+pandas>=2.2.0
+python-dotenv

@@ -1,9 +1,9 @@
-mcnpy.sensitivities
+kika.sensitivities
 ===================
 
 The sensitivities module provides functionality for sensitivity analysis and working with perturbation data.
 
-.. automodule:: mcnpy.sensitivities
+.. automodule:: kika.sensitivities
    :members:
    :undoc-members:
    :show-inheritance:
@@ -11,26 +11,26 @@ The sensitivities module provides functionality for sensitivity analysis and wor
 Submodules
 ----------
 
-mcnpy.sensitivities.sensitivity
+kika.sensitivities.sensitivity
 -------------------------------
 
-.. automodule:: mcnpy.sensitivities.sensitivity
+.. automodule:: kika.sensitivities.sensitivity
    :members:
    :undoc-members:
    :show-inheritance:
 
-mcnpy.sensitivities.sensitivity_processing
+kika.sensitivities.sensitivity_processing
 ------------------------------------------
 
-.. automodule:: mcnpy.sensitivities.sensitivity_processing
+.. automodule:: kika.sensitivities.sensitivity_processing
    :members:
    :undoc-members:
    :show-inheritance:
 
-mcnpy.sensitivities.sdf
+kika.sensitivities.sdf
 -----------------------
 
-.. automodule:: mcnpy.sensitivities.sdf
+.. automodule:: kika.sensitivities.sdf
    :members:
    :undoc-members:
    :show-inheritance:

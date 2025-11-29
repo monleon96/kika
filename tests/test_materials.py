@@ -2,10 +2,10 @@ import pytest
 import os
 import filecmp
 import tempfile
-from mcnpy.input.parse_input import read_mcnp
-from mcnpy.input.pert_generator import perturb_material
-from mcnpy.input.parse_materials import read_material
-from mcnpy.input.material import Mat
+from kika.input.parse_input import read_mcnp
+from kika.input.pert_generator import perturb_material
+from kika.input.parse_materials import read_material
+from kika.input.material import Mat
 
 
 def test_material_parsing():

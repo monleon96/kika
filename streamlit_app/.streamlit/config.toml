@@ -1,0 +1,48 @@
+# Streamlit Configuration for KIKA
+
+[theme]
+# Primary color for interactive elements
+primaryColor = "#667eea"
+
+# Background color for the main content area
+backgroundColor = "#ffffff"
+
+# Background color used for sidebar and other elements
+secondaryBackgroundColor = "#f8f9fa"
+
+# Color used for text
+textColor = "#262730"
+
+# Font family for all text
+font = "sans serif"
+
+[server]
+# Port to run the server on
+port = 8501
+
+# Enable XSRF protection (CORS will be auto-enabled for security)
+enableXsrfProtection = true
+
+# Max upload size (in MB)
+maxUploadSize = 200
+
+# Enable websocket compression
+enableWebsocketCompression = true
+
+[browser]
+# Automatically open browser on startup
+gatherUsageStats = false
+
+[runner]
+# Fast reruns for development
+fastReruns = true
+
+# Magic commands enabled
+magicEnabled = true
+
+[client]
+# Show error details
+showErrorDetails = true
+
+# Toolbar mode: "auto", "developer", "viewer", "minimal"
+toolbarMode = "auto"

@@ -1,13 +1,18 @@
-MCNPy Documentation
+KIKA Documentation
 ===================
 
-.. image:: https://img.shields.io/badge/version-0.2.5-blue.svg
-   :target: https://github.com/monleon96/MCNPy
+.. image:: https://img.shields.io/badge/version-0.1.0-blue.svg
+   :target: https://github.com/monleon96/kika
    :alt: Version
 
-**A Python package for working with MCNP input and output files**
+**A comprehensive Python toolkit for nuclear data analysis**
 
-MCNPy |version| provides a lightweight alternative to mcnptools, offering essential functionality for working with MCNP files in Python. It helps you parse, analyze, and manipulate MCNP inputs and outputs efficiently.
+KIKA |version| is a powerful library for nuclear data analysis, Monte Carlo simulation support, and uncertainty quantification. It provides functionality for:
+
+- **MCNP Processing**: Parse and manipulate MCNP input and output files
+- **Sensitivity Analysis**: Compute sensitivities and generate SDF files compatible with SCALE
+- **Nuclear Data**: Work with ACE, ENDF, and covariance matrices
+- **Visualization**: Generate publication-quality plots for nuclear data
 
 Quick Links
 -----------

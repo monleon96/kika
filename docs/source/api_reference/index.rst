@@ -1,16 +1,20 @@
 API Reference
 =============
 
-This section provides detailed documentation of the MCNPy API.
+This section provides detailed documentation of the KIKA API.
 
 Package Overview
 ----------------
 
-MCNPy is structured into several subpackages:
+KIKA is structured into several subpackages:
 
-* **mcnpy.input**: For working with MCNP input files
-* **mcnpy.mctal**: For processing MCNP tally output files
-* **mcnpy.sensitivities**: For sensitivity analysis and perturbation calculations
+* **kika.input**: For working with MCNP input files (materials, PERT cards)
+* **kika.mctal**: For processing MCNP tally output files
+* **kika.sensitivities**: For sensitivity analysis and SDF file generation
+* **kika.ace**: For parsing ACE format nuclear data files
+* **kika.cov**: For covariance matrix handling and visualization
+* **kika.endf**: For reading Evaluated Nuclear Data Files (ENDF)
+* **kika.energy_grids**: Predefined energy group structures
 
 Module Reference
 ----------------
@@ -21,3 +25,6 @@ Module Reference
    input
    mctal
    sensitivities
+   ace
+   cov
+   endf
