@@ -81,7 +81,7 @@ See kika-backend/.env.sample for full configuration
 
 2. **Start the Streamlit app:**
    ```bash
-   cd MCNPy/streamlit_app
+   cd KIKA/streamlit_app
    export KIKA_BACKEND_URL=http://localhost:8000
    streamlit run KIKA.py
    ```

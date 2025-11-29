@@ -1,0 +1,28 @@
+kika.ace
+========
+
+The ace module provides functionality for parsing ACE (A Compact ENDF) format nuclear data files.
+
+.. automodule:: kika.ace
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Submodules
+----------
+
+kika.ace.parsers.parse_ace
+---------------------------
+
+.. automodule:: kika.ace.parsers.parse_ace
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+kika.ace.xsdir
+---------------
+
+.. automodule:: kika.ace.xsdir
+   :members:
+   :undoc-members:
+   :show-inheritance:

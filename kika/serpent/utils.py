@@ -1,0 +1,98 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# File: serpent_sens/utils.py
+# Small helpers for parsing and label normalization.
+# ──────────────────────────────────────────────────────────────────────────────
+import re
+from typing import Iterable, List, Tuple
+
+from kika.serpent.sens import Perturbation, PertCategory
+
+
+_NUM_RE = re.compile(r"[+-]?(?:\d+\.\d*|\d*\.\d+|\d+)(?:[Ee][+-]?\d+)?")
+
+
+def extract_numeric_list(block: str) -> List[float]:
+    return [float(x) for x in _NUM_RE.findall(block)]
+
+
+def extract_int_list(block: str) -> List[int]:
+    return [int(float(x)) for x in _NUM_RE.findall(block)]
+
+
+def extract_string_list(block: str) -> List[str]:
+    # Matches lines like 'SS304       '\n 'Another     '
+    items = []
+    for m in re.finditer(r"'([^']*)'", block):
+        items.append(m.group(1).strip())
+    return items
+
+
+def parse_perturbation_label(raw: str, index: int) -> Perturbation:
+    s = raw.strip().lower()
+    # total xs
+    if re.fullmatch(r"total\s+xs", s):
+        return Perturbation(
+            index=index,
+            raw_label=raw,
+            category=PertCategory.MT_XS,
+            mt=1,
+            short_label="MT=1",
+        )
+    # mt N xs
+    m = re.fullmatch(r"mt\s+(\d+)\s+xs", s)
+    if m:
+        mt = int(m.group(1))
+        # Check if this is a Legendre moment encoded as MT 400X
+        if 4001 <= mt <= 4099:
+            moment = mt - 4000  # Convert MT 4001 -> L=1, MT 4002 -> L=2, etc.
+            return Perturbation(
+                index=index,
+                raw_label=raw,
+                category=PertCategory.LEGENDRE_MOMENT,
+                mt=mt,  # Keep original MT number for reference
+                channel="ela",  # Only elastic channel possible for Legendre moments
+                moment=moment,
+                short_label=f"ela L={moment}",
+            )
+        else:
+            # Regular cross-section
+            return Perturbation(
+                index=index,
+                raw_label=raw,
+                category=PertCategory.MT_XS,
+                mt=mt,
+                short_label=f"MT={mt}",
+            )
+    # inelastic scattering (SERPENT sometimes uses labels like 'inl scatt xs')
+    # map these to MT=4 so downstream code treats them correctly
+    if re.fullmatch(r"(?:inl|inel(?:astic)?)\s+scatt(?:er)?\s+xs", s):
+        return Perturbation(
+            index=index,
+            raw_label=raw,
+            category=PertCategory.MT_XS,
+            mt=4,
+            short_label="MT=4 (inelastic)",
+        )
+    # <channel> leg mom N (current format for Legendre moments)
+    m = re.fullmatch(r"(\w+)\s+leg\s+mom\s+(\d+)", s)
+    if m:
+        channel = m.group(1)
+        moment = int(m.group(2))
+        # Map to MT 400X format for consistency
+        mt = 4000 + moment  # L=1 -> MT=4001, L=2 -> MT=4002, etc.
+        return Perturbation(
+            index=index,
+            raw_label=raw,
+            category=PertCategory.LEGENDRE_MOMENT,
+            mt=mt,  # Use MT 400X format
+            channel=channel,
+            moment=moment,
+            short_label=f"{channel} L={moment}",
+        )
+    # Fallback
+    return Perturbation(
+        index=index,
+        raw_label=raw,
+        category=PertCategory.OTHER,
+        short_label=raw.strip(),
+    )

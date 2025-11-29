@@ -34,7 +34,7 @@ fi
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# Set PYTHONPATH to include parent directory (for mcnpy import)
+# Set PYTHONPATH to include parent directory (for kika import)
 export PYTHONPATH="${PYTHONPATH}:${SCRIPT_DIR}/.."
 
 echo "✓ Python path configured"

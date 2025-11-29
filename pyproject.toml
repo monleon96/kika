@@ -1,11 +1,23 @@
 [tool.poetry]
-name = "mcnpy"
-version = "0.2.5"
-description = ""
+name = "kika-nd"
+version = "0.1.0"
+description = "A comprehensive Python toolkit for nuclear data analysis, including MCNP input/output processing, sensitivity analysis, covariance handling, ACE file parsing, and ENDF data manipulation."
 authors = ["Juan Antonio Monleon de la Lluvia <juanmonleon96@gmail.com>"]
-license = "GNU General Public License v3.0"
-homepage = "https://github.com/monleon96/MCNPy.git"
+license = "GPL-3.0-only"
+homepage = "https://github.com/monleon96/kika"
+repository = "https://github.com/monleon96/kika"
+documentation = "https://kika.readthedocs.io"
 readme = "README.md"
+keywords = ["nuclear", "mcnp", "monte-carlo", "sensitivity", "endf", "ace", "covariance", "nuclear-data", "radiation-transport"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+packages = [{include = "kika"}]
 
 [tool.poetry.dependencies]
 python = "^3.12"
@@ -14,20 +26,6 @@ pandas = "^2.2.3"
 xarray = "^2025.3.0"
 scipy = "^1.15.2"
 pyarrow = "^20.0.0"
-shap = "^0.48.0"
-seaborn = "^0.13.2"
-
-[tool.poetry.group.ui]
-optional = true
-[tool.poetry.group.ui.dependencies]
-streamlit = "^1.40.0"
-streamlit-authenticator = "^0.3.3"
-extra-streamlit-components = "^0.1.71"
-pillow = "^11.0.0"
-python-dotenv = "^1.2.1"
-passlib = {version = "1.7.4", extras = ["bcrypt"]}
-bcrypt = ">=4.1.3,<5"
-itsdangerous = "^2.2.0"
 
 [tool.poetry.group.dev]
 optional = true
@@ -48,13 +46,6 @@ sphinx = "^8.2.1"
 myst-parser = "^4.0.1"
 sphinx-autobuild = "^2024.10.3"
 sphinx-rtd-theme = "^3.0.2"
-
-[tool.poetry.group.server]
-optional = true
-[tool.poetry.group.server.dependencies]
-fastapi = "^0.109.0"
-uvicorn = {version = "^0.27.0", extras = ["standard"]}
-python-multipart = "^0.0.6"
 
 [build-system]
 requires = ["poetry-core"]

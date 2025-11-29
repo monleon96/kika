@@ -1,7 +1,7 @@
 Tutorials
 =========
 
-This section contains detailed tutorials to help you learn how to use MCNPy effectively.
+This section contains detailed tutorials to help you learn how to use KIKA effectively.
 
 
 
@@ -14,11 +14,11 @@ This section contains detailed tutorials to help you learn how to use MCNPy effe
    sensitivity_analysis
 
 
-You can run these tutorials by cloning the MCNPy repository and opening the notebooks:
+You can run these tutorials by cloning the KIKA repository and opening the notebooks:
 
 .. code-block:: bash
 
-   git clone https://github.com/monleon96/MCNPy.git
-   cd MCNPy/examples
+   git clone https://github.com/monleon96/KIKA.git
+   cd KIKA/examples
    jupyter notebook
 

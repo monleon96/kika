@@ -1,7 +1,7 @@
 Working with MCTAL Files
 ========================
 
-This tutorial covers how to use MCNPy to work with MCNP MCTAL output files, including parsing, accessing tally data, data analysis, and visualization.
+This tutorial covers how to use KIKA to work with MCNP MCTAL output files, including parsing, accessing tally data, data analysis, and visualization.
 
 Loading MCTAL Files
 -------------------
@@ -10,14 +10,14 @@ Start by loading a MCTAL file:
 
 .. code-block:: python
 
-   import mcnpy
+   import kika
    import pandas as pd
    import numpy as np
    import matplotlib.pyplot as plt
    from pathlib import Path
    
    # Parse a mctal file
-   mctal = mcnpy.read_mctal('path/to/mctalfile.m')
+   mctal = kika.read_mctal('path/to/mctalfile.m')
 
 MCTAL File Structure
 --------------------
@@ -70,7 +70,7 @@ Tallies are the main output of MCNP simulations. The ``Mctal`` class provides ac
 Converting to DataFrame
 -----------------------
 
-For more advanced data analysis, MCNPy allows you to convert tally data to pandas DataFrames:
+For more advanced data analysis, KIKA allows you to convert tally data to pandas DataFrames:
 
 .. code-block:: python
 
@@ -89,7 +89,7 @@ For more advanced data analysis, MCNPy allows you to convert tally data to panda
 Working with Multidimensional Data
 ----------------------------------
 
-MCNPy supports multidimensional data analysis using xarray, which provides labeled N-dimensional arrays:
+KIKA supports multidimensional data analysis using xarray, which provides labeled N-dimensional arrays:
 
 .. code-block:: python
 
@@ -114,7 +114,7 @@ MCNPy supports multidimensional data analysis using xarray, which provides label
 Working with Energy-Integrated Data
 -----------------------------------
 
-For tallies with energy bins, MCNPy provides methods to access energy-integrated data:
+For tallies with energy bins, KIKA provides methods to access energy-integrated data:
 
 .. code-block:: python
 

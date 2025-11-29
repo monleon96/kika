@@ -29,7 +29,7 @@ if command -v poetry &> /dev/null; then
 elif command -v pip &> /dev/null; then
     echo "✓ pip found (Poetry not found, using pip)"
     echo ""
-    echo "Installing MCNPy in editable mode..."
+    echo "Installing KIKA in editable mode..."
     pip install -e .
     
     echo ""

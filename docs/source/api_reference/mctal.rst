@@ -1,9 +1,9 @@
-mcnpy.mctal
+kika.mctal
 ===========
 
 The mctal module provides functionality for processing MCNP tally output files.
 
-.. automodule:: mcnpy.mctal
+.. automodule:: kika.mctal
    :members:
    :undoc-members:
    :show-inheritance:
@@ -11,18 +11,18 @@ The mctal module provides functionality for processing MCNP tally output files.
 Submodules
 ----------
 
-mcnpy.mctal.mctal
+kika.mctal.mctal
 -----------------
 
-.. automodule:: mcnpy.mctal.mctal
+.. automodule:: kika.mctal.mctal
    :members:
    :undoc-members:
    :show-inheritance:
 
-mcnpy.mctal.parse_mctal
+kika.mctal.parse_mctal
 -----------------------
 
-.. automodule:: mcnpy.mctal.parse_mctal
+.. automodule:: kika.mctal.parse_mctal
    :members:
    :undoc-members:
    :show-inheritance:

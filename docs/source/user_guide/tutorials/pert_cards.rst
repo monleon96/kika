@@ -1,7 +1,7 @@
 Setting up Sensitivity Analysis with PERT Cards
 ===============================================
 
-This tutorial demonstrates how to prepare MCNP input files for sensitivity analysis using MCNPy's perturbation card generation capabilities.
+This tutorial demonstrates how to prepare MCNP input files for sensitivity analysis using KIKA's perturbation card generation capabilities.
 
 Overview
 --------
@@ -22,7 +22,7 @@ Start by importing the necessary libraries:
 
 .. code-block:: python
 
-   import mcnpy
+   import kika
    from pathlib import Path
 
    # Setup paths
@@ -47,7 +47,7 @@ The first step is to read the MCNP input file to understand its structure and ex
 .. code-block:: python
 
    # Read the input file
-   input_data = mcnpy.read_mcnp(working_file)
+   input_data = kika.read_mcnp(working_file)
    
    # Check if our target material exists
    material_number = 300000
@@ -65,7 +65,7 @@ For sensitivity analysis, we need to create a perturbed version of the material 
 .. code-block:: python
 
    # Perturb Fe-56 of the material
-   mcnpy.perturb_material(
+   kika.perturb_material(
        inputfile=working_file,
        material_number=300000,
        density=-7.85,
@@ -89,15 +89,15 @@ Now we'll generate the PERT cards needed for sensitivity analysis:
    reactions = [1, 2, 4, 51, 102]  # MT numbers of reactions
    
    # We'll use the scale44 energy grid
-   print(f"Energy grid has {len(mcnpy.energyGrids.scale44)} points, creating {len(mcnpy.energyGrids.scale44)-1} energy bins")
+   print(f"Energy grid has {len(kika.energyGrids.scale44)} points, creating {len(kika.energyGrids.scale44)-1} energy bins")
    
    # Generate PERT cards
-   mcnpy.generate_PERTcards(
+   kika.generate_PERTcards(
        inputfile=working_file,
        cell=cells,
        density=0.01,  # 1% perturbation is typical for sensitivity analysis
        reactions=reactions,
-       energies=mcnpy.energyGrids.scale44,
+       energies=kika.energyGrids.scale44,
        material=material_number * 100 + 1,  # Use the perturbed material ID
        order=2,  # Generate both first and second order perturbations
        errors=False,  # Don't generate error method cards
@@ -109,7 +109,7 @@ Key parameters in the ``generate_PERTcards`` function:
 - ``cell``: List of cells where the perturbation will be applied
 - ``density``: Perturbation magnitude (typically 0.01 or 1%)
 - ``reactions``: MT numbers of nuclear reactions to analyze
-- ``energies``: Energy grid for perturbation (built-in options available through ``mcnpy.energyGrids``)
+- ``energies``: Energy grid for perturbation (built-in options available through ``kika.energyGrids``)
 - ``material``: Material ID of the perturbed material
 - ``order``: Order of perturbation (1 for first-order, 2 for both first and second-order)
 
@@ -121,7 +121,7 @@ After generating the cards, you can inspect them in the MCNP input file:
 .. code-block:: python
 
    # Read back the file to examine the PERT cards
-   modified_input_data = mcnpy.read_mcnp(working_file)
+   modified_input_data = kika.read_mcnp(working_file)
    
    # Display the PERT cards
    print(modified_input_data.perturbation)
@@ -134,12 +134,12 @@ The prepared input file with perturbed material and PERT cards is now ready for 
 Analyzing Sensitivity Results
 -----------------------------
 
-After running MCNP with the prepared input file, you can analyze the results using MCNPy's sensitivity analysis tools:
+After running MCNP with the prepared input file, you can analyze the results using KIKA's sensitivity analysis tools:
 
 .. code-block:: python
 
    # Compute sensitivity coefficients for Fe-56
-   sens_fe56 = mcnpy.compute_sensitivity(
+   sens_fe56 = kika.compute_sensitivity(
        inputfile="inputfile_example_0_working.i",
        mctalfile="inputfile_example_0.m", 
        tally=4,  # Tally number to analyze

@@ -1,7 +1,7 @@
 import pytest
 
-from mcnpy.serpent.utils import parse_perturbation_label
-from mcnpy.serpent.sens import PertCategory
+from kika.serpent.utils import parse_perturbation_label
+from kika.serpent.sens import PertCategory
 
 
 @pytest.mark.parametrize("label", [

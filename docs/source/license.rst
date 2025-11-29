@@ -3,7 +3,7 @@ License
 
 **GNU General Public License v3.0**
 
-MCNPy is licensed under the GNU General Public License v3.0 (GPL-3.0)
+KIKA is licensed under the GNU General Public License v3.0 (GPL-3.0)
 
 The full text of the license can be found in the `LICENSE` file in the root directory of the project, or at `<https://www.gnu.org/licenses/gpl-3.0.html>`_.
 

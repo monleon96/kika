@@ -1,6 +1,6 @@
 # KIKA - Nuclear Data Viewer
 
-A modern web interface for visualizing and analyzing nuclear data, powered by MCNPy.
+A modern web interface for visualizing and analyzing nuclear data, powered by KIKA.
 
 ![KIKA Banner](assets/banner.png)
 
@@ -11,8 +11,8 @@ A modern web interface for visualizing and analyzing nuclear data, powered by MC
 1. **Install dependencies:**
 
 ```bash
-# From the root of MCNPy repository
-cd /home/MONLEON-JUAN/MCNPy
+# From the root of KIKA repository
+cd /home/MONLEON-JUAN/KIKA
 
 # Install with UI dependencies
 poetry install --with ui
@@ -139,11 +139,11 @@ Configure default plot settings in the Settings page or modify `utils/plot_confi
 
 ### Import errors
 
-If you see `ModuleNotFoundError: No module named 'mcnpy'`:
+If you see `ModuleNotFoundError: No module named 'kika'`:
 
 ```bash
 # Make sure you're running from the correct directory
-cd /home/MONLEON-JUAN/MCNPy
+cd /home/MONLEON-JUAN/KIKA
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 streamlit run streamlit_app/app.py
 ```
@@ -192,7 +192,7 @@ mypy streamlit_app/
 ## 📊 Technical Stack
 
 - **Frontend:** Streamlit 1.40+
-- **Backend:** MCNPy (Python 3.12+)
+- **Backend:** KIKA (Python 3.12+)
 - **Plotting:** Matplotlib + PlotBuilder API
 - **Data:** NumPy, Pandas
 - **Future:** React + FastAPI (Phase 2)
@@ -203,19 +203,19 @@ This is currently in MVP phase. Contributions welcome after initial release!
 
 ## 📝 License
 
-Same as MCNPy - GNU General Public License v3.0
+Same as KIKA - GNU General Public License v3.0
 
 ## 🔗 Links
 
-- [MCNPy GitHub](https://github.com/monleon96/MCNPy)
-- [MCNPy Documentation](https://mcnpy.readthedocs.io)
+- [KIKA GitHub](https://github.com/monleon96/KIKA)
+- [KIKA Documentation](https://kika.readthedocs.io)
 - [Streamlit Documentation](https://docs.streamlit.io)
 
 ## 📧 Contact
 
 For questions or feedback:
 - Email: juanmonleon96@gmail.com
-- GitHub Issues: https://github.com/monleon96/MCNPy/issues
+- GitHub Issues: https://github.com/monleon96/KIKA/issues
 
 ---
 

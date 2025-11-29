@@ -27,8 +27,8 @@ def render_clear_cache_button(key_prefix: str = "clear_cache"):
             st.cache_resource.clear()
         except Exception:
             pass
-        # Force reimport of modules by clearing Python's module cache for mcnpy
-        modules_to_reload = [k for k in list(sys.modules.keys()) if k.startswith('mcnpy')]
+        # Force reimport of modules by clearing Python's module cache for kika
+        modules_to_reload = [k for k in list(sys.modules.keys()) if k.startswith('kika')]
         for module in modules_to_reload:
             try:
                 del sys.modules[module]

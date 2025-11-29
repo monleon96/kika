@@ -16,8 +16,8 @@ import hashlib
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from mcnpy.endf.read_endf import read_endf
-from mcnpy.plotting import PlotBuilder
+from kika.endf.read_endf import read_endf
+from kika.plotting import PlotBuilder
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -1183,15 +1183,15 @@ with tab_viewer:
 # Footer
 st.markdown("---")
 try:
-    import mcnpy
-    mcnpy_version = getattr(mcnpy, "__version__", "unknown")
+    import kika
+    kika_version = getattr(kika, "__version__", "unknown")
 except Exception:
-    mcnpy_version = 'unknown'
+    kika_version = 'unknown'
 
 # Footer (always render)
 st.markdown(f"""
 <div style='text-align: center; color: #666; padding: 1rem;'>
-<p>ENDF Viewer • Powered by MCNPy v{mcnpy_version} & PlotBuilder</p>
+<p>ENDF Viewer • Powered by KIKA v{kika_version} & PlotBuilder</p>
 <p style='font-size: 0.8em;'>💡 Tip: If data doesn't load correctly, click the 🔄 button in the sidebar to clear cache</p>
 </div>
 """, unsafe_allow_html=True)

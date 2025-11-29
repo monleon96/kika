@@ -1,7 +1,7 @@
 Working with MCNP Input Files
 =============================
 
-This tutorial covers how to use MCNPy to work with MCNP input files, including parsing, manipulation, and generation.
+This tutorial covers how to use KIKA to work with MCNP input files, including parsing, manipulation, and generation.
 
 Parsing Input Files
 -------------------
@@ -10,7 +10,7 @@ The first step in working with MCNP input files is to parse them into Python obj
 
 .. code-block:: python
 
-   from mcnpy import read_mcnp
+   from kika import read_mcnp
    
    # Parse an MCNP input file
    input_file = read_mcnp('path/to/input.i')
@@ -51,7 +51,7 @@ Once parsed, you can access various components of the input file:
 Working with Materials
 ----------------------
 
-MCNPy provides detailed access to material definitions:
+KIKA provides detailed access to material definitions:
 
 .. code-block:: python
 
@@ -82,7 +82,7 @@ Converting Between Atomic and Weight Fractions
 ----------------------------------------------
 
 MCNP uses positive values for atomic fractions and negative values for weight fractions.
-MCNPy allows converting between these formats:
+KIKA allows converting between these formats:
 
 .. code-block:: python
 
@@ -104,13 +104,13 @@ MCNPy allows converting between these formats:
 Converting Natural Elements to Isotopes
 ---------------------------------------
 
-MCNPy provides functionality to convert materials containing natural elements (ZAIDs ending in '00') 
+KIKA provides functionality to convert materials containing natural elements (ZAIDs ending in '00') 
 into their constituent isotopes based on natural abundances:
 
 .. code-block:: python
 
    # Create a material with natural elements
-   natural_mat = mcnpy.input.material.Mat(id=200, nlib="80c")
+   natural_mat = kika.input.material.Mat(id=200, nlib="80c")
    
    # Add natural carbon (ZAID 6000)
    natural_mat.add_nuclide(zaid=6000, fraction=0.5)
@@ -128,7 +128,7 @@ into their constituent isotopes based on natural abundances:
    print(natural_mat)
    
    # You can also convert only specific natural elements:
-   another_mat = mcnpy.input.material.Mat(id=300, nlib="80c")
+   another_mat = kika.input.material.Mat(id=300, nlib="80c")
    another_mat.add_nuclide(zaid=6000, fraction=0.3)  # Natural carbon
    another_mat.add_nuclide(zaid=8000, fraction=0.7)  # Natural oxygen
    
@@ -141,11 +141,11 @@ into their constituent isotopes based on natural abundances:
 Creating New Materials
 ----------------------
 
-You can create new materials from scratch using the MCNPy API:
+You can create new materials from scratch using the KIKA API:
 
 .. code-block:: python
 
-   from mcnpy.input.material import Mat, Materials
+   from kika.input.material import Mat, Materials
    
    # Create a new material - water (H2O)
    water = Mat(id=100, nlib="80c")
@@ -177,7 +177,7 @@ You can also modify input files programmatically:
    input_file.surfaces[10].params[0] = 1.5
    
    # Add a nuclide to a material
-   from mcnpy.input.material import Nuclide
+   from kika.input.material import Nuclide
    materials.mat[100].add_nuclide(zaid=1001, fraction=2.0)
    
    # TODO: Write the modified input to a new file
@@ -186,7 +186,7 @@ You can also modify input files programmatically:
 Working with Perturbations
 --------------------------
 
-MCNPy provides tools for analyzing MCNP perturbation cards:
+KIKA provides tools for analyzing MCNP perturbation cards:
 
 .. code-block:: python
 
@@ -212,11 +212,11 @@ MCNPy provides tools for analyzing MCNP perturbation cards:
 Generating Perturbation Cards
 -----------------------------
 
-MCNPy can help generate perturbation cards for sensitivity studies:
+KIKA can help generate perturbation cards for sensitivity studies:
 
 .. code-block:: python
 
-   from mcnpy.input.pert_generator import generate_material_perturbations
+   from kika.input.pert_generator import generate_material_perturbations
    
    perturbations = generate_material_perturbations(
        material_id=300,

@@ -15,8 +15,8 @@ import hashlib
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import mcnpy
-from mcnpy.plotting import PlotBuilder
+import kika
+from kika.plotting import PlotBuilder
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -1176,13 +1176,13 @@ with tab_viewer:
 # Footer
 st.markdown("---")
 try:
-    mcnpy_version = mcnpy.__version__ if hasattr(mcnpy, '__version__') else 'unknown'
+    kika_version = kika.__version__ if hasattr(kika, '__version__') else 'unknown'
 except:
-    mcnpy_version = 'unknown'
+    kika_version = 'unknown'
 
 st.markdown(f"""
 <div style='text-align: center; color: #666; padding: 1rem;'>
-    <p>ACE Viewer • Powered by MCNPy v{mcnpy_version} & PlotBuilder</p>
+    <p>ACE Viewer • Powered by KIKA v{kika_version} & PlotBuilder</p>
     <p style='font-size: 0.8em;'>💡 Tip: If data doesn't load correctly, click the 🔄 button in the sidebar to clear cache</p>
 </div>
 """, unsafe_allow_html=True)

@@ -14,14 +14,14 @@ _README.md
 
 # Directories
 myworkspace/
-mcnpy/ace/files/
-mcnpy/cov/files/
-mcnpy/sampling/perturbed_ace_files/
-mcnpy/sampling/new_perturbed_ace_files/
-mcnpy/sampling/new_perturbed_ace_files2/
-mcnpy/sampling/test_endf_pert/
-mcnpy/sampling/test_ace_pert/
-mcnpy/sampling/testing/
-mcnpy/endf/files/
-mcnpy/ace/work.ipynb
-mcnpy/endf/classes/mf4/debug_example.ipynb
+kika/ace/files/
+kika/cov/files/
+kika/sampling/perturbed_ace_files/
+kika/sampling/new_perturbed_ace_files/
+kika/sampling/new_perturbed_ace_files2/
+kika/sampling/test_endf_pert/
+kika/sampling/test_ace_pert/
+kika/sampling/testing/
+kika/endf/files/
+kika/ace/work.ipynb
+kika/endf/classes/mf4/debug_example.ipynb

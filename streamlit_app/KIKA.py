@@ -2,7 +2,7 @@
 KIKA - Nuclear Data Viewer
 Main application entry point
 
-Powered by MCNPy
+Powered by KIKA
 """
 
 import streamlit as st
@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Add parent directory to path to import mcnpy
+# Add parent directory to path to import kika
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.backend_auth import handle_verification_query, require_user, render_account_sidebar
@@ -25,14 +25,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
-        'Get Help': 'https://github.com/monleon96/MCNPy',
-        'Report a bug': "https://github.com/monleon96/MCNPy/issues",
+        'Get Help': 'https://github.com/monleon96/KIKA',
+        'Report a bug': "https://github.com/monleon96/KIKA/issues",
         'About': """
         # KIKA - Nuclear Data Viewer
         
         A modern interface for visualizing and analyzing nuclear data.
         
-        **Powered by MCNPy**
+        **Powered by KIKA**
         
         Version: 0.1.0 (MVP)
         """
@@ -155,10 +155,10 @@ with col5:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 2rem 0;'>
-    <p>Powered by <strong>MCNPy</strong> | Built with Streamlit</p>
+    <p>Powered by <strong>KIKA</strong> | Built with Streamlit</p>
     <p style='font-size: 0.9rem;'>
-        <a href='https://github.com/monleon96/MCNPy' target='_blank'>GitHub</a> • 
-        <a href='https://mcnpy.readthedocs.io' target='_blank'>Documentation</a>
+        <a href='https://github.com/monleon96/KIKA' target='_blank'>GitHub</a> • 
+        <a href='https://kika.readthedocs.io' target='_blank'>Documentation</a>
     </p>
 </div>
 """, unsafe_allow_html=True)

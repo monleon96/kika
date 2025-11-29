@@ -4,13 +4,13 @@ import sys
 sys.path.insert(0, os.path.abspath('../..'))
 
 # Attempt safe import
-#from mcnpy._config import LIBRARY_VERSION, AUTHOR
+#from kika._config import LIBRARY_VERSION, AUTHOR
 
 # -- Project information -----------------------------------------------------
-project = 'MCNPy'
+project = 'KIKA'
 copyright = f"{datetime.datetime.now().year}, Juan Antonio Monleon de la Lluvia <juanmonleon96@gmail.com>"
 author = "Juan Antonio Monleon de la Lluvia <juanmonleon96@gmail.com>"
-release = "0.2.5"
+release = "0.1.0"
 
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -63,8 +63,8 @@ html_theme_options = {
 
 html_static_path = ['_static']
 
-html_title = "MCNPy Documentation"
-html_short_title = "MCNPy"
+html_title = "KIKA Documentation"
+html_short_title = "KIKA"
 
 html_sidebars = {
     '**': [
@@ -75,5 +75,5 @@ html_sidebars = {
 }
 
 rst_prolog = f"""
-.. |version| replace:: 0.2.5
+.. |version| replace:: 0.1.0
 """

@@ -70,8 +70,8 @@ def detect_file_type(file_path: str) -> Tuple[Optional[str], Optional[object]]:
     Tuple[Optional[str], Optional[object]]
         ('endf', endf_object) or ('ace', ace_object) or (None, None)
     """
-    from mcnpy.endf.read_endf import read_endf
-    from mcnpy.ace.parsers import read_ace
+    from kika.endf.read_endf import read_endf
+    from kika.ace.parsers import read_ace
     
     # Try ENDF first
     try:
@@ -146,10 +146,10 @@ def add_uploaded_file(uploaded_file, file_type: Optional[str] = None) -> Tuple[b
         else:
             # Parse with specified type
             if file_type == 'endf':
-                from mcnpy.endf.read_endf import read_endf
+                from kika.endf.read_endf import read_endf
                 file_obj = read_endf(temp_path)
             elif file_type == 'ace':
-                from mcnpy.ace.parsers import read_ace
+                from kika.ace.parsers import read_ace
                 file_obj = read_ace(temp_path)
             else:
                 os.unlink(temp_path)

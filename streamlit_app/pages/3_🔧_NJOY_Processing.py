@@ -15,10 +15,10 @@ from datetime import datetime
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import mcnpy
-from mcnpy.njoy.run_njoy import run_njoy
-from mcnpy.endf.read_endf import read_endf
-from mcnpy._constants import NDLIBRARY_TO_SUFFIX
+import kika
+from kika.njoy.run_njoy import run_njoy
+from kika.endf.read_endf import read_endf
+from kika._constants import NDLIBRARY_TO_SUFFIX
 from utils.backend_auth import handle_verification_query, require_user, render_account_sidebar
 
 # Page config
@@ -651,13 +651,13 @@ with tab_results:
 # Footer
 st.markdown("---")
 try:
-    mcnpy_version = mcnpy.__version__ if hasattr(mcnpy, '__version__') else 'unknown'
+    kika_version = kika.__version__ if hasattr(kika, '__version__') else 'unknown'
 except:
-    mcnpy_version = 'unknown'
+    kika_version = 'unknown'
 
 st.markdown(f"""
 <div style='text-align: center; color: #666; padding: 1rem;'>
-    <p>NJOY Processing • Powered by MCNPy v{mcnpy_version} & NJOY</p>
+    <p>NJOY Processing • Powered by KIKA v{kika_version} & NJOY</p>
     <p style='font-size: 0.8em;'>💡 Tip: Configure NJOY settings in the Settings page before processing</p>
 </div>
 """, unsafe_allow_html=True)

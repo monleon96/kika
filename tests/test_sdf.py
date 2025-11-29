@@ -1,5 +1,5 @@
 import pytest
-import mcnpy
+import kika
 import os
 
 
@@ -20,10 +20,10 @@ def test_sdf():
         pertfile4 = 'tests/data/sdf/pertfile_8016_PERT.i'
         mctalfile4 = 'tests/data/sdf/pertfile_8016.m'
 
-        sensData1 = mcnpy.compute_sensitivity(pertfile1, mctalfile1, 4, 26056, 'Fe56')
-        sensData2 = mcnpy.compute_sensitivity(pertfile2, mctalfile2, 4, 26054, 'Fe54')
-        sensData3 = mcnpy.compute_sensitivity(pertfile3, mctalfile3, 4, 1001, 'H1')
-        sensData4 = mcnpy.compute_sensitivity(pertfile4, mctalfile4, 4, 8016, 'O16')
+        sensData1 = kika.compute_sensitivity(pertfile1, mctalfile1, 4, 26056, 'Fe56')
+        sensData2 = kika.compute_sensitivity(pertfile2, mctalfile2, 4, 26054, 'Fe54')
+        sensData3 = kika.compute_sensitivity(pertfile3, mctalfile3, 4, 1001, 'H1')
+        sensData4 = kika.compute_sensitivity(pertfile4, mctalfile4, 4, 8016, 'O16')
 
         list_of_sens = [
             sensData1,
@@ -32,7 +32,7 @@ def test_sdf():
             sensData4
         ]
 
-        sdf_data = mcnpy.create_sdf_data(list_of_sens, energy='1.00e+00_3.00e+00', title='test')
+        sdf_data = kika.create_sdf_data(list_of_sens, energy='1.00e+00_3.00e+00', title='test')
 
         assert sdf_data.title == 'test'
         assert sdf_data.energy == '1.00e+00_3.00e+00'
