@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from .material import Materials
+from .material import MaterialCollection
 from .perturbations import Perturbation
 from mcnpy.energy_grids.utils import _identify_energy_grid
 
@@ -11,10 +11,10 @@ class Input:
     :ivar perturbation: Container for all perturbation cards in the input
     :type perturbation: Perturbation
     :ivar materials: Container for all material cards in the input
-    :type materials: Materials
+    :type materials: MaterialCollection
     """
     perturbation: 'Perturbation' = None
-    materials: 'Materials' = None
+    materials: 'MaterialCollection' = None
 
     def __repr__(self):
         """Returns a formatted string representation of the MCNP input data.
@@ -71,7 +71,7 @@ class Input:
                 weight_count = 0
                 atomic_count = 0
                 for mat in self.materials.mat.values():
-                    if any(nuc.fraction < 0 for nuc in mat.nuclide.values()):
+                    if getattr(mat, "is_weight", False):
                         weight_count += 1
                     else:
                         atomic_count += 1
@@ -160,5 +160,4 @@ class Input:
         content = "\n".join(sections)
         
         return header + content
-
 
