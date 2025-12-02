@@ -1,8 +1,81 @@
-from kika._constants import ATOMIC_NUMBER_TO_SYMBOL, BOLTZMANN_CONSTANT, K_TO_SUFFIX
+from kika._constants import ATOMIC_NUMBER_TO_SYMBOL, BOLTZMANN_CONSTANT, K_TO_SUFFIX, SYMBOL_TO_ATOMIC_NUMBER
+
+def symbol_to_zaid(symbol: str) -> int:
+    """
+    Convert an element-mass symbol to ZAID (e.g., Fe56 -> 26056, Fe -> 26000 for natural)
+    
+    Parameters
+    ----------
+    symbol : str
+        Element symbol with optional mass number (e.g., "Fe56", "Fe", "U235", "H")
+    
+    Returns
+    -------
+    int
+        ZAID identifier (ZZAAA format)
+        
+    Raises
+    ------
+    ValueError
+        If the element symbol is not recognized or format is invalid
+        
+    Examples
+    --------
+    >>> symbol_to_zaid("Fe56")
+    26056
+    >>> symbol_to_zaid("Fe")
+    26000
+    >>> symbol_to_zaid("U235")
+    92235
+    """
+    # Extract element symbol and mass number from the input
+    # Symbol can be 1-2 characters, followed by optional mass number
+    if not symbol or len(symbol) < 1:
+        raise ValueError(f"Invalid symbol: '{symbol}'. Must be at least 1 character.")
+    
+    # Try to extract element symbol (1-2 characters, case-insensitive)
+    element_symbol = None
+    mass_number = None
+    
+    for elem_len in (2, 1):  # Try 2-char first, then 1-char
+        potential_symbol = symbol[:elem_len]
+        # Check if it matches a known element (case-insensitive)
+        for known_symbol, atomic_num in SYMBOL_TO_ATOMIC_NUMBER.items():
+            if potential_symbol.lower() == known_symbol.lower():
+                element_symbol = known_symbol
+                potential_mass = symbol[elem_len:]
+                if potential_mass:
+                    try:
+                        mass_number = int(potential_mass)
+                    except ValueError:
+                        raise ValueError(f"Invalid mass number in symbol '{symbol}': '{potential_mass}' is not an integer.")
+                else:
+                    mass_number = 0  # Natural element
+                break
+        
+        if element_symbol:
+            break
+    
+    if element_symbol is None:
+        raise ValueError(f"Unknown element symbol: '{symbol}'")
+    
+    atomic_number = SYMBOL_TO_ATOMIC_NUMBER[element_symbol]
+    
+    # Construct ZAID: ZZAAA format
+    if mass_number is None:
+        mass_number = 0  # Natural element
+    
+    if mass_number < 0 or mass_number > 999:
+        raise ValueError(f"Mass number must be between 0 and 999, got {mass_number}")
+    
+    zaid = atomic_number * 1000 + mass_number
+    return zaid
+
 
 def zaid_to_symbol(zaid: int) -> str:
     """
     Convert a ZAID to element-mass symbol (e.g., 26056 -> Fe56)
+    For natural elements (mass number 0), returns just the element symbol (e.g., 26000 -> Fe)
     
     Parameters
     ----------
@@ -12,13 +85,18 @@ def zaid_to_symbol(zaid: int) -> str:
     Returns
     -------
     str
-        Element symbol with mass number (e.g., "Fe56")
+        Element symbol with mass number (e.g., "Fe56") or just element (e.g., "Fe" for natural)
     """
     z = zaid // 1000
-    a = str(zaid % 1000)
+    a = zaid % 1000
         
     if z in ATOMIC_NUMBER_TO_SYMBOL:
-        return f"{ATOMIC_NUMBER_TO_SYMBOL[z]}{a}"
+        symbol = ATOMIC_NUMBER_TO_SYMBOL[z]
+        # For natural elements (mass number 0), return just the element symbol
+        if a == 0:
+            return symbol
+        else:
+            return f"{symbol}{a}"
     return f"{zaid}"  # Fallback if conversion fails
 
 def kelvin_to_MeV(temp: float) -> float:

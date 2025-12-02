@@ -122,7 +122,7 @@ into their constituent isotopes based on natural abundances:
    print(natural_mat)
    
    # Convert all natural elements to isotopes
-   natural_mat.convert_natural_elements()
+   natural_mat.expand_natural_elements()
    
    print("Material after converting natural elements to isotopes:")
    print(natural_mat)
@@ -133,7 +133,7 @@ into their constituent isotopes based on natural abundances:
    another_mat.add_nuclide(zaid=8000, fraction=0.7)  # Natural oxygen
    
    # Convert only carbon to isotopes
-   another_mat.convert_natural_elements(zaid_to_expand=6000)
+   another_mat.expand_natural_elements(zaid_to_expand=6000)
    
    print("Material after converting only carbon to isotopes:")
    print(another_mat)

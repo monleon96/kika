@@ -13,6 +13,9 @@ ATOMIC_NUMBER_TO_SYMBOL = {
     111: "Rg", 112: "Cn", 113: "Nh", 114: "Fl", 115: "Mc", 116: "Lv", 117: "Ts", 118: "Og"
 }
 
+# Reverse mapping: element symbol to atomic number
+SYMBOL_TO_ATOMIC_NUMBER = {v: k for k, v in ATOMIC_NUMBER_TO_SYMBOL.items()}
+
 N_AVOGADRO = 6.02214e23
 BOLTZMANN_CONSTANT = 8.617333262145e-11  # MeV/K
 

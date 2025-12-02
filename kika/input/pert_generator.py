@@ -55,8 +55,8 @@ def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=N
     new_material_id = pert_mat_id if pert_mat_id is not None else material_number * 100 + 1
     perturbed_material = original_material.copy(new_material_id)
     
-    # Determine if original material uses weight fractions (negative fractions indicate weight fractions)
-    has_weight_fractions = any(nuclide_obj.fraction < 0 for nuclide_obj in perturbed_material.nuclide.values())
+    # Determine if original material uses weight fractions
+    has_weight_fractions = getattr(perturbed_material, "is_weight", False)
     
     # Ensure the material is in atomic fractions format for perturbation
     if has_weight_fractions:
@@ -149,16 +149,16 @@ def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=N
     # Determine output format based on parameter or original material format
     if format is None:
         # Use the same format as the original material
-        if has_weight_fractions and not any(nuclide_obj.fraction < 0 for nuclide_obj in perturbed_material.nuclide.values()):
-            # Original was in weight fractions but perturbed is now in atomic, so convert back
+        if has_weight_fractions and getattr(perturbed_material, "is_atomic", False):
             perturbed_material.to_weight_fraction()
     elif format.lower() == 'weight':
         # Convert to weight fractions if not already
-        if not any(nuclide_obj.fraction < 0 for nuclide_obj in perturbed_material.nuclide.values()):
+        if getattr(perturbed_material, "is_atomic", False):
             perturbed_material.to_weight_fraction()
     elif format.lower() == 'atomic':
         # Already in atomic fractions
-        pass
+        if getattr(perturbed_material, "is_weight", False):
+            perturbed_material.to_atomic_fraction()
     else:
         print(f"WARNING: Unrecognized format '{format}'. Using atomic fractions.")
     
