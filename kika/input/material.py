@@ -1,248 +1,565 @@
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Set, List, Union
+from __future__ import annotations
+
 from copy import deepcopy
-from .._constants import ATOMIC_NUMBER_TO_SYMBOL, ATOMIC_MASS, NATURAL_ABUNDANCE
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Optional, Union
 
-@dataclass
-class Materials:
-    """Container class for MCNP material cards.
+from .._constants import ATOMIC_MASS, ATOMIC_NUMBER_TO_SYMBOL, NATURAL_ABUNDANCE
+from .._utils import zaid_to_symbol, symbol_to_zaid
 
-    :ivar mat: Dictionary mapping material IDs to Mat objects
-    :type mat: Dict[int, Mat]
-    """
-    mat: Dict[int, 'Mat'] = field(default_factory=dict)
-    
-    def to_weight_fractions(self) -> 'Materials':
-        """Convert atomic fractions to weight fractions for all materials.
-        
-        Calls to_weight_fraction() on each material in the collection.
-        
-        :returns: Self reference for method chaining
-        :rtype: Materials
-        """
-        for material in self.mat.values():
-            material.to_weight_fraction()
-        return self
-    
-    def to_atomic_fractions(self) -> 'Materials':
-        """Convert weight fractions to atomic fractions for all materials.
-        
-        Calls to_atomic_fraction() on each material in the collection.
-        
-        :returns: Self reference for method chaining
-        :rtype: Materials
-        """
-        for material in self.mat.values():
-            material.to_atomic_fraction()
-        return self
-    
-    def __str__(self) -> str:
-        """Return a detailed string representation of all materials.
-        
-        :returns: String representation of all materials
-        :rtype: str
-        """
-        if not self.mat:
-            return "Materials()"
-    
-        # Simple header
-        title = f"   MCNP Materials Collection ({len(self.mat)} materials)\n"
-        header = "=" * (len(title)+6) + "\n"
-        
-        # Concatenate material representations without empty lines
-        materials_repr = "\n".join([repr(mat) for mat in self.mat.values()])
-        
-        return header + title + header + '\n' + materials_repr
-    
-    def __repr__(self) -> str:
-        """Returns a formatted summary of the materials collection.
-        
-        This method is called when the object is evaluated in interactive environments
-        like Jupyter notebooks or the Python interpreter.
-        
-        :returns: Concise representation of the materials collection
-        :rtype: str
-        """
-        # Create a visually appealing header with a border
-        header_width = 60
-        header = "=" * header_width + "\n"
-        header += f"{'MCNP Materials Collection':^{header_width}}\n"
-        header += "=" * header_width + "\n\n"
-        
-        # Materials count
-        materials_count = len(self.mat)
-        info = f"Total Materials: {materials_count}\n\n"
-        
-        # Show table of materials and nuclide counts if we have materials
-        table = ""
-        if materials_count > 0:
-            table_width = 60
-            table += "-" * table_width + "\n"
-            table += f"{'ID':^10}|{'Nuclides':^15}|{'Type':^15}|{'Libraries':^18}\n"
-            table += "-" * table_width + "\n"
-            
-            # Sort material IDs for consistent display
-            for mat_id in sorted(self.mat.keys()):
-                material = self.mat[mat_id]
-                nuclide_count = len(material.nuclide)
-                
-                # Determine if using weight or atomic fractions
-                frac_type = "Weight" if any(nuc.fraction < 0 for nuc in material.nuclide.values()) else "Atomic"
-                
-                # Gather all libraries (material-level and nuclide-level)
-                libs_set: Set[str] = set()
-                # Material level libraries
-                if material.nlib:
-                    libs_set.add(material.nlib)
-                if material.plib:
-                    libs_set.add(material.plib)
-                if material.ylib:
-                    libs_set.add(material.ylib)
-                
-                # Nuclide level libraries
-                for nuclide in material.nuclide.values():
-                    if nuclide.nlib:
-                        libs_set.add(nuclide.nlib)
-                    if nuclide.plib:
-                        libs_set.add(nuclide.plib)
-                    if nuclide.ylib:
-                        libs_set.add(nuclide.ylib)
-                
-                lib_str = ", ".join(sorted(libs_set)) if libs_set else "default"
-                
-                table += f"{mat_id:^10}|{nuclide_count:^15}|{frac_type:^15}|{lib_str:^18}\n"
-            
-            table += "-" * table_width + "\n\n"
-        
-        # Available methods section
-        methods = "Available methods:\n"
-        methods += "- .to_weight_fractions() - Convert all materials to weight fractions\n"
-        methods += "- .to_atomic_fractions() - Convert all materials to atomic fractions\n"
-        
-        # Examples of accessing data section
-        examples = "\nExamples of accessing data:\n"
-        examples += "- .mat[material_id] - Access a specific material\n"
-        
-        return header + info + table + methods + examples
-    
-    def add_material(self, material: 'Mat') -> None:
-        """Add a material to the collection.
-        
-        :param material: Material object to add
-        :type material: Mat
-        :raises ValueError: If material ID already exists in collection
-        """
-        if material.id in self.mat:
-            raise ValueError(f"Material ID {material.id} already exists in collection")
-        self.mat[material.id] = material
+# Density unit normalisation helpers.
+_DENSITY_UNIT_ALIASES: Dict[str, str] = {
+    "g/cc": "g/cc",
+    "g/cm3": "g/cc",
+    "g/cm^3": "g/cc",
+    "g/cm³": "g/cc",
+    "kg/m3": "kg/m3",
+    "kg/m^3": "kg/m3",
+    "kg/m³": "kg/m3",
+}
+
+_DENSITY_CONVERSIONS: Dict[tuple[str, str], float] = {
+    ("g/cc", "g/cc"): 1.0,
+    ("g/cc", "kg/m3"): 1000.0,
+    ("kg/m3", "kg/m3"): 1.0,
+    ("kg/m3", "g/cc"): 0.001,
+}
+
+
+def _normalize_density_unit(unit: Optional[str]) -> Optional[str]:
+    if unit is None:
+        return None
+    key = unit.strip().lower().replace(" ", "")
+    return _DENSITY_UNIT_ALIASES.get(key, key)
+
+
+def _validate_fraction_type(fraction_type: str) -> None:
+    """Validate that fraction_type is exactly 'ao' or 'wo'."""
+    if fraction_type not in ('ao', 'wo'):
+        raise ValueError(f"Fraction type must be exactly 'ao' or 'wo', got '{fraction_type}'")
+
+
+def _is_natural_zaid(zaid: int) -> bool:
+    """Return True for natural elements (mass number exactly 0 → ZAID ends with '000')."""
+    return zaid > 1000 and zaid % 1000 == 0
 
 
 @dataclass
-class Mat:
-    """Represents a single MCNP material card.
+class Nuclide:
+    """Lightweight nuclide entry for a material.
 
-    :ivar id: Material identifier number
-    :type id: int
-    :ivar nlib: Optional default neutron cross-section library for this material
-    :type nlib: Optional[str]
-    :ivar plib: Optional default photon cross-section library for this material
-    :type plib: Optional[str]
-    :ivar ylib: Optional default dosimetry library for this material
-    :type ylib: Optional[str]
-    :ivar nuclide: Dictionary mapping ZAID to Nuclide objects
-    :type nuclide: Dict[int, Nuclide]
+    Attributes
+    ----------
+    zaid : int
+        ZAID identifier (e.g. 92235 for U-235).
+    fraction : float
+        Composition fraction stored as a positive value; interpretation is driven by
+        the parent ``Material.fraction_type``.
+    libs : dict
+        Per-nuclide library overrides keyed by library keyword (e.g. ``'nlib'``, ``'plib'``).
     """
-    id: int
-    nlib: Optional[str] = None
-    plib: Optional[str] = None
-    ylib: Optional[str] = None
-    nuclide: Dict[int, 'Nuclide'] = field(default_factory=dict)
-    
-    def add_nuclide(self, zaid: int, fraction: float, library: Optional[str] = None) -> None:
-        """Add a nuclide to this material.
-        
-        :param zaid: Nuclide ZAID number
-        :type zaid: int
-        :param fraction: Atomic fraction of the nuclide
-        :type fraction: float
-        :param library: Specific cross-section library for this nuclide,
-                       overrides material's default if specified
-        :type library: Optional[str]
+
+    zaid: int
+    fraction: float
+    libs: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def element(self) -> Optional[str]:
+        atomic_number = self.zaid // 1000
+        return ATOMIC_NUMBER_TO_SYMBOL.get(atomic_number)
+
+    @property
+    def symbol(self) -> str:
+        """Return the element-mass symbol (e.g., 'Fe56', 'U235')."""
+        return zaid_to_symbol(self.zaid)
+
+    @property
+    def is_natural(self) -> bool:
+        return _is_natural_zaid(self.zaid)
+
+    def convert_natural_element(self) -> None:
+        """Print an isotopic breakdown of a natural element.
+
+        Raises
+        ------
+        ValueError
+            If ``zaid`` does not represent a natural element or if abundance data
+            are missing.
         """
-        nlib = None
-        plib = None
-        ylib = None
-        
-        if library:
-            # Determine library type by examining the last character
-            if library.endswith('c'):
-                nlib = library
-            elif library.endswith('p'):
-                plib = library
-            elif library.endswith('y'):
-                ylib = library
-        
-        # Check if nuclide already exists
-        if zaid in self.nuclide:
-            # Update existing nuclide with new library information
-            # Keep the existing fraction
-            if nlib:
-                self.nuclide[zaid].nlib = nlib
-            if plib:
-                self.nuclide[zaid].plib = plib
-            if ylib:
-                self.nuclide[zaid].ylib = ylib
-        else:
-            # Create new nuclide
-            self.nuclide[zaid] = Nuclide(
-                zaid=zaid,
-                fraction=float(fraction),
-                nlib=nlib,
-                plib=plib,
-                ylib=ylib
+        if not self.is_natural:
+            raise ValueError(
+                f"Nuclide with ZAID {self.zaid} is not a natural element (mass number must be 0, e.g. ZAID ends with '000')"
             )
 
-    def _get_nuclide_symbol(self, zaid: int) -> Optional[str]:
-        """Get nuclide symbol based on atomic number.
+        atomic_number = self.zaid // 1000
+        atomic_key = atomic_number * 1000
+
+        if atomic_key not in NATURAL_ABUNDANCE:
+            raise ValueError(f"No natural abundance data available for element ZAID {self.zaid}")
+
+        original_fraction = abs(self.fraction)
+        natural_isotopes = NATURAL_ABUNDANCE[atomic_key]
+
+        if self.fraction < 0:
+            total_mass_per_atom = 0.0
+            isotope_masses = {}
+            for iso_zaid, atomic_abundance in natural_isotopes.items():
+                iso_mass = ATOMIC_MASS.get(iso_zaid, iso_zaid % 1000)
+                isotope_masses[iso_zaid] = iso_mass
+                total_mass_per_atom += atomic_abundance * iso_mass
+
+            for iso_zaid, atomic_abundance in sorted(natural_isotopes.items()):
+                iso_mass = isotope_masses[iso_zaid]
+                iso_mass_fraction = (atomic_abundance * iso_mass) / total_mass_per_atom
+                iso_mass_density = -(original_fraction * iso_mass_fraction)
+                print(f"{iso_zaid} {iso_mass_density:.6e}")
+        else:
+            for iso_zaid, atomic_abundance in sorted(natural_isotopes.items()):
+                fraction = original_fraction * atomic_abundance
+                print(f"{iso_zaid} {fraction:.6e}")
+
+    def __str__(self) -> str:
+        """Return a user-friendly string representation of the nuclide."""
+        lines = []
+        lines.append("=" * 70)
+        lines.append(f"{'Nuclide: ' + self.symbol:^70}")
+        lines.append("=" * 70)
         
-        :param zaid: The ZAID number
-        :type zaid: int
-        :returns: Chemical symbol of element or None if not found
-        :rtype: Optional[str]
+        # Format attributes in two columns
+        lines.append(f"{'ZAID:':<25} {self.zaid}")
+        lines.append(f"{'Element:':<25} {self.element or 'Unknown'}")
+        lines.append(f"{'Mass Number:':<25} {self.zaid % 1000}")
+        lines.append(f"{'Fraction:':<25} {self.fraction:.6e}")
+        lines.append(f"{'Is Natural:':<25} {self.is_natural}")
+        
+        if self.libs:
+            lines.append("")
+            lines.append(f"{'Library Overrides:'}")
+            for key, value in sorted(self.libs.items()):
+                lines.append(f"  {key:<23} {value}")
+        else:
+            lines.append("")
+            lines.append(f"{'Library Overrides:':<25} None")
+        
+        lines.append("=" * 70)
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        """Return the same formatted representation as __str__."""
+        return self.__str__()
+
+
+class NuclideAccessor:
+    """Dictionary-like accessor that allows retrieving nuclides by ZAID or symbol.
+    
+    This wrapper allows accessing nuclides using either:
+    - Symbol (str): e.g., 'Fe56', 'U235', 'Fe' (natural)
+    - ZAID (int): e.g., 26056, 92235, 26000 (natural)
+    
+    String symbols are normalized through ZAID conversion for consistency,
+    so 'Fe', 'fe', and 26000 all map to the same nuclide.
+    
+    Examples
+    --------
+    >>> material.nuclide['Fe56']  # Access by symbol
+    >>> material.nuclide[26056]    # Access by ZAID
+    >>> material.nuclide['Fe']     # Access natural Fe
+    >>> material.nuclide[26000]    # Access natural Fe by ZAID
+    """
+    
+    def __init__(self, nuclide_dict: Dict[str, Nuclide]):
+        self._dict = nuclide_dict
+    
+    def __getitem__(self, key: Union[str, int]) -> Nuclide:
+        """Get nuclide by symbol (str) or ZAID (int)."""
+        if isinstance(key, int):
+            # Convert ZAID to symbol
+            symbol = zaid_to_symbol(key)
+        else:
+            # Normalize string through ZAID conversion for consistency
+            # This ensures 'Fe', 'fe', 'FE' all map to the same key
+            zaid = symbol_to_zaid(key)
+            symbol = zaid_to_symbol(zaid)
+        return self._dict[symbol]
+    
+    def __setitem__(self, key: Union[str, int], value: Nuclide) -> None:
+        """Set nuclide by symbol (str) or ZAID (int)."""
+        if isinstance(key, int):
+            # Convert ZAID to symbol
+            symbol = zaid_to_symbol(key)
+        else:
+            # Normalize string through ZAID conversion
+            zaid = symbol_to_zaid(key)
+            symbol = zaid_to_symbol(zaid)
+        self._dict[symbol] = value
+    
+    def __delitem__(self, key: Union[str, int]) -> None:
+        """Delete nuclide by symbol (str) or ZAID (int)."""
+        if isinstance(key, int):
+            # Convert ZAID to symbol
+            symbol = zaid_to_symbol(key)
+        else:
+            # Normalize string through ZAID conversion
+            zaid = symbol_to_zaid(key)
+            symbol = zaid_to_symbol(zaid)
+        del self._dict[symbol]
+    
+    def __contains__(self, key: Union[str, int]) -> bool:
+        """Check if nuclide exists by symbol (str) or ZAID (int)."""
+        if isinstance(key, int):
+            # Convert ZAID to symbol
+            symbol = zaid_to_symbol(key)
+        else:
+            # Normalize string through ZAID conversion
+            try:
+                zaid = symbol_to_zaid(key)
+                symbol = zaid_to_symbol(zaid)
+            except ValueError:
+                return False
+        return symbol in self._dict
+    
+    def __iter__(self):
+        """Iterate over nuclide symbols."""
+        return iter(self._dict)
+    
+    def __len__(self) -> int:
+        """Return number of nuclides."""
+        return len(self._dict)
+    
+    def keys(self):
+        """Return view of nuclide symbols."""
+        return self._dict.keys()
+    
+    def values(self):
+        """Return view of nuclide objects."""
+        return self._dict.values()
+    
+    def items(self):
+        """Return view of (symbol, nuclide) pairs."""
+        return self._dict.items()
+    
+    def get(self, key: Union[str, int], default=None):
+        """Get nuclide by symbol or ZAID with optional default."""
+        try:
+            return self[key]
+        except (KeyError, ValueError):
+            return default
+
+
+@dataclass
+class Material:
+    """General-purpose material representation.
+
+    Fractions are stored as non-negative numbers; ``fraction_type`` records whether
+    they represent atomic (``'ao'``) or weight (``'wo'``) fractions. This class provides
+    methods for managing nuclide composition, density, and metadata for a material.
+
+    Parameters
+    ----------
+    id : int
+        Material identifier number.
+    nuclide : dict, optional
+        Mapping of ZAID to :class:`Nuclide` objects.
+    libs : dict, optional
+        Default library keywords (e.g. ``'nlib'``). Nuclide libraries override these defaults.
+    name : str, optional
+        Optional descriptive name.
+    fraction_type : str, optional
+        ``'ao'`` for atomic fractions or ``'wo'`` for weight fractions.
+    density : float, optional
+        Density magnitude paired with ``density_unit``.
+    density_unit : str, optional
+        Density unit (``'g/cc'`` or ``'kg/m3'``).
+    temperature : float, optional
+        Material temperature if available in Kelvin.
+    metadata : dict, optional
+        Arbitrary metadata tags.
+    """
+
+    id: int
+    nuclide: Union[Dict[str, Nuclide], NuclideAccessor] = field(default_factory=dict)  # Keyed by symbol, accessible by symbol or ZAID
+    libs: Dict[str, str] = field(default_factory=dict)
+    name: Optional[str] = None
+    fraction_type: str = "ao"
+    density: Optional[float] = None
+    density_unit: Optional[str] = None
+    temperature: Optional[float] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _validate_fraction_type(self.fraction_type)
+        self.libs = dict(self.libs)
+        
+        # Convert nuclide to internal dict if needed, then wrap with accessor
+        if isinstance(self.nuclide, dict) and not isinstance(self.nuclide, NuclideAccessor):
+            nuclide_dict = dict(self.nuclide)
+            for nuc in nuclide_dict.values():
+                nuc.fraction = float(abs(nuc.fraction))
+                nuc.libs = dict(nuc.libs)
+            self.nuclide = NuclideAccessor(nuclide_dict)
+        elif isinstance(self.nuclide, NuclideAccessor):
+            for nuc in self.nuclide.values():
+                nuc.fraction = float(abs(nuc.fraction))
+                nuc.libs = dict(nuc.libs)
+
+        if self.density is not None:
+            self.density = float(self.density)
+        self.density_unit = _normalize_density_unit(self.density_unit)
+
+    @property
+    def is_atomic(self) -> bool:
+        return self.fraction_type == "ao"
+
+    @property
+    def is_weight(self) -> bool:
+        return self.fraction_type == "wo"
+
+    def _infer_lib_key_from_suffix(self, library: str) -> Optional[str]:
+        """Infer MCNP library keyword from a library suffix.
+        
+        Parameters
+        ----------
+        library : str
+            Library suffix to analyze.
+            
+        Returns
+        -------
+        str or None
+            Library keyword ('nlib', 'plib', or 'ylib') or None if unrecognized.
         """
-        # Extract atomic number from ZAID (first 2-3 digits)
+        if not library:
+            return None
+        last = library[-1].lower()
+        if last == "c":
+            return "nlib"
+        if last == "p":
+            return "plib"
+        if last == "y":
+            return "ylib"
+        return None
+
+    def add_nuclide(self, nuclide: Union[int, str], fraction: float, fraction_type: str, 
+                    library: Optional[str] = None) -> None:
+        """Add or update a nuclide in the material.
+
+        Parameters
+        ----------
+        nuclide : int or str
+            ZAID identifier (int, e.g. 92235) or element-mass symbol (str, e.g. 'U235', 'Fe56').
+            For natural elements, use symbol without mass number (e.g. 'Fe' -> 26000).
+        fraction : float
+            Fraction value; the absolute value is stored and interpreted according
+            to the provided ``fraction_type``.
+        fraction_type : str
+            Fraction type for this addition: ``'ao'`` for atomic fractions or ``'wo'`` for 
+            weight fractions. This updates the material's fraction_type.
+        library : str, optional
+            MCNP library suffix (e.g. ``'80c'``, ``'70c'``, ``'12p'``). The library
+            type (neutron, photon, or thermal) is automatically inferred from the
+            suffix: 'c' → neutron (nlib), 'p' → photon (plib), 'y' → thermal (ylib).
+            This provides a nuclide-level library override.
+
+        Returns
+        -------
+        None
+        
+        Raises
+        ------
+        ValueError
+            If nuclide is a string and does not represent a valid element symbol.
+        
+        Examples
+        --------
+        >>> mat = Material(id=1)
+        >>> mat.add_nuclide('U235', 1.0, 'ao')  # Add U-235 as atomic fraction
+        >>> mat.add_nuclide(92238, 0.5, 'ao')   # Add U-238 using ZAID
+        >>> mat.add_nuclide('Fe', 1.0, 'ao')    # Add natural Fe (26000)
+        """
+        # Convert symbol to zaid if necessary
+        if isinstance(nuclide, str):
+            zaid = symbol_to_zaid(nuclide)
+        else:
+            zaid = nuclide
+        
+        # Validate fraction type (must be exactly 'ao' or 'wo')
+        _validate_fraction_type(fraction_type)
+        self.fraction_type = fraction_type
+        
+        # Get symbol for dictionary key
+        symbol = zaid_to_symbol(zaid)
+        
+        # Add or update the nuclide
+        lib_key = self._infer_lib_key_from_suffix(library) if library else None
+
+        if symbol in self.nuclide:
+            nuc = self.nuclide[symbol]
+            nuc.fraction = float(abs(fraction))
+        else:
+            nuc = Nuclide(zaid=zaid, fraction=float(abs(fraction)))
+            self.nuclide[symbol] = nuc
+
+        if lib_key is not None and library is not None:
+            nuc.libs[lib_key] = library
+
+    def add_element(self, element: str, fraction: float, fraction_type: str = "ao",
+                    library: Optional[str] = None) -> None:
+        """Add a natural element to the material.
+        
+        This method is a convenience for adding natural elements by symbol only (without
+        mass number). For specific isotopes, use ``add_nuclide()``.
+
+        Parameters
+        ----------
+        element : str
+            Element symbol (e.g., 'Fe', 'U', 'O'). Will be converted to natural ZAID
+            (mass number = 0, e.g., 'Fe' -> 26000).
+        fraction : float
+            Fraction value; the absolute value is stored and interpreted according
+            to the provided ``fraction_type``.
+        fraction_type : str, optional
+            Fraction type: ``'ao'`` for atomic fractions or ``'wo'`` for weight fractions.
+            Default is ``'ao'``.
+        library : str, optional
+            MCNP library suffix (e.g. ``'80c'``, ``'70c'``, ``'12p'``).
+
+        Returns
+        -------
+        None
+        
+        Raises
+        ------
+        ValueError
+            If element is not a recognized element symbol.
+        
+        Examples
+        --------
+        >>> mat = Material(id=1)
+        >>> mat.add_element('Fe', 1.0, 'ao')      # Add natural Fe with atomic fraction
+        >>> mat.add_element('O', 2.0, 'wo')       # Add natural O with weight fraction
+        """
+        self.add_nuclide(element, fraction, fraction_type, library)
+
+    def _get_nuclide_symbol(self, zaid: int) -> Optional[str]:
         atomic_number = zaid // 1000
         return ATOMIC_NUMBER_TO_SYMBOL.get(atomic_number)
-    
-    def get_effective_library(self, zaid: int, lib_type: str = 'nlib') -> Optional[str]:
-        """Get effective library for a nuclide, considering inheritance.
-        
-        :param zaid: The ZAID number of the nuclide
-        :type zaid: int
-        :param lib_type: Library type ('nlib', 'plib', or 'ylib')
-        :type lib_type: str
-        :returns: Nuclide's library if specified, otherwise material's default
-        :rtype: Optional[str]
+
+    def get_effective_library(self, nuclide: Union[int, str], lib_key: str = "nlib") -> Optional[str]:
+        """Return the effective MCNP library for a given nuclide.
+
+        Parameters
+        ----------
+        nuclide : int or str
+            ZAID identifier or symbol.
+        lib_key : str, optional
+            Library keyword to query (e.g. ``'nlib'``, ``'plib'``, ``'ylib'``).
+
+        Returns
+        -------
+        str or None
+            Nuclide-level override if present, otherwise the material default.
         """
-        if zaid not in self.nuclide:
-            return getattr(self, lib_type, None)
+        # Convert to symbol if ZAID provided
+        if isinstance(nuclide, int):
+            symbol = zaid_to_symbol(nuclide)
+        else:
+            symbol = nuclide
         
-        nuclide_lib = getattr(self.nuclide[zaid], lib_type, None)
-        return nuclide_lib if nuclide_lib else getattr(self, lib_type, None)
-    
+        nuc = self.nuclide.get(symbol)
+        if nuc is not None and lib_key in nuc.libs:
+            return nuc.libs[lib_key]
+        return self.libs.get(lib_key)
+
+    def set_density(self, density: float, unit: str) -> None:
+        """Set the material density with explicit units.
+
+        Parameters
+        ----------
+        density : float
+            Density magnitude.
+        unit : str
+            Unit string (``'g/cc'`` or ``'kg/m3'``); case-insensitive.
+
+        Returns
+        -------
+        None
+        """
+        normalized_unit = _normalize_density_unit(unit)
+        if normalized_unit not in {"g/cc", "kg/m3"}:
+            raise ValueError(f"Unsupported density unit '{unit}'. Use 'g/cc' or 'kg/m3'.")
+        self.density = float(density)
+        self.density_unit = normalized_unit
+
+    def set_temperature(self, temperature: float) -> None:
+        """Set the material temperature in Kelvin.
+
+        Parameters
+        ----------
+        temperature : float
+            Temperature in Kelvin.
+
+        Returns
+        -------
+        None
+        """
+        self.temperature = float(temperature)
+
+    def density_in(self, unit: str) -> float:
+        """Return the current density expressed in a different unit.
+        
+        Parameters
+        ----------
+        unit : str
+            Target unit string ('g/cc' or 'kg/m3').
+            
+        Returns
+        -------
+        float
+            Density value in the requested unit.
+            
+        Raises
+        ------
+        ValueError
+            If density is not set or unit is unsupported.
+        """
+        if self.density is None or self.density_unit is None:
+            raise ValueError("Density or density_unit not set.")
+        target_unit = _normalize_density_unit(unit)
+        if target_unit not in {"g/cc", "kg/m3"}:
+            raise ValueError(f"Unsupported density unit '{unit}'. Use 'g/cc' or 'kg/m3'.")
+        factor = _DENSITY_CONVERSIONS[(self.density_unit, target_unit)]
+        return self.density * factor
+
+    def convert_density(self, unit: str) -> None:
+        """Convert density in-place to the requested unit.
+        
+        Parameters
+        ----------
+        unit : str
+            Target unit string ('g/cc' or 'kg/m3').
+            
+        Returns
+        -------
+        None
+        """
+        converted = self.density_in(unit)
+        self.density = converted
+        self.density_unit = _normalize_density_unit(unit)
+
     def _get_effective_atomic_mass(self, zaid: int) -> float:
-        """Calculate the effective atomic mass of a nuclide, handling natural elements.
-        
-        For natural elements (ZAID ending in '00'), calculates a weighted average
-        of isotope masses based on natural abundances.
-        
-        :param zaid: The ZAID number of the nuclide
-        :type zaid: int
-        :returns: Effective atomic mass
-        :rtype: float
+        """Return the effective atomic mass, handling natural elements.
+
+        Parameters
+        ----------
+        zaid : int
+            ZAID identifier for which to retrieve mass.
+
+        Returns
+        -------
+        float
+            Atomic mass; for natural elements the abundance-weighted mean is used.
         """
-        # Check if this is a natural element (ZAID ending in '00')
-        if zaid % 1000 == 0 and zaid > 1000:
+        # Check if this is a natural element (ZAID mass number equals 0)
+        if _is_natural_zaid(zaid):
             atomic_number = zaid // 1000
             atomic_key = atomic_number * 1000  # e.g., 6000 for carbon
             
@@ -272,435 +589,835 @@ class Mat:
             atomic_mass = float(mass_number) if mass_number > 0 else 1.0
             
         return atomic_mass
-    
-    def to_weight_fraction(self) -> 'Mat':
-        """Convert atomic fractions to weight fractions.
-        
-        In MCNP, weight fractions are represented as negative values.
-        This method does nothing if fractions are already weight fractions.
-        
-        :returns: Self reference for method chaining
-        :rtype: Mat
-        :raises ValueError: If the calculated mass sum is zero
+
+    def to_weight_fraction(self) -> Material:
+        """Convert atomic fractions to weight fractions (stored as positives).
+
+        Returns
+        -------
+        Material
+            Self reference for chaining.
         """
-        # Check if already using weight fractions (negative values)
-        if any(nuclide.fraction < 0 for nuclide in self.nuclide.values()):
+        if self.is_weight:
             return self
-        
-        # Calculate total mass
+
         mass_sum = 0.0
-        for zaid, nuclide in self.nuclide.items():
-            # Calculate mass contribution using helper method for accurate atomic mass
-            atomic_mass = self._get_effective_atomic_mass(zaid)
+        for symbol, nuclide in self.nuclide.items():
+            atomic_mass = self._get_effective_atomic_mass(nuclide.zaid)
             mass_sum += nuclide.fraction * atomic_mass
-        
-        # Check if mass_sum is zero to avoid division by zero
+
         if mass_sum <= 0:
             raise ValueError(f"Cannot convert to weight fractions: total mass calculated as {mass_sum}")
-            
-        # Convert to weight fractions (negative values)
-        for zaid, nuclide in self.nuclide.items():
-            # Get accurate atomic mass using helper method
-            atomic_mass = self._get_effective_atomic_mass(zaid)
-            
-            # Convert atomic fraction to weight fraction
-            weight_fraction = nuclide.fraction * atomic_mass / mass_sum
-            
-            # Store as negative value (MCNP convention for weight fractions)
-            nuclide.fraction = -weight_fraction
-            
+
+        for symbol, nuclide in self.nuclide.items():
+            atomic_mass = self._get_effective_atomic_mass(nuclide.zaid)
+            nuclide.fraction = nuclide.fraction * atomic_mass / mass_sum
+
+        self.fraction_type = "wo"
         return self
-    
-    def to_atomic_fraction(self) -> 'Mat':
-        """Convert weight fractions to atomic fractions.
-        
-        In MCNP, weight fractions are represented as negative values.
-        This method does nothing if fractions are already atomic fractions.
-        
-        :returns: Self reference for method chaining
-        :rtype: Mat
+
+    def to_atomic_fraction(self) -> Material:
+        """Convert weight fractions to atomic fractions (stored as positives).
+
+        Returns
+        -------
+        Material
+            Self reference for chaining.
         """
-        # Check if already using atomic fractions (positive values)
-        if all(nuclide.fraction > 0 for nuclide in self.nuclide.values()):
+        if self.is_atomic:
             return self
-            
-        # First step: convert all fractions to their absolute values
-        for nuclide in self.nuclide.values():
-            nuclide.fraction = abs(nuclide.fraction)
-            
-        # Calculate sum of (weight_fraction / atomic_mass)
+
         atomic_sum = 0.0
-        for zaid, nuclide in self.nuclide.items():
-            # Get accurate atomic mass using helper method
-            atomic_mass = self._get_effective_atomic_mass(zaid)
-            
-            # Check if atomic_mass is valid to prevent division by zero
+        for symbol, nuclide in self.nuclide.items():
+            atomic_mass = self._get_effective_atomic_mass(nuclide.zaid)
             if atomic_mass <= 0:
-                # Use mass number as fallback
-                mass_number = zaid % 1000
+                mass_number = nuclide.zaid % 1000
                 atomic_mass = float(mass_number) if mass_number > 0 else 1.0
-            
-            # Add contribution to atomic sum
             atomic_sum += nuclide.fraction / atomic_mass
-            
-        # Convert to atomic fractions (positive values)
-        for zaid, nuclide in self.nuclide.items():
-            # Get accurate atomic mass using helper method
-            atomic_mass = self._get_effective_atomic_mass(zaid)
-            
-            # Check if atomic_mass is valid
+
+        if atomic_sum <= 0:
+            raise ValueError("Cannot convert to atomic fractions: atomic_sum calculated as 0 or negative.")
+
+        for symbol, nuclide in self.nuclide.items():
+            atomic_mass = self._get_effective_atomic_mass(nuclide.zaid)
             if atomic_mass <= 0:
-                mass_number = zaid % 1000
+                mass_number = nuclide.zaid % 1000
                 atomic_mass = float(mass_number) if mass_number > 0 else 1.0
-            
-            # Convert weight fraction to atomic fraction
-            atomic_fraction = (nuclide.fraction / atomic_mass) / atomic_sum
-            
-            # Store as positive value (MCNP convention for atomic fractions)
-            nuclide.fraction = atomic_fraction
-            
+            nuclide.fraction = (nuclide.fraction / atomic_mass) / atomic_sum
+
+        self.fraction_type = "ao"
         return self
 
-    
-    def convert_natural_elements(self, zaid_to_expand: Optional[Union[int, List[int]]] = None) -> 'Mat':
-        """Convert natural elements into their constituent isotopes based on natural abundances.
-
-        This method expands natural elements (ZAIDs ending in '00') into their isotopic composition
-        using natural abundance data. It can either convert all natural elements in the material,
-        a specific one, or a list of specific ZAIDs.
-
-        :param zaid_to_expand: Optional specific ZAID or list of ZAIDs to expand. If None, expands all natural elements.
-        :type zaid_to_expand: Optional[Union[int, List[int]]]
-        :returns: Self reference for method chaining
-        :rtype: Mat
-        :raises ValueError: If ZAID is not found in material, is not a natural element, or lacks abundance data
-        """
-        # Remember if the original fractions are in weight form.
-        original_weight = any(nuc.fraction < 0 for nuc in self.nuclide.values())
+    def normalize(self, fraction_type: str = "ao") -> Material:
+        """Normalize all fractions so they sum to 1.0.
         
-        # If using weight fractions, convert to atomic fractions first.
-        if original_weight:
+        This method first converts all fractions to the specified fraction_type (atomic or weight),
+        then rescales them proportionally so that the total sum equals 1.0. This is useful after
+        manually adding nuclides with arbitrary fractional values, such as defining water
+        as H with fraction 2.0 and O with fraction 1.0, then normalizing.
+
+        Parameters
+        ----------
+        fraction_type : str, optional
+            Target fraction type for normalization: ``'ao'`` for atomic fractions or 
+            ``'wo'`` for weight fractions. Default is ``'ao'``.
+
+        Returns
+        -------
+        Material
+            Self reference for chaining.
+            
+        Raises
+        ------
+        ValueError
+            If total fraction sum is zero or negative, or if fraction_type is invalid.
+        
+        Examples
+        --------
+        >>> mat = Material(id=1)
+        >>> mat.add_nuclide('H', 2.0, 'ao')
+        >>> mat.add_nuclide('O', 1.0, 'ao')
+        >>> mat.normalize('ao')  # Normalize to atomic fractions (default)
+        >>> mat.normalize('wo')  # Or normalize to weight fractions
+        """
+        # Validate fraction type
+        _validate_fraction_type(fraction_type)
+        
+        # Convert to target fraction type if needed
+        if fraction_type == "wo" and self.is_atomic:
+            self.to_weight_fraction()
+        elif fraction_type == "ao" and self.is_weight:
             self.to_atomic_fraction()
         
-        # Determine which natural nuclides to expand.
-        if zaid_to_expand is not None:
-            # Handle both single ZAID and list of ZAIDs
-            zaids_list = [zaid_to_expand] if isinstance(zaid_to_expand, int) else zaid_to_expand
-            
-            # Validate all ZAIDs in the list
-            natural_zaids = []
-            for zaid in zaids_list:
-                if zaid not in self.nuclide:
-                    raise ValueError(f"ZAID {zaid} not found in material {self.id}")
-                if not (zaid % 1000 == 0 and zaid > 1000):
-                    raise ValueError(f"ZAID {zaid} is not a natural element (does not end in '00')")
-                natural_zaids.append(zaid)
-        else:
-            natural_zaids = [zaid for zaid in list(self.nuclide.keys()) 
-                            if zaid % 1000 == 0 and zaid > 1000]
+        # Now normalize
+        total_fraction = sum(nuc.fraction for nuc in self.nuclide.values())
         
-        for zaid in natural_zaids:
-            nuclide = self.nuclide[zaid]
-            atomic_number = zaid // 1000
-            
-            atomic_key = atomic_number * 1000  # e.g., 6000 for carbon
-            if atomic_key not in NATURAL_ABUNDANCE:
-                raise ValueError(f"No natural abundance data available for element ZAID {zaid}")
-            
-            original_fraction = nuclide.fraction  # Now in atomic fractions
-            natural_isotopes = NATURAL_ABUNDANCE[atomic_key]
-            new_isotopes = {}
-            
-            # Expand natural element using atomic fractions.
-            for iso_zaid, atomic_abundance in sorted(natural_isotopes.items()):
-                fraction = original_fraction * atomic_abundance
-                new_isotopes[iso_zaid] = Nuclide(
-                    zaid=iso_zaid,
-                    fraction=fraction,
-                    nlib=nuclide.nlib,
-                    plib=nuclide.plib,
-                    ylib=nuclide.ylib
-                )
-            
-            # Insert new isotopes and remove the original natural element.
-            for iso_zaid, isotope in new_isotopes.items():
-                self.nuclide[iso_zaid] = isotope
-            del self.nuclide[zaid]
+        if total_fraction <= 0:
+            raise ValueError(f"Cannot normalize: total fraction sum is {total_fraction} (must be positive)")
         
-        # Convert back to weight fractions if that was the original format.
-        if original_weight:
-            self.to_weight_fraction()
+        if total_fraction != 1.0:
+            for nuclide in self.nuclide.values():
+                nuclide.fraction = nuclide.fraction / total_fraction
         
         return self
-    
+
+    def expand_natural_elements(self, elements: Optional[Union[str, List[str]]] = None) -> Material:
+        """Expand natural elements into isotopic composition using abundance data.
+
+        Parameters
+        ----------
+        elements : str or list[str], optional
+            Specific natural element symbol(s) to expand (e.g., 'Fe', 'C'). 
+            If ``None``, all natural elements in the material are expanded.
+
+        Returns
+        -------
+        Material
+            Self reference for chaining.
+
+        Raises
+        ------
+        ValueError
+            If a requested element is missing, not natural, or lacks abundance data.
+        """
+        original_fraction_type = self.fraction_type
+
+        if self.is_weight:
+            self.to_atomic_fraction()
+
+        if elements is not None:
+            # Convert to list of symbols
+            symbols_list = [elements] if isinstance(elements, str) else elements
+            natural_symbols: List[str] = []
+            
+            for elem in symbols_list:
+                # Convert element symbol to natural symbol (e.g., 'Fe' -> 'Fe0')
+                zaid = symbol_to_zaid(elem)
+                symbol = zaid_to_symbol(zaid)
+                
+                if symbol not in self.nuclide:
+                    raise ValueError(f"Element '{elem}' (symbol '{symbol}') not found in material {self.id}")
+                if not _is_natural_zaid(zaid):
+                    raise ValueError(
+                        f"Element '{elem}' is not a natural element (must have mass number 0)"
+                    )
+                natural_symbols.append(symbol)
+        else:
+            # Find all natural elements
+            natural_symbols = [sym for sym, nuc in self.nuclide.items() if nuc.is_natural]
+
+        for symbol in natural_symbols:
+            nuclide = self.nuclide[symbol]
+            zaid = nuclide.zaid
+            atomic_number = zaid // 1000
+
+            atomic_key = atomic_number * 1000
+            if atomic_key not in NATURAL_ABUNDANCE:
+                raise ValueError(f"No natural abundance data available for element {symbol}")
+
+            original_fraction = nuclide.fraction
+            natural_isotopes = NATURAL_ABUNDANCE[atomic_key]
+            new_isotopes: Dict[str, Nuclide] = {}
+
+            for iso_zaid, atomic_abundance in sorted(natural_isotopes.items()):
+                fraction = original_fraction * atomic_abundance
+                iso_symbol = zaid_to_symbol(iso_zaid)
+                new_isotopes[iso_symbol] = Nuclide(
+                    zaid=iso_zaid,
+                    fraction=fraction,
+                    libs=dict(nuclide.libs),
+                )
+
+            for iso_symbol, isotope in new_isotopes.items():
+                self.nuclide[iso_symbol] = isotope
+            del self.nuclide[symbol]
+
+        if original_fraction_type == "wo":
+            self.to_weight_fraction()
+
+        return self
+
     def _format_fraction(self, fraction: float) -> str:
-        """Format atomic fraction in scientific notation with 6 decimal digits.
+        """Format a fraction value for MCNP output.
         
-        :param fraction: The fraction value to format
-        :type fraction: float
-        :returns: Formatted string representation
-        :rtype: str
+        Parameters
+        ----------
+        fraction : float
+            Fraction value to format.
+            
+        Returns
+        -------
+        str
+            Formatted fraction in scientific notation.
         """
         return f"{fraction:.6e}"
-    
-    def __str__(self) -> str:
-        """Return a string representation of the material in MCNP format.
+
+    def to_mcnp(self) -> str:
+        """Serialise the material as an MCNP ``m`` card.
         
-        :returns: String representation of the material in MCNP format
-        :rtype: str
+        The output includes MCNP comments with:
+        - Material name (if set) as a comment before the material card
+        - Density in both g/cc and atoms/b-cm (if set) as a comment after libraries
+        - Nuclide symbol after each fraction line
+        
+        Returns
+        -------
+        str
+            MCNP material card formatted as a multi-line string.
         """
-        result = [f"m{self.id}"]
+        output_lines = []
         
-        # Add material-level libraries if specified
-        lib_parts = []
-        if self.nlib:
-            lib_parts.append(f"nlib={self.nlib}")
-        if self.plib:
-            lib_parts.append(f"plib={self.plib}")
-        if self.ylib:
-            lib_parts.append(f"ylib={self.ylib}")
+        # Add material name as comment if present
+        if self.name:
+            output_lines.append(f"c KIKA_MAT_NAME: {self.name}")
         
+        # Build main material line
+        main_line = f"m{self.id}"
+        lib_parts = [f"{k}={v}" for k, v in sorted(self.libs.items())]
         if lib_parts:
-            result[0] += " " + " ".join(lib_parts)
+            main_line += " " + " ".join(lib_parts)
         
-        # Process each nuclide
-        for zaid, nuclide in self.nuclide.items():
-            nuclide_added = False
-            
-            # Handle neutron library if specified at nuclide level
-            if nuclide.nlib:
-                lib_str = f".{nuclide.nlib}"
-                result.append(f"\t{zaid}{lib_str} {self._format_fraction(nuclide.fraction)}")
-                nuclide_added = True
-            
-            # Handle photon library if specified at nuclide level
-            if nuclide.plib:
-                lib_str = f".{nuclide.plib}"
-                result.append(f"\t{zaid}{lib_str} {self._format_fraction(nuclide.fraction)}")
-                nuclide_added = True
-            
-            # Handle dosimetry library if specified at nuclide level
-            if nuclide.ylib:
-                lib_str = f".{nuclide.ylib}"
-                result.append(f"\t{zaid}{lib_str} {self._format_fraction(nuclide.fraction)}")
-                nuclide_added = True
-            
-            # If no nuclide-level libraries were specified, add the nuclide once
-            # It will use material-level libraries if defined
-            if not nuclide_added:
-                result.append(f"\t{zaid} {self._format_fraction(nuclide.fraction)}")
+        # Add density comment if density is set
+        if self.density is not None and self.density_unit is not None:
+            density_gcc = self.density_in("g/cc")
+            # Calculate atomic density (atoms/b-cm) if we have the molecular weight
+            atomic_density = self._calculate_atomic_density()
+            if atomic_density is not None:
+                main_line += f"  $ KIKA_DENSITY: {density_gcc:.6e} g/cc, {atomic_density:.6e} atoms/b-cm"
+            else:
+                main_line += f"  $ KIKA_DENSITY: {density_gcc:.6e} g/cc"
         
-        return "\n".join(result)
-    
-    def __repr__(self) -> str:
-        """Return a concise summary representation of the material.
+        output_lines.append(main_line)
+
+        sign = -1.0 if self.is_weight else 1.0
+        for symbol, nuclide in sorted(self.nuclide.items()):
+            zaid = nuclide.zaid
+            # Get element symbol for comment
+            nuclide_symbol = nuclide.symbol
+            
+            # Format with fixed column widths for alignment
+            # ZAID+lib column: 12 chars, fraction: 14 chars, symbol: 6 chars
+            if nuclide.libs:
+                for key, lib in sorted(nuclide.libs.items()):
+                    zaid_lib = f"{zaid}.{lib}"
+                    output_lines.append(
+                        f"     {zaid_lib:<12} {self._format_fraction(sign * nuclide.fraction):>14}   $ {nuclide_symbol:<6}"
+                    )
+            else:
+                output_lines.append(
+                    f"     {zaid:<12} {self._format_fraction(sign * nuclide.fraction):>14}   $ {nuclide_symbol:<6}"
+                )
+
+        return "\n".join(output_lines)
+
+    def _calculate_atomic_density(self) -> Optional[float]:
+        """Calculate atomic density in atoms/barn-cm from mass density.
         
-        This method is called when the object is evaluated in interactive environments
-        like Jupyter notebooks or the Python interpreter.
+        Uses Avogadro's number and the effective molecular weight of the material.
         
-        :returns: Concise representation of the material
-        :rtype: str
+        Returns
+        -------
+        float or None
+            Atomic density in atoms/b-cm, or None if calculation is not possible.
         """
-        # Create a visually appealing header with a border
-        header_width = 50
-        header = "=" * header_width + "\n"
-        header += f"{'MCNP Material (ID: ' + str(self.id) + ')':^{header_width}}\n"
-        header += "=" * header_width + "\n\n"
+        if self.density is None or self.density_unit is None:
+            return None
         
-        # Material properties
-        props = []
-        if self.nlib:
-            props.append(f"nlib={self.nlib}")
-        if self.plib:
-            props.append(f"plib={self.plib}")
-        if self.ylib:
-            props.append(f"ylib={self.ylib}")
+        # Get mass density in g/cc
+        density_gcc = self.density_in("g/cc")
         
-        properties = f"Properties: {', '.join(props) if props else 'None'}\n"
+        # Calculate effective atomic/molecular weight
+        # For atomic fractions: M_eff = sum(x_i * M_i)
+        # For weight fractions: 1/M_eff = sum(w_i / M_i)
         
-        # Nuclide count and fraction type
-        nuclide_count = len(self.nuclide)
-        fraction_type = "Weight" if any(nuc.fraction < 0 for nuc in self.nuclide.values()) else "Atomic"
-        info = f"Total Nuclides: {nuclide_count}\n\n"
+        total_weight = 0.0
+        total_fraction = 0.0
         
-        # Show table of nuclides if we have any
-        table = ""
-        if nuclide_count > 0:
-            table_width = 50
-            table += "-" * table_width + "\n"
-            table += f"{'ZAID':^10}|{'Element':^10}|{'Fraction':^15}|{'Libraries':^13}\n"
-            table += "-" * table_width + "\n"
+        for symbol, nuclide in self.nuclide.items():
+            atomic_mass = self._get_effective_atomic_mass(nuclide.zaid)
+            if atomic_mass <= 0:
+                return None
             
-            # Sort ZAIDs for consistent display
-            for zaid in sorted(self.nuclide.keys()):
-                nuclide = self.nuclide[zaid]
-                elem = nuclide.element if nuclide.element else "?"
-                
-                # Format the fraction with sign indicating if it's weight or atomic
-                frac_str = f"{nuclide.fraction:.4e}"
-                
-                # Get nuclide-specific libraries
-                libs = []
-                if nuclide.nlib:
-                    libs.append(nuclide.nlib)
-                if nuclide.plib:
-                    libs.append(nuclide.plib)
-                if nuclide.ylib:
-                    libs.append(nuclide.ylib)
-                
-                lib_str = ", ".join(libs) if libs else "-"
-                
-                table += f"{zaid:^10}|{elem:^10}|{frac_str:^15}|{lib_str:^13}\n"
+            if self.is_atomic:
+                total_weight += nuclide.fraction * atomic_mass
+                total_fraction += nuclide.fraction
+            else:  # weight fraction
+                total_weight += nuclide.fraction / atomic_mass
+                total_fraction += nuclide.fraction
+        
+        if total_fraction <= 0:
+            return None
+        
+        if self.is_atomic:
+            # For atomic fractions: average atomic mass
+            avg_atomic_mass = total_weight / total_fraction
+        else:
+            # For weight fractions: harmonic mean
+            avg_atomic_mass = total_fraction / total_weight
+        
+        # Avogadro's number
+        N_A = 6.02214076e23  # atoms/mol
+        # Conversion: 1 barn = 1e-24 cm^2, so atoms/b-cm = atoms/cm^3 * 1e-24
+        
+        # atomic_density = (density * N_A / M) * 1e-24
+        atomic_density = (density_gcc * N_A / avg_atomic_mass) * 1e-24
+        
+        return atomic_density
+
+    def __str__(self) -> str:
+        """Return a user-friendly string representation of the material.
+        
+        Returns
+        -------
+        str
+            Formatted string showing material properties and composition.
+        """
+        lines = []
+        lines.append("=" * 50)
+        lines.append(f"{'MCNP Material (ID: ' + str(self.id) + ')':^50}")
+        lines.append("=" * 50)
+        lines.append("")
+        
+        # MCNP Libraries (material-level)
+        if self.libs:
+            lib_str = ", ".join(f"{k}={v}" for k, v in sorted(self.libs.items()))
+            lines.append(f"MCNP Libraries: {lib_str}")
+        
+        # Total nuclides count
+        lines.append(f"Total Nuclides: {len(self.nuclide)}")
+        lines.append("")
+        
+        # Fraction type before the table
+        fraction_type_label = "Atomic" if self.fraction_type == "ao" else "Weight"
+        lines.append(f"Fraction Type: {fraction_type_label}")
+        lines.append("")
+        
+        # Check if any nuclide has specific libraries
+        has_nuclide_libs = any(nuc.libs for nuc in self.nuclide.values())
+        
+        # Nuclide composition table
+        if self.nuclide:
+            lines.append("-" * 50)
+            if has_nuclide_libs:
+                # Show libraries column only if there are nuclide-specific libraries
+                lines.append(f"{'ZAID':^8} | {'Element':^8} | {'Fraction':^14} | {'Libraries':^12}")
+            else:
+                lines.append(f"{'ZAID':^8} | {'Element':^8} | {'Fraction':^14}")
+            lines.append("-" * 50)
             
-            table += "-" * table_width + "\n"
+            # Sort by ZAID for consistent ordering
+            sorted_nuclides = sorted(self.nuclide.items(), key=lambda x: x[1].zaid)
             
-            # If there are many nuclides, show a summary instead
-            if nuclide_count > 10:
-                # Only show first 5 and last 5 nuclides
-                table_lines = table.split('\n')
-                header_lines = table_lines[:3]  # Header and separator lines
-                first_nuclides = table_lines[3:8]  # First 5 nuclides
-                ellipsis_line = [f"{'···':^10}|{'···':^10}|{'···':^15}|{'···':^13}"]  # Ellipsis line
-                last_nuclides = table_lines[-6:-1]  # Last 5 nuclides
-                footer_line = [table_lines[-1]]  # Footer separator line
+            for symbol, nuc in sorted_nuclides:
+                element = nuc.element if nuc.element else "?"
                 
-                table = "\n".join(header_lines + first_nuclides + ellipsis_line + last_nuclides + footer_line)
+                if has_nuclide_libs:
+                    if nuc.libs:
+                        lib_str = ", ".join(f"{v}" for k, v in sorted(nuc.libs.items()))
+                        if len(lib_str) > 10:
+                            lib_str = lib_str[:9] + "…"
+                    else:
+                        lib_str = "-"
+                    lines.append(f"{nuc.zaid:^8} | {element:^8} | {nuc.fraction:^14.6e} | {lib_str:^12}")
+                else:
+                    lines.append(f"{nuc.zaid:^8} | {element:^8} | {nuc.fraction:^14.6e}")
+            
+            lines.append("-" * 50)
         
-        # Available methods section
-        methods = "\nAvailable methods:\n"
-        methods += "- .to_weight_fraction() - Convert material to weight fractions\n"
-        methods += "- .to_atomic_fraction() - Convert material to atomic fractions\n"
-        methods += "- .convert_natural_elements() - Convert natural elements into isotopic composition\n"
-        methods += "- .copy(new_id) - Create a copy with a new material ID\n"
+        # Usage information
+        lines.append("")
+        lines.append("Available methods:")
+        lines.append("- .to_weight_fraction() - Convert material to weight fractions")
+        lines.append("- .to_atomic_fraction() - Convert material to atomic fractions")
+        lines.append("- .expand_natural_elements() - Expand natural elements to isotopes")
+        lines.append("- .copy(new_id) - Create a copy with a new material ID")
+        lines.append("")
+        lines.append("Examples of accessing data:")
+        lines.append("- .nuclide['Fe56'] - Access nuclide by symbol")
+        lines.append("- .nuclide[26056] - Access nuclide by ZAID")
+        lines.append("- .nuclide['Fe'] or .nuclide[26000] - Access natural Fe")
+        lines.append("- print(material) - Print material in MCNP format")
         
-        # Examples of accessing data section
-        examples = "\nExamples of accessing data:\n"
-        examples += "- .nuclide[zaid] - Access a specific nuclide\n"
-        examples += "- print(material) - Print material in MCNP format\n"
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        """Return the same formatted representation as __str__.
         
-        return header + properties + info + table + methods + examples
-    
-    def copy(self, new_id: int) -> 'Mat':
+        Returns
+        -------
+        str
+            Formatted material representation.
+        """
+        return self.__str__()
+
+    def copy(self, new_id: int) -> Material:
         """Create an exact copy of this material with a new ID.
         
-        All properties including the nuclides dictionary are copied.
-        
-        :param new_id: ID for the new material
-        :type new_id: int
-        :returns: New Mat instance with identical properties but different ID
-        :rtype: Mat
-        """
-        new_material = Mat(
-            id=new_id,
-            nlib=self.nlib,
-            plib=self.plib,
-            ylib=self.ylib
-        )
-        
-        # Deep copy all nuclides
-        for zaid, nuclide in self.nuclide.items():
-            new_material.nuclide[zaid] = Nuclide(
-                zaid=nuclide.zaid,
-                fraction=nuclide.fraction,
-                nlib=nuclide.nlib,
-                plib=nuclide.plib,
-                ylib=nuclide.ylib
-            )
+        Parameters
+        ----------
+        new_id : int
+            Material ID for the new copy.
             
+        Returns
+        -------
+        Material
+            New material instance with all properties copied.
+        """
+        new_material = Material(
+            id=new_id,
+            nuclide={sym: Nuclide(zaid=nuc.zaid, fraction=nuc.fraction, libs=dict(nuc.libs)) for sym, nuc in self.nuclide.items()},
+            libs=dict(self.libs),
+            name=self.name,
+            fraction_type=self.fraction_type,
+            density=self.density,
+            density_unit=self.density_unit,
+            temperature=self.temperature,
+            metadata=deepcopy(self.metadata),
+        )
         return new_material
 
 
 @dataclass
-class Nuclide:
-    """Represents a nuclide component in an MCNP material.
-    
-    :ivar zaid: Nuclide ZAID number
-    :type zaid: int
-    :ivar fraction: Atomic or weight fraction of the nuclide
-    :type fraction: float
-    :ivar nlib: Optional specific neutron cross-section library for this nuclide
-    :type nlib: Optional[str]
-    :ivar plib: Optional specific photon cross-section library for this nuclide
-    :type plib: Optional[str]
-    :ivar ylib: Optional specific dosimetry library for this nuclide
-    :type ylib: Optional[str]
-    """
-    zaid: int
-    fraction: float
-    nlib: Optional[str] = None
-    plib: Optional[str] = None
-    ylib: Optional[str] = None
-    
-    @property
-    def element(self) -> Optional[str]:
-        """Get the chemical symbol of the nuclide.
+class MaterialCollection:
+    """Container class for material objects."""
+
+    by_id: Dict[int, Material] = field(default_factory=dict)
+
+    def __iter__(self) -> Iterable[Material]:
+        return iter(self.by_id.values())
+
+    def __len__(self) -> int:
+        return len(self.by_id)
+
+    def add_material(self, material: Material) -> None:
+        """Add a material to the collection.
         
-        :returns: Chemical symbol of the element or None if not found
-        :rtype: Optional[str]
-        """
-        atomic_number = self.zaid // 1000
-        return ATOMIC_NUMBER_TO_SYMBOL.get(atomic_number)
-    
-    @property
-    def is_natural(self) -> bool:
-        """Check if this is a natural element (ZAID ending in '00').
-        
-        :returns: True if this is a natural element, False otherwise
-        :rtype: bool
-        """
-        return self.zaid % 1000 == 0 and self.zaid > 1000
-        
-    def convert_natural_element(self) -> None:
-        if not self.is_natural:
-            raise ValueError(f"Nuclide with ZAID {self.zaid} is not a natural element (ZAID does not end in '00')")
-        
-        atomic_number = self.zaid // 1000
-        atomic_key = atomic_number * 1000  # e.g., 6000 for carbon
-        
-        if atomic_key not in NATURAL_ABUNDANCE:
-            raise ValueError(f"No natural abundance data available for element ZAID {self.zaid}")
-        
-        original_fraction = abs(self.fraction)
-        natural_isotopes = NATURAL_ABUNDANCE[atomic_key]
-        
-        if self.fraction < 0:
-            # Weight density provided: compute isotopic mass densities
-            total_mass_per_atom = 0.0
-            isotope_masses = {}
-            # Compute the average atomic mass
-            for iso_zaid, atomic_abundance in natural_isotopes.items():
-                iso_mass = ATOMIC_MASS.get(iso_zaid, iso_zaid % 1000)
-                isotope_masses[iso_zaid] = iso_mass
-                total_mass_per_atom += atomic_abundance * iso_mass
+        Parameters
+        ----------
+        material : Material
+            Material to add.
             
-            # Compute and print isotopic mass densities
-            for iso_zaid, atomic_abundance in sorted(natural_isotopes.items()):
-                iso_mass = isotope_masses[iso_zaid]
-                iso_mass_fraction = (atomic_abundance * iso_mass) / total_mass_per_atom
-                iso_mass_density = -(original_fraction * iso_mass_fraction)
-                print(f"{iso_zaid} {iso_mass_density:.6e}")
+        Returns
+        -------
+        None
+        
+        Raises
+        ------
+        ValueError
+            If a material with the same ID already exists.
+        """
+        if material.id in self.by_id:
+            raise ValueError(f"Material ID {material.id} already exists in collection")
+        self.by_id[material.id] = material
+
+    def to_mcnp(self) -> str:
+        """Serialise all materials as MCNP material cards.
+        
+        Returns
+        -------
+        str
+            All material cards concatenated with newlines.
+        """
+        return "\n".join(material.to_mcnp() for material in self.by_id.values())
+
+    def to_file(self, filepath: str, material_ids: Optional[List[int]] = None, 
+                header: bool = True) -> None:
+        """Export materials to a new file in MCNP format.
+        
+        This creates a new file containing only material cards. Use this when
+        you want to export materials separately from a full MCNP input file.
+        
+        Parameters
+        ----------
+        filepath : str
+            Path to the output file.
+        material_ids : list of int, optional
+            Specific material IDs to write. If None, writes all materials.
+        header : bool, optional
+            Whether to include KIKA header/footer comments. Default is True.
+            
+        Returns
+        -------
+        None
+        
+        Examples
+        --------
+        >>> collection.to_file("materials.txt")  # Export all materials
+        >>> collection.to_file("subset.txt", material_ids=[1, 2, 3])  # Export specific ones
+        """
+        from .._constants import MCNPY_HEADER, MCNPY_FOOTER
+        
+        # Determine which materials to write
+        if material_ids is None:
+            materials_to_write = list(self.by_id.values())
         else:
-            # Atomic fractions provided: expand directly using atomic abundance
-            for iso_zaid, atomic_abundance in sorted(natural_isotopes.items()):
-                fraction = original_fraction * atomic_abundance
-                print(f"{iso_zaid} {fraction:.6e}")
-    
-    def __repr__(self) -> str:
-        """Return a string representation of the nuclide.
+            materials_to_write = [self.by_id[mid] for mid in material_ids if mid in self.by_id]
         
-        :returns: String representation of the nuclide
-        :rtype: str
+        content_lines = []
+        
+        if header:
+            content_lines.append(MCNPY_HEADER)
+            content_lines.append("c \n")
+        
+        for material in materials_to_write:
+            content_lines.append(material.to_mcnp() + "\n")
+            content_lines.append("c \n")
+        
+        if header:
+            content_lines.append(MCNPY_FOOTER)
+        
+        with open(filepath, 'w') as f:
+            f.writelines(content_lines)
+
+    def _materials_equal(self, mat1: Material, mat2: Material) -> bool:
+        """Compare two materials for equality.
+        
+        Two materials are considered equal if they have the same nuclides
+        with the same fractions and libraries.
+        
+        Parameters
+        ----------
+        mat1 : Material
+            First material to compare.
+        mat2 : Material
+            Second material to compare.
+            
+        Returns
+        -------
+        bool
+            True if materials are equal, False otherwise.
         """
-        libs = []
-        if self.nlib:
-            libs.append(f"nlib='{self.nlib}'")
-        if self.plib:
-            libs.append(f"plib='{self.plib}'")
-        if self.ylib:
-            libs.append(f"ylib='{self.ylib}'")
+        if mat1.id != mat2.id:
+            return False
+        if mat1.fraction_type != mat2.fraction_type:
+            return False
+        if len(mat1.nuclide) != len(mat2.nuclide):
+            return False
+        
+        # Compare nuclides by ZAID
+        # Note: Nuclide.libs is a dict, so we need to compare the entire dict
+        nuclides1 = {n.zaid: (n.fraction, frozenset(n.libs.items())) for n in mat1.nuclide.values()}
+        nuclides2 = {n.zaid: (n.fraction, frozenset(n.libs.items())) for n in mat2.nuclide.values()}
+        
+        if set(nuclides1.keys()) != set(nuclides2.keys()):
+            return False
+        
+        for zaid, (frac1, libs1) in nuclides1.items():
+            frac2, libs2 = nuclides2[zaid]
+            # Use relative tolerance for fraction comparison
+            if abs(frac1 - frac2) > 1e-10 * max(abs(frac1), abs(frac2), 1e-10):
+                return False
+            if libs1 != libs2:
+                return False
+        
+        return True
+
+    def write_to_mcnp(self, input_filepath: str, output_filepath: Optional[str] = None,
+                      material_ids: Optional[List[int]] = None,
+                      force_rewrite: bool = False) -> List[int]:
+        """Update materials in an MCNP input file, only modifying those that changed.
+        
+        This method reads the original file, compares materials, and only updates
+        those that have actually changed. Unchanged materials are left as-is,
+        preserving their original formatting and any comments.
+        
+        Parameters
+        ----------
+        input_filepath : str
+            Path to the original MCNP input file.
+        output_filepath : str, optional
+            Path for the output file. If None, updates the input file in place.
+        material_ids : list of int, optional
+            Specific material IDs to consider for update. If None, considers all
+            materials in this collection.
+        force_rewrite : bool, optional
+            If True, rewrites all materials from the collection regardless of
+            whether they changed. Default is False (only update changed materials).
             
-        lib_str = ", ".join(libs)
-        if lib_str:
-            lib_str = f", {lib_str}"
+        Returns
+        -------
+        list of int
+            List of material IDs that were actually updated (changed or added).
             
-        return f"Nuclide(zaid={self.zaid}, fraction={self.fraction:.6e}{lib_str})"
+        Notes
+        -----
+        - Materials that exist in the collection but not in the file will be added
+          at the end of the material cards section.
+        - Materials that exist in the file but not in the collection are left unchanged.
+        - Only materials that have actually changed (different nuclides, fractions,
+          or libraries) are updated, unless force_rewrite=True.
+          
+        Examples
+        --------
+        >>> # Update in place
+        >>> updated = collection.write_to_mcnp("input.i")
+        >>> print(f"Updated materials: {updated}")
+        
+        >>> # Save to new file
+        >>> updated = collection.write_to_mcnp("input.i", "input_modified.i")
+        
+        >>> # Force rewrite all materials
+        >>> updated = collection.write_to_mcnp("input.i", force_rewrite=True)
+        """
+        from .parse_materials import read_material
+        from .._constants import MCNPY_HEADER, MCNPY_FOOTER
+        import shutil
+        
+        # Determine output path and read the file
+        if output_filepath is None:
+            output_filepath = input_filepath
+        
+        # Always read from input_filepath
+        with open(input_filepath, 'r') as f:
+            lines = f.readlines()
+        
+        # If writing to a different file and it's the same as input, 
+        # we'll overwrite the input later
+        # (avoid shutil.copy to prevent permission issues on network drives)
+        
+        # Determine which materials to consider
+        if material_ids is None:
+            ids_to_consider = set(self.by_id.keys())
+        else:
+            ids_to_consider = set(mid for mid in material_ids if mid in self.by_id)
+        
+        # Track which materials we've found in the file and which were updated
+        materials_found = set()
+        materials_updated = []
+        
+        # Find all materials in the file and their positions
+        # We need to process in reverse order to maintain line positions
+        material_positions = []  # List of (mat_id, start_line, end_line)
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip().lower()
+            
+            # Check if this line starts a material definition
+            if stripped.startswith('m') and not stripped.startswith('mt') and not stripped.startswith('mode'):
+                # Try to extract material ID
+                import re
+                match = re.match(r'm(\d+)\s*', stripped)
+                if match:
+                    mat_id = int(match.group(1))
+                    _, end_pos = read_material(lines, i)
+                    material_positions.append((mat_id, i, end_pos))
+                    materials_found.add(mat_id)
+                    i = end_pos
+                    continue
+            i += 1
+        
+        # If force_rewrite, we'll replace the entire material section with one header/footer
+        if force_rewrite and material_positions:
+            # Get the range spanning all materials
+            first_mat_start = material_positions[0][1]
+            last_mat_end = material_positions[-1][2]
+            
+            # Delete the entire material section
+            del lines[first_mat_start:last_mat_end]
+            
+            # Build new material section with single header/footer
+            insert_content = [MCNPY_HEADER]
+            for mat_id in sorted(ids_to_consider):
+                if mat_id in materials_found:  # Only rewrite materials that existed
+                    insert_content.append(self.by_id[mat_id].to_mcnp() + "\n")
+                    materials_updated.append(mat_id)
+            insert_content.append(MCNPY_FOOTER)
+            
+            # Insert the entire section at once
+            for j, content_line in enumerate(insert_content):
+                lines.insert(first_mat_start + j, content_line)
+        else:
+            # Process materials in reverse order to maintain line positions
+            for mat_id, start_line, end_line in reversed(material_positions):
+                if mat_id not in ids_to_consider:
+                    continue
+                
+                # Parse the existing material from file
+                existing_material, _ = read_material(lines, start_line)
+                if existing_material is None:
+                    continue
+                
+                new_material = self.by_id[mat_id]
+                
+                # Compare materials - only update if different
+                if self._materials_equal(existing_material, new_material):
+                    # Materials are the same, skip update
+                    continue
+                
+                # Materials differ - update
+                del lines[start_line:end_line]
+                
+                # Insert updated material with header/footer
+                insert_content = [
+                    MCNPY_HEADER,
+                    new_material.to_mcnp() + "\n",
+                    MCNPY_FOOTER,
+                ]
+                for j, content_line in enumerate(insert_content):
+                    lines.insert(start_line + j, content_line)
+                
+                materials_updated.append(mat_id)
+        
+        # Add new materials (those in collection but not in file)
+        new_material_ids = ids_to_consider - materials_found
+        if new_material_ids:
+            # Find the position right after the last material
+            insert_position = len(lines)
+            
+            if material_positions:
+                # Get the last material's end position
+                _, _, last_end = material_positions[-1]
+                insert_position = last_end
+            
+            # Add new materials with KIKA header/footer but no extra comments
+            new_content = []
+            new_content.append(MCNPY_HEADER)
+            
+            for mat_id in sorted(new_material_ids):
+                new_content.append(self.by_id[mat_id].to_mcnp() + "\n")
+                materials_updated.append(mat_id)
+            
+            new_content.append(MCNPY_FOOTER)
+            
+            for j, content_line in enumerate(new_content):
+                lines.insert(insert_position + j, content_line)
+        
+        # Write back to file
+        with open(output_filepath, 'w') as f:
+            f.writelines(lines)
+        
+        return sorted(materials_updated)
+
+    @classmethod
+    def from_mcnp(cls, path: str) -> MaterialCollection:
+        """Create a MaterialCollection from an MCNP input file.
+        
+        Parameters
+        ----------
+        path : str
+            Path to MCNP input file.
+            
+        Returns
+        -------
+        MaterialCollection
+            Collection of materials parsed from the file.
+        """
+        from .parse_input import read_mcnp
+
+        input_obj = read_mcnp(path)
+        return input_obj.materials
+
+    def __str__(self) -> str:
+        """Return a user-friendly string representation of the collection.
+        
+        Returns
+        -------
+        str
+            Formatted string showing materials summary and table.
+        """
+        header_width = 80
+        lines = []
+        lines.append("=" * header_width)
+        lines.append(f"{'MCNP Materials Collection':^{header_width}}")
+        lines.append("=" * header_width)
+        
+        materials_count = len(self.by_id)
+        lines.append(f"\nTotal Materials: {materials_count}\n")
+        
+        if materials_count > 0:
+            # Table header
+            table_width = 80
+            lines.append("-" * table_width)
+            lines.append(f"{'ID':^12} | {'Nuclides':^10} | {'Type':^10} | {'Libraries':^38}")
+            lines.append("-" * table_width)
+            
+            # Table rows
+            for mat_id in sorted(self.by_id.keys()):
+                material = self.by_id[mat_id]
+                nuclide_count = len(material.nuclide)
+                
+                frac_type = "Atomic" if material.is_atomic else "Weight"
+                
+                # Gather all libraries (material-level and nuclide-level)
+                libs_set = set()
+                if material.libs:
+                    for k, v in material.libs.items():
+                        libs_set.add(v)
+                
+                for nuclide in material.nuclide.values():
+                    if nuclide.libs:
+                        for k, v in nuclide.libs.items():
+                            libs_set.add(v)
+                
+                lib_str = ", ".join(sorted(libs_set)) if libs_set else "default"
+                if len(lib_str) > 36:
+                    lib_str = lib_str[:33] + "..."
+                
+                lines.append(f"{mat_id:^12} | {nuclide_count:^10} | {frac_type:^10} | {lib_str:^38}")
+            
+            lines.append("-" * table_width)
+        
+        # Available methods
+        lines.append("\nAvailable methods:")
+        lines.append("  .add_material(material)  - Add a material to the collection")
+        lines.append("  .to_mcnp()               - Export all materials as MCNP cards")
+        lines.append("  .by_id[material_id]      - Access a specific material by ID")
+        
+        # Examples
+        lines.append("\nExamples of accessing data:")
+        lines.append("  collection.by_id[1]      - Access material with ID 1")
+        lines.append("  for mat in collection:   - Iterate over all materials")
+        
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        """Return the same formatted representation as __str__.
+        
+        Returns
+        -------
+        str
+            Formatted collection representation.
+        """
+        return self.__str__()

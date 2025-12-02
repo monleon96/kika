@@ -1,6 +1,6 @@
 from .input import Input
 from .perturbations import Perturbation, Pert
-from .material import Mat, Materials
+from .material import Material, MaterialCollection
 from .parse_materials import read_material
 import re
 
@@ -95,7 +95,7 @@ def read_mcnp(file_path):
     """
     inst = Input()  # instance of the input class
     inst.perturbation = Perturbation()
-    inst.materials = Materials()
+    inst.materials = MaterialCollection()
     
     with open(file_path, 'r') as f:
         lines = f.readlines()
@@ -110,9 +110,8 @@ def read_mcnp(file_path):
         elif line.startswith("m"):
             material_obj, i = read_material(lines, i)
             if material_obj:
-                inst.materials.mat[material_obj.id] = material_obj
+                inst.materials.by_id[material_obj.id] = material_obj
         else:
             i += 1
             
     return inst
-

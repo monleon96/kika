@@ -317,16 +317,26 @@ class SensitivityData:
         self.nuclide = f"{ATOMIC_NUMBER_TO_SYMBOL[z]}-{a}"
 
     def plot_sensitivity(self, energy: Union[str, List[str]] = None, 
-             reaction: Union[List[int], int] = None, xlim: tuple = None):
+             reaction: Union[List[int], int] = None, energy_range: tuple = None, xlog: bool = False, ylog: bool = False):
         """Plot sensitivity coefficients for specified energies and reactions.
 
-        :param energy: Energy string(s) to plot. If None, plots all energies
-        :type energy: Union[str, List[str]], optional
-        :param reaction: Reaction number(s) to plot. If None, plots all reactions
-        :type reaction: Union[List[int], int], optional
-        :param xlim: Optional x-axis limits as (min, max)
-        :type xlim: tuple, optional
-        :raises ValueError: If specified energies are not found in the data
+        Parameters
+        ----------
+        energy : Union[str, List[str]], optional
+            Energy string(s) to plot. If None, plots all energies.
+        reaction : Union[List[int], int], optional
+            Reaction number(s) to plot. If None, plots all reactions.
+        energy_range : tuple, optional
+            Optional x-axis limits as (min, max).
+        xlog : bool, optional
+            Whether to use logarithmic scale for x-axis. Default is False.
+        ylog : bool, optional
+            Whether to use logarithmic scale for y-axis. Default is False.
+
+        Raises
+        ------
+        ValueError
+            If specified energies are not found in the data.
         """
         # If no energy specified, use all energies
         if energy is None:
@@ -389,11 +399,19 @@ class SensitivityData:
                     ax.axis('off')
                 else:
                     coef = coeffs_dict[rxn]
-                    coef.plot(ax=ax, xlim=xlim)
+                    coef.plot(ax=ax, xlim=energy_range)
 
             # Hide any extra subplots
             for j in range(n, len(axes)):
                 axes[j].axis('off')
+            
+            # Apply logarithmic scales if requested
+            if xlog:
+                for ax in axes:
+                    ax.set_xscale('log')
+            if ylog:
+                for ax in axes:
+                    ax.set_yscale('log')
             
             plt.tight_layout()
             plt.show()
