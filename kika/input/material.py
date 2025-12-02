@@ -149,6 +149,103 @@ class Nuclide:
         return self.__str__()
 
 
+class NuclideAccessor:
+    """Dictionary-like accessor that allows retrieving nuclides by ZAID or symbol.
+    
+    This wrapper allows accessing nuclides using either:
+    - Symbol (str): e.g., 'Fe56', 'U235', 'Fe' (natural)
+    - ZAID (int): e.g., 26056, 92235, 26000 (natural)
+    
+    String symbols are normalized through ZAID conversion for consistency,
+    so 'Fe', 'fe', and 26000 all map to the same nuclide.
+    
+    Examples
+    --------
+    >>> material.nuclide['Fe56']  # Access by symbol
+    >>> material.nuclide[26056]    # Access by ZAID
+    >>> material.nuclide['Fe']     # Access natural Fe
+    >>> material.nuclide[26000]    # Access natural Fe by ZAID
+    """
+    
+    def __init__(self, nuclide_dict: Dict[str, Nuclide]):
+        self._dict = nuclide_dict
+    
+    def __getitem__(self, key: Union[str, int]) -> Nuclide:
+        """Get nuclide by symbol (str) or ZAID (int)."""
+        if isinstance(key, int):
+            # Convert ZAID to symbol
+            symbol = zaid_to_symbol(key)
+        else:
+            # Normalize string through ZAID conversion for consistency
+            # This ensures 'Fe', 'fe', 'FE' all map to the same key
+            zaid = symbol_to_zaid(key)
+            symbol = zaid_to_symbol(zaid)
+        return self._dict[symbol]
+    
+    def __setitem__(self, key: Union[str, int], value: Nuclide) -> None:
+        """Set nuclide by symbol (str) or ZAID (int)."""
+        if isinstance(key, int):
+            # Convert ZAID to symbol
+            symbol = zaid_to_symbol(key)
+        else:
+            # Normalize string through ZAID conversion
+            zaid = symbol_to_zaid(key)
+            symbol = zaid_to_symbol(zaid)
+        self._dict[symbol] = value
+    
+    def __delitem__(self, key: Union[str, int]) -> None:
+        """Delete nuclide by symbol (str) or ZAID (int)."""
+        if isinstance(key, int):
+            # Convert ZAID to symbol
+            symbol = zaid_to_symbol(key)
+        else:
+            # Normalize string through ZAID conversion
+            zaid = symbol_to_zaid(key)
+            symbol = zaid_to_symbol(zaid)
+        del self._dict[symbol]
+    
+    def __contains__(self, key: Union[str, int]) -> bool:
+        """Check if nuclide exists by symbol (str) or ZAID (int)."""
+        if isinstance(key, int):
+            # Convert ZAID to symbol
+            symbol = zaid_to_symbol(key)
+        else:
+            # Normalize string through ZAID conversion
+            try:
+                zaid = symbol_to_zaid(key)
+                symbol = zaid_to_symbol(zaid)
+            except ValueError:
+                return False
+        return symbol in self._dict
+    
+    def __iter__(self):
+        """Iterate over nuclide symbols."""
+        return iter(self._dict)
+    
+    def __len__(self) -> int:
+        """Return number of nuclides."""
+        return len(self._dict)
+    
+    def keys(self):
+        """Return view of nuclide symbols."""
+        return self._dict.keys()
+    
+    def values(self):
+        """Return view of nuclide objects."""
+        return self._dict.values()
+    
+    def items(self):
+        """Return view of (symbol, nuclide) pairs."""
+        return self._dict.items()
+    
+    def get(self, key: Union[str, int], default=None):
+        """Get nuclide by symbol or ZAID with optional default."""
+        try:
+            return self[key]
+        except (KeyError, ValueError):
+            return default
+
+
 @dataclass
 class Material:
     """General-purpose material representation.
@@ -180,7 +277,7 @@ class Material:
     """
 
     id: int
-    nuclide: Dict[str, Nuclide] = field(default_factory=dict)  # Now keyed by symbol, not ZAID
+    nuclide: Union[Dict[str, Nuclide], NuclideAccessor] = field(default_factory=dict)  # Keyed by symbol, accessible by symbol or ZAID
     libs: Dict[str, str] = field(default_factory=dict)
     name: Optional[str] = None
     fraction_type: str = "ao"
@@ -192,9 +289,18 @@ class Material:
     def __post_init__(self) -> None:
         _validate_fraction_type(self.fraction_type)
         self.libs = dict(self.libs)
-        for nuc in self.nuclide.values():
-            nuc.fraction = float(abs(nuc.fraction))
-            nuc.libs = dict(nuc.libs)
+        
+        # Convert nuclide to internal dict if needed, then wrap with accessor
+        if isinstance(self.nuclide, dict) and not isinstance(self.nuclide, NuclideAccessor):
+            nuclide_dict = dict(self.nuclide)
+            for nuc in nuclide_dict.values():
+                nuc.fraction = float(abs(nuc.fraction))
+                nuc.libs = dict(nuc.libs)
+            self.nuclide = NuclideAccessor(nuclide_dict)
+        elif isinstance(self.nuclide, NuclideAccessor):
+            for nuc in self.nuclide.values():
+                nuc.fraction = float(abs(nuc.fraction))
+                nuc.libs = dict(nuc.libs)
 
         if self.density is not None:
             self.density = float(self.density)
@@ -689,27 +795,114 @@ class Material:
     def to_mcnp(self) -> str:
         """Serialise the material as an MCNP ``m`` card.
         
+        The output includes MCNP comments with:
+        - Material name (if set) as a comment before the material card
+        - Density in both g/cc and atoms/b-cm (if set) as a comment after libraries
+        - Nuclide symbol after each fraction line
+        
         Returns
         -------
         str
             MCNP material card formatted as a multi-line string.
         """
-        lines = [f"m{self.id}"]
-
+        output_lines = []
+        
+        # Add material name as comment if present
+        if self.name:
+            output_lines.append(f"c KIKA_MAT_NAME: {self.name}")
+        
+        # Build main material line
+        main_line = f"m{self.id}"
         lib_parts = [f"{k}={v}" for k, v in sorted(self.libs.items())]
         if lib_parts:
-            lines[0] += " " + " ".join(lib_parts)
+            main_line += " " + " ".join(lib_parts)
+        
+        # Add density comment if density is set
+        if self.density is not None and self.density_unit is not None:
+            density_gcc = self.density_in("g/cc")
+            # Calculate atomic density (atoms/b-cm) if we have the molecular weight
+            atomic_density = self._calculate_atomic_density()
+            if atomic_density is not None:
+                main_line += f"  $ KIKA_DENSITY: {density_gcc:.6e} g/cc, {atomic_density:.6e} atoms/b-cm"
+            else:
+                main_line += f"  $ KIKA_DENSITY: {density_gcc:.6e} g/cc"
+        
+        output_lines.append(main_line)
 
         sign = -1.0 if self.is_weight else 1.0
         for symbol, nuclide in sorted(self.nuclide.items()):
             zaid = nuclide.zaid
+            # Get element symbol for comment
+            nuclide_symbol = nuclide.symbol
+            
+            # Format with fixed column widths for alignment
+            # ZAID+lib column: 12 chars, fraction: 14 chars, symbol: 6 chars
             if nuclide.libs:
                 for key, lib in sorted(nuclide.libs.items()):
-                    lines.append(f"\t{zaid}.{lib} {self._format_fraction(sign * nuclide.fraction)}")
+                    zaid_lib = f"{zaid}.{lib}"
+                    output_lines.append(
+                        f"     {zaid_lib:<12} {self._format_fraction(sign * nuclide.fraction):>14}   $ {nuclide_symbol:<6}"
+                    )
             else:
-                lines.append(f"\t{zaid} {self._format_fraction(sign * nuclide.fraction)}")
+                output_lines.append(
+                    f"     {zaid:<12} {self._format_fraction(sign * nuclide.fraction):>14}   $ {nuclide_symbol:<6}"
+                )
 
-        return "\n".join(lines)
+        return "\n".join(output_lines)
+
+    def _calculate_atomic_density(self) -> Optional[float]:
+        """Calculate atomic density in atoms/barn-cm from mass density.
+        
+        Uses Avogadro's number and the effective molecular weight of the material.
+        
+        Returns
+        -------
+        float or None
+            Atomic density in atoms/b-cm, or None if calculation is not possible.
+        """
+        if self.density is None or self.density_unit is None:
+            return None
+        
+        # Get mass density in g/cc
+        density_gcc = self.density_in("g/cc")
+        
+        # Calculate effective atomic/molecular weight
+        # For atomic fractions: M_eff = sum(x_i * M_i)
+        # For weight fractions: 1/M_eff = sum(w_i / M_i)
+        
+        total_weight = 0.0
+        total_fraction = 0.0
+        
+        for symbol, nuclide in self.nuclide.items():
+            atomic_mass = self._get_effective_atomic_mass(nuclide.zaid)
+            if atomic_mass <= 0:
+                return None
+            
+            if self.is_atomic:
+                total_weight += nuclide.fraction * atomic_mass
+                total_fraction += nuclide.fraction
+            else:  # weight fraction
+                total_weight += nuclide.fraction / atomic_mass
+                total_fraction += nuclide.fraction
+        
+        if total_fraction <= 0:
+            return None
+        
+        if self.is_atomic:
+            # For atomic fractions: average atomic mass
+            avg_atomic_mass = total_weight / total_fraction
+        else:
+            # For weight fractions: harmonic mean
+            avg_atomic_mass = total_fraction / total_weight
+        
+        # Avogadro's number
+        N_A = 6.02214076e23  # atoms/mol
+        # Conversion: 1 barn = 1e-24 cm^2, so atoms/b-cm = atoms/cm^3 * 1e-24
+        
+        # atomic_density = (density * N_A / M) * 1e-24
+        atomic_density = (density_gcc * N_A / avg_atomic_mass) * 1e-24
+        
+        return atomic_density
 
     def __str__(self) -> str:
         """Return a user-friendly string representation of the material.
@@ -720,72 +913,70 @@ class Material:
             Formatted string showing material properties and composition.
         """
         lines = []
-        lines.append("=" * 80)
-        title = f"Material {self.id}"
-        if self.name:
-            title += f": {self.name}"
-        lines.append(f"{title:^80}")
-        lines.append("=" * 80)
+        lines.append("=" * 50)
+        lines.append(f"{'MCNP Material (ID: ' + str(self.id) + ')':^50}")
+        lines.append("=" * 50)
+        lines.append("")
         
-        # Format all material attributes in two columns
-        lines.append(f"{'Name:':<30} {self.name if self.name else 'None'}")
-        lines.append(f"{'Fraction Type:':<30} {self.fraction_type}")
-        lines.append(f"{'Number of Nuclides:':<30} {len(self.nuclide)}")
-        
-        # Density
-        if self.density is not None:
-            density_str = f"{self.density} {self.density_unit if self.density_unit else ''}"
-        else:
-            density_str = "None"
-        lines.append(f"{'Density:':<30} {density_str}")
-        
-        # Temperature in Kelvin
-        if self.temperature is not None:
-            temp_str = f"{self.temperature} K"
-        else:
-            temp_str = "None"
-        lines.append(f"{'Temperature:':<30} {temp_str}")
-        
-        # Material-level libraries
+        # MCNP Libraries (material-level)
         if self.libs:
             lib_str = ", ".join(f"{k}={v}" for k, v in sorted(self.libs.items()))
-        else:
-            lib_str = "None"
-        lines.append(f"{'Libraries:':<30} {lib_str}")
+            lines.append(f"MCNP Libraries: {lib_str}")
         
-        # Metadata
-        if self.metadata:
-            meta_str = str(self.metadata)
-            if len(meta_str) > 48:
-                meta_str = meta_str[:45] + "..."
-            lines.append(f"{'Metadata:':<30} {meta_str}")
-        else:
-            lines.append(f"{'Metadata:':<30} None")
+        # Total nuclides count
+        lines.append(f"Total Nuclides: {len(self.nuclide)}")
+        lines.append("")
         
-        # Nuclide composition table (without Libraries column)
+        # Fraction type before the table
+        fraction_type_label = "Atomic" if self.fraction_type == "ao" else "Weight"
+        lines.append(f"Fraction Type: {fraction_type_label}")
+        lines.append("")
+        
+        # Check if any nuclide has specific libraries
+        has_nuclide_libs = any(nuc.libs for nuc in self.nuclide.values())
+        
+        # Nuclide composition table
         if self.nuclide:
-            lines.append("\n" + "-" * 80)
-            lines.append(f"{'Symbol':^15} | {'ZAID':^12} | {'Fraction':^18} | {'Type':^8}")
-            lines.append("-" * 80)
+            lines.append("-" * 50)
+            if has_nuclide_libs:
+                # Show libraries column only if there are nuclide-specific libraries
+                lines.append(f"{'ZAID':^8} | {'Element':^8} | {'Fraction':^14} | {'Libraries':^12}")
+            else:
+                lines.append(f"{'ZAID':^8} | {'Element':^8} | {'Fraction':^14}")
+            lines.append("-" * 50)
             
-            for symbol in sorted(self.nuclide.keys()):
-                nuc = self.nuclide[symbol]
-                lines.append(f"{symbol:^15} | {nuc.zaid:^12} | {nuc.fraction:^18.6e} | {self.fraction_type:^8}")
+            # Sort by ZAID for consistent ordering
+            sorted_nuclides = sorted(self.nuclide.items(), key=lambda x: x[1].zaid)
             
-            lines.append("-" * 80)
+            for symbol, nuc in sorted_nuclides:
+                element = nuc.element if nuc.element else "?"
+                
+                if has_nuclide_libs:
+                    if nuc.libs:
+                        lib_str = ", ".join(f"{v}" for k, v in sorted(nuc.libs.items()))
+                        if len(lib_str) > 10:
+                            lib_str = lib_str[:9] + "…"
+                    else:
+                        lib_str = "-"
+                    lines.append(f"{nuc.zaid:^8} | {element:^8} | {nuc.fraction:^14.6e} | {lib_str:^12}")
+                else:
+                    lines.append(f"{nuc.zaid:^8} | {element:^8} | {nuc.fraction:^14.6e}")
+            
+            lines.append("-" * 50)
         
         # Usage information
-        lines.append("\nAvailable methods:")
-        lines.append("  .add_nuclide()           - Add a nuclide by symbol or ZAID")
-        lines.append("  .add_element()           - Add a natural element by symbol")
-        lines.append("  .normalize()             - Normalize fractions to sum to 1.0")
-        lines.append("  .to_weight_fraction()    - Convert to weight fractions")
-        lines.append("  .to_atomic_fraction()    - Convert to atomic fractions")
-        lines.append("  .expand_natural_elements() - Expand natural elements to isotopes")
-        lines.append("  .set_density()           - Set material density")
-        lines.append("  .set_temperature()       - Set material temperature (Kelvin)")
-        lines.append("  .to_mcnp()               - Export as MCNP material card")
-        lines.append("  .copy(new_id)            - Create a copy with a new ID")
+        lines.append("")
+        lines.append("Available methods:")
+        lines.append("- .to_weight_fraction() - Convert material to weight fractions")
+        lines.append("- .to_atomic_fraction() - Convert material to atomic fractions")
+        lines.append("- .expand_natural_elements() - Expand natural elements to isotopes")
+        lines.append("- .copy(new_id) - Create a copy with a new material ID")
+        lines.append("")
+        lines.append("Examples of accessing data:")
+        lines.append("- .nuclide['Fe56'] - Access nuclide by symbol")
+        lines.append("- .nuclide[26056] - Access nuclide by ZAID")
+        lines.append("- .nuclide['Fe'] or .nuclide[26000] - Access natural Fe")
+        lines.append("- print(material) - Print material in MCNP format")
         
         return "\n".join(lines)
 
@@ -832,17 +1023,6 @@ class MaterialCollection:
 
     by_id: Dict[int, Material] = field(default_factory=dict)
 
-    @property
-    def mat(self) -> Dict[int, Material]:
-        """Dictionary of materials keyed by ID.
-        
-        Returns
-        -------
-        dict of int to Material
-            Materials dictionary.
-        """
-        return self.by_id
-
     def __iter__(self) -> Iterable[Material]:
         return iter(self.by_id.values())
 
@@ -879,6 +1059,276 @@ class MaterialCollection:
             All material cards concatenated with newlines.
         """
         return "\n".join(material.to_mcnp() for material in self.by_id.values())
+
+    def to_file(self, filepath: str, material_ids: Optional[List[int]] = None, 
+                header: bool = True) -> None:
+        """Export materials to a new file in MCNP format.
+        
+        This creates a new file containing only material cards. Use this when
+        you want to export materials separately from a full MCNP input file.
+        
+        Parameters
+        ----------
+        filepath : str
+            Path to the output file.
+        material_ids : list of int, optional
+            Specific material IDs to write. If None, writes all materials.
+        header : bool, optional
+            Whether to include KIKA header/footer comments. Default is True.
+            
+        Returns
+        -------
+        None
+        
+        Examples
+        --------
+        >>> collection.to_file("materials.txt")  # Export all materials
+        >>> collection.to_file("subset.txt", material_ids=[1, 2, 3])  # Export specific ones
+        """
+        from .._constants import MCNPY_HEADER, MCNPY_FOOTER
+        
+        # Determine which materials to write
+        if material_ids is None:
+            materials_to_write = list(self.by_id.values())
+        else:
+            materials_to_write = [self.by_id[mid] for mid in material_ids if mid in self.by_id]
+        
+        content_lines = []
+        
+        if header:
+            content_lines.append(MCNPY_HEADER)
+            content_lines.append("c \n")
+        
+        for material in materials_to_write:
+            content_lines.append(material.to_mcnp() + "\n")
+            content_lines.append("c \n")
+        
+        if header:
+            content_lines.append(MCNPY_FOOTER)
+        
+        with open(filepath, 'w') as f:
+            f.writelines(content_lines)
+
+    def _materials_equal(self, mat1: Material, mat2: Material) -> bool:
+        """Compare two materials for equality.
+        
+        Two materials are considered equal if they have the same nuclides
+        with the same fractions and libraries.
+        
+        Parameters
+        ----------
+        mat1 : Material
+            First material to compare.
+        mat2 : Material
+            Second material to compare.
+            
+        Returns
+        -------
+        bool
+            True if materials are equal, False otherwise.
+        """
+        if mat1.id != mat2.id:
+            return False
+        if mat1.fraction_type != mat2.fraction_type:
+            return False
+        if len(mat1.nuclide) != len(mat2.nuclide):
+            return False
+        
+        # Compare nuclides by ZAID
+        # Note: Nuclide.libs is a dict, so we need to compare the entire dict
+        nuclides1 = {n.zaid: (n.fraction, frozenset(n.libs.items())) for n in mat1.nuclide.values()}
+        nuclides2 = {n.zaid: (n.fraction, frozenset(n.libs.items())) for n in mat2.nuclide.values()}
+        
+        if set(nuclides1.keys()) != set(nuclides2.keys()):
+            return False
+        
+        for zaid, (frac1, libs1) in nuclides1.items():
+            frac2, libs2 = nuclides2[zaid]
+            # Use relative tolerance for fraction comparison
+            if abs(frac1 - frac2) > 1e-10 * max(abs(frac1), abs(frac2), 1e-10):
+                return False
+            if libs1 != libs2:
+                return False
+        
+        return True
+
+    def write_to_mcnp(self, input_filepath: str, output_filepath: Optional[str] = None,
+                      material_ids: Optional[List[int]] = None,
+                      force_rewrite: bool = False) -> List[int]:
+        """Update materials in an MCNP input file, only modifying those that changed.
+        
+        This method reads the original file, compares materials, and only updates
+        those that have actually changed. Unchanged materials are left as-is,
+        preserving their original formatting and any comments.
+        
+        Parameters
+        ----------
+        input_filepath : str
+            Path to the original MCNP input file.
+        output_filepath : str, optional
+            Path for the output file. If None, updates the input file in place.
+        material_ids : list of int, optional
+            Specific material IDs to consider for update. If None, considers all
+            materials in this collection.
+        force_rewrite : bool, optional
+            If True, rewrites all materials from the collection regardless of
+            whether they changed. Default is False (only update changed materials).
+            
+        Returns
+        -------
+        list of int
+            List of material IDs that were actually updated (changed or added).
+            
+        Notes
+        -----
+        - Materials that exist in the collection but not in the file will be added
+          at the end of the material cards section.
+        - Materials that exist in the file but not in the collection are left unchanged.
+        - Only materials that have actually changed (different nuclides, fractions,
+          or libraries) are updated, unless force_rewrite=True.
+          
+        Examples
+        --------
+        >>> # Update in place
+        >>> updated = collection.write_to_mcnp("input.i")
+        >>> print(f"Updated materials: {updated}")
+        
+        >>> # Save to new file
+        >>> updated = collection.write_to_mcnp("input.i", "input_modified.i")
+        
+        >>> # Force rewrite all materials
+        >>> updated = collection.write_to_mcnp("input.i", force_rewrite=True)
+        """
+        from .parse_materials import read_material
+        from .._constants import MCNPY_HEADER, MCNPY_FOOTER
+        import shutil
+        
+        # Determine output path and read the file
+        if output_filepath is None:
+            output_filepath = input_filepath
+        
+        # Always read from input_filepath
+        with open(input_filepath, 'r') as f:
+            lines = f.readlines()
+        
+        # If writing to a different file and it's the same as input, 
+        # we'll overwrite the input later
+        # (avoid shutil.copy to prevent permission issues on network drives)
+        
+        # Determine which materials to consider
+        if material_ids is None:
+            ids_to_consider = set(self.by_id.keys())
+        else:
+            ids_to_consider = set(mid for mid in material_ids if mid in self.by_id)
+        
+        # Track which materials we've found in the file and which were updated
+        materials_found = set()
+        materials_updated = []
+        
+        # Find all materials in the file and their positions
+        # We need to process in reverse order to maintain line positions
+        material_positions = []  # List of (mat_id, start_line, end_line)
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip().lower()
+            
+            # Check if this line starts a material definition
+            if stripped.startswith('m') and not stripped.startswith('mt') and not stripped.startswith('mode'):
+                # Try to extract material ID
+                import re
+                match = re.match(r'm(\d+)\s*', stripped)
+                if match:
+                    mat_id = int(match.group(1))
+                    _, end_pos = read_material(lines, i)
+                    material_positions.append((mat_id, i, end_pos))
+                    materials_found.add(mat_id)
+                    i = end_pos
+                    continue
+            i += 1
+        
+        # If force_rewrite, we'll replace the entire material section with one header/footer
+        if force_rewrite and material_positions:
+            # Get the range spanning all materials
+            first_mat_start = material_positions[0][1]
+            last_mat_end = material_positions[-1][2]
+            
+            # Delete the entire material section
+            del lines[first_mat_start:last_mat_end]
+            
+            # Build new material section with single header/footer
+            insert_content = [MCNPY_HEADER]
+            for mat_id in sorted(ids_to_consider):
+                if mat_id in materials_found:  # Only rewrite materials that existed
+                    insert_content.append(self.by_id[mat_id].to_mcnp() + "\n")
+                    materials_updated.append(mat_id)
+            insert_content.append(MCNPY_FOOTER)
+            
+            # Insert the entire section at once
+            for j, content_line in enumerate(insert_content):
+                lines.insert(first_mat_start + j, content_line)
+        else:
+            # Process materials in reverse order to maintain line positions
+            for mat_id, start_line, end_line in reversed(material_positions):
+                if mat_id not in ids_to_consider:
+                    continue
+                
+                # Parse the existing material from file
+                existing_material, _ = read_material(lines, start_line)
+                if existing_material is None:
+                    continue
+                
+                new_material = self.by_id[mat_id]
+                
+                # Compare materials - only update if different
+                if self._materials_equal(existing_material, new_material):
+                    # Materials are the same, skip update
+                    continue
+                
+                # Materials differ - update
+                del lines[start_line:end_line]
+                
+                # Insert updated material with header/footer
+                insert_content = [
+                    MCNPY_HEADER,
+                    new_material.to_mcnp() + "\n",
+                    MCNPY_FOOTER,
+                ]
+                for j, content_line in enumerate(insert_content):
+                    lines.insert(start_line + j, content_line)
+                
+                materials_updated.append(mat_id)
+        
+        # Add new materials (those in collection but not in file)
+        new_material_ids = ids_to_consider - materials_found
+        if new_material_ids:
+            # Find the position right after the last material
+            insert_position = len(lines)
+            
+            if material_positions:
+                # Get the last material's end position
+                _, _, last_end = material_positions[-1]
+                insert_position = last_end
+            
+            # Add new materials with KIKA header/footer but no extra comments
+            new_content = []
+            new_content.append(MCNPY_HEADER)
+            
+            for mat_id in sorted(new_material_ids):
+                new_content.append(self.by_id[mat_id].to_mcnp() + "\n")
+                materials_updated.append(mat_id)
+            
+            new_content.append(MCNPY_FOOTER)
+            
+            for j, content_line in enumerate(new_content):
+                lines.insert(insert_position + j, content_line)
+        
+        # Write back to file
+        with open(output_filepath, 'w') as f:
+            f.writelines(lines)
+        
+        return sorted(materials_updated)
 
     @classmethod
     def from_mcnp(cls, path: str) -> MaterialCollection:
@@ -953,11 +1403,11 @@ class MaterialCollection:
         lines.append("\nAvailable methods:")
         lines.append("  .add_material(material)  - Add a material to the collection")
         lines.append("  .to_mcnp()               - Export all materials as MCNP cards")
-        lines.append("  .mat[material_id]        - Access a specific material by ID")
+        lines.append("  .by_id[material_id]      - Access a specific material by ID")
         
         # Examples
         lines.append("\nExamples of accessing data:")
-        lines.append("  collection.mat[1]        - Access material with ID 1")
+        lines.append("  collection.by_id[1]      - Access material with ID 1")
         lines.append("  for mat in collection:   - Iterate over all materials")
         
         return "\n".join(lines)

@@ -1,310 +1,317 @@
 import os
 import re
+from typing import Optional, Union
 from .parse_input import read_mcnp
 from .parse_materials import read_material
+from .material import Material, MaterialCollection
 from kika._constants import MCNPY_HEADER, MCNPY_FOOTER, ATOMIC_MASS, N_AVOGADRO
 
 
-def perturb_material(inputfile, material_number, density, nuclide, pert_mat_id=None, in_place=True, format=None):
+def perturb_material(materials: MaterialCollection, material_id: int, nuclide: Union[int, str], 
+                     density: Optional[float] = None, pert_mat_id: Optional[int] = None, 
+                     in_place: bool = True, fraction_type: Optional[str] = None) -> Union[MaterialCollection, Material]:
     """Creates a perturbed material with 100% increase in the specified nuclide's fraction.
     
-    Reads an MCNP input file, finds the specified material, and creates a new perturbed
-    material with a 100% increase in the fraction of the specified nuclide. The new material
-    is added to the input file right after the original material definition and saved to
-    a new file.
+    Creates a new material with a 100% increase in the fraction of the specified nuclide.
+    The perturbation is applied after normalizing the original material composition.
     
-    The function can handle materials defined with either atomic or weight fractions.
-    The perturbed material will always be written in normalized atomic fractions, 
-    regardless of how the original material was defined.
+    Parameters
+    ----------
+    materials : MaterialCollection
+        The material collection containing the material to perturb.
+    material_id : int
+        Material ID number to be perturbed.
+    nuclide : int or str
+        ZAID (int, e.g., 26056) or symbol (str, e.g., 'Fe56') of the nuclide to perturb.
+    density : float, optional
+        Density of the original material. If positive, interpreted as atoms/barn-cm,
+        if negative, interpreted as g/cm³. Used for density recalculation info.
+        If None, density calculations are skipped.
+    pert_mat_id : int, optional
+        ID for the perturbed material. If None, uses material_id * 100 + 1.
+    in_place : bool, optional
+        If True, adds the perturbed material to the existing collection.
+        If False, returns a new MaterialCollection with both original and perturbed materials.
+        Default is True.
+    fraction_type : str, optional
+        Output fraction type: 'atomic'/'ao' or 'weight'/'wo'.
+        If None, uses the same format as the original material.
     
-    :param inputfile: Path to the MCNP input file
-    :type inputfile: str
-    :param material_number: Material ID number to be perturbed
-    :type material_number: int
-    :param density: Density of the original material. If positive, interpreted as atoms/barn-cm,
-                    if negative, interpreted as g/cm³
-    :type density: float
-    :param nuclide: ZAID of the nuclide to be perturbed
-    :type nuclide: int
-    :param pert_mat_id: Optional ID for the perturbed material. If None, uses material_number*100 + 1
-    :type pert_mat_id: Optional[int]
-    :param in_place: Whether to write the perturbed material to the original input file or a new file
-    :type in_place: bool, optional
-    :param format: Format to use when printing the perturbed material composition.
-                         Can be 'atomic', 'weight' or None. If None, use the same format as original material.
-    :type format: str, optional
+    Returns
+    -------
+    MaterialCollection or Material
+        If in_place is True, returns the perturbed Material (collection is modified).
+        If in_place is False, returns a new MaterialCollection containing original and perturbed.
     
-    :returns: None
-    
-    :raises ValueError: If the material or nuclide is not found in the input file
+    Raises
+    ------
+    ValueError
+        If the material or nuclide is not found.
+        
+    Examples
+    --------
+    >>> # Modify collection in place
+    >>> perturbed = kika.perturb_material(input_data.materials, 1007, 'Fe56')
+    >>> 
+    >>> # Create new collection without modifying original
+    >>> new_collection = kika.perturb_material(input_data.materials, 1007, 26056, in_place=False)
     """
-    # Parse the input file
-    input_data = read_mcnp(inputfile)
+    # Validate material exists
+    if material_id not in materials.by_id:
+        raise ValueError(f"Material {material_id} not found in collection")
     
-    # Check if the material exists
-    if material_number not in input_data.materials.mat:
-        raise ValueError(f"Material {material_number} not found in input file")
+    original_material = materials.by_id[material_id]
     
-    original_material = input_data.materials.mat[material_number]
-    
-    # Check if the nuclide exists in the material
+    # Validate nuclide exists in material
     if nuclide not in original_material.nuclide:
-        raise ValueError(f"Nuclide {nuclide} not found in material {material_number}")
+        raise ValueError(f"Nuclide {nuclide} not found in material {material_id}")
     
-    # Create a new material ID (original ID + 01 or user specified)
-    new_material_id = pert_mat_id if pert_mat_id is not None else material_number * 100 + 1
-    perturbed_material = original_material.copy(new_material_id)
+    # Create perturbed material ID
+    new_material_id = pert_mat_id if pert_mat_id is not None else material_id * 100 + 1
     
-    # Determine if original material uses weight fractions
-    has_weight_fractions = getattr(perturbed_material, "is_weight", False)
+    # Check if new ID already exists
+    if new_material_id in materials.by_id:
+        raise ValueError(f"Material ID {new_material_id} already exists in collection")
     
-    # Ensure the material is in atomic fractions format for perturbation
-    if has_weight_fractions:
-        perturbed_material.to_atomic_fraction()
+    # Create a copy of the original material
+    perturbed_mat = original_material.copy(new_material_id)
     
-    # Normalize the perturbed material composition (if needed)
-    total_fraction = sum(nuclide_obj.fraction for nuclide_obj in perturbed_material.nuclide.values())
+    # Store original fraction type
+    original_is_weight = perturbed_mat.is_weight
+    
+    # Convert to atomic fractions for perturbation (standard practice)
+    if original_is_weight:
+        perturbed_mat.to_atomic_fraction()
+    
+    # Normalize the material composition
+    total_fraction = sum(nuc.fraction for nuc in perturbed_mat.nuclide.values())
     if abs(total_fraction - 1.0) > 1e-6:
         normalization_factor = 1.0 / total_fraction
-        for zaid in perturbed_material.nuclide:
-            perturbed_material.nuclide[zaid].fraction *= normalization_factor
+        for symbol in perturbed_mat.nuclide:
+            perturbed_mat.nuclide[symbol].fraction *= normalization_factor
     
-    # Apply 100% perturbation to the specified nuclide (after normalization)
-    perturbed_material.nuclide[nuclide].fraction *= 2.0
+    # Apply 100% perturbation to the specified nuclide
+    perturbed_mat.nuclide[nuclide].fraction *= 2.0
     
-    # Sum of fractions after perturbation (may not be normalized)
-    new_total = sum(nuclide_obj.fraction for nuclide_obj in perturbed_material.nuclide.values())
+    # Calculate new total (will be > 1.0 due to perturbation)
+    new_total = sum(nuc.fraction for nuc in perturbed_mat.nuclide.values())
     
-    # --------------------------------------------------
-    # Compute average atomic mass for the original material
-    # --------------------------------------------------
+    # Calculate density changes if density provided
+    if density is not None:
+        _calculate_perturbed_density(original_material, perturbed_mat, density, 
+                                     new_total, original_is_weight)
+    
+    # Re-normalize to sum = 1.0
+    renorm_factor = 1.0 / new_total
+    for symbol in perturbed_mat.nuclide:
+        perturbed_mat.nuclide[symbol].fraction *= renorm_factor
+    
+    # Apply output fraction type
+    if fraction_type is None:
+        # Use same format as original
+        if original_is_weight and perturbed_mat.is_atomic:
+            perturbed_mat.to_weight_fraction()
+    elif fraction_type.lower() in ('weight', 'wo'):
+        if perturbed_mat.is_atomic:
+            perturbed_mat.to_weight_fraction()
+    elif fraction_type.lower() in ('atomic', 'ao'):
+        if perturbed_mat.is_weight:
+            perturbed_mat.to_atomic_fraction()
+    else:
+        print(f"WARNING: Unrecognized fraction_type '{fraction_type}'. Using atomic fractions.")
+    
+    # Add metadata about perturbation
+    perturbed_mat.metadata['perturbation'] = {
+        'original_material_id': material_id,
+        'perturbed_nuclide': nuclide,
+        'perturbation_factor': 2.0,
+    }
+    
+    if in_place:
+        # Add to existing collection
+        materials.by_id[new_material_id] = perturbed_mat
+        print(f"Perturbed material {new_material_id} added to collection (100% increase in {nuclide})")
+        return perturbed_mat
+    else:
+        # Create new collection with both materials
+        new_collection = MaterialCollection()
+        new_collection.by_id[material_id] = original_material.copy(material_id)
+        new_collection.by_id[new_material_id] = perturbed_mat
+        print(f"Created new collection with original ({material_id}) and perturbed ({new_material_id}) materials")
+        return new_collection
+
+
+def _calculate_perturbed_density(original_material: Material, perturbed_material: Material,
+                                  density: float, new_total: float, 
+                                  original_is_weight: bool) -> None:
+    """Calculate and print density information for perturbed material.
+    
+    This is a helper function that calculates how the density changes
+    after perturbation, sets the density attributes on the material objects,
+    and prints the information.
+    
+    The density parameter follows MCNP convention:
+    - Negative value: mass density in g/cm³
+    - Positive value: atomic density in atoms/barn-cm
+    """
+    # Compute average atomic mass for original material
     avg_atomic_mass = 0.0
-    if has_weight_fractions:
-        # For weight fractions: convert using X_i = (w_i/A_i)/sum(w_j/A_j)
+    
+    if original_is_weight:
         sum_w_over_A = 0.0
-        for zaid, nuclide_obj in original_material.nuclide.items():
+        for symbol, nuclide_obj in original_material.nuclide.items():
             fraction = abs(nuclide_obj.fraction)
-            # Get atomic mass from dictionary or approximate
-            if zaid in ATOMIC_MASS:
-                atomic_mass = ATOMIC_MASS[zaid]
-            else:
-                atomic_number = zaid // 1000
-                mass_number = zaid % 1000
-                atomic_mass = float(mass_number) if mass_number > 0 else 1.0
-                print(f"WARNING: Atomic mass not found for nuclide {zaid}. Using mass number {mass_number} as an approximation.")
+            zaid = nuclide_obj.zaid
+            atomic_mass = ATOMIC_MASS.get(zaid, float(zaid % 1000) if zaid % 1000 > 0 else 1.0)
             sum_w_over_A += fraction / atomic_mass
         avg_atomic_mass = 1.0 / sum_w_over_A
     else:
-        # For atomic fractions: normalize and compute the weighted average
-        total_original = sum(nuclide_obj.fraction for nuclide_obj in original_material.nuclide.values())
-        for zaid, nuclide_obj in original_material.nuclide.items():
+        total_original = sum(nuc.fraction for nuc in original_material.nuclide.values())
+        for symbol, nuclide_obj in original_material.nuclide.items():
             fraction = nuclide_obj.fraction / total_original
-            if zaid in ATOMIC_MASS:
-                atomic_mass = ATOMIC_MASS[zaid]
-            else:
-                atomic_number = zaid // 1000
-                mass_number = zaid % 1000
-                atomic_mass = float(mass_number) if mass_number > 0 else 1.0
-                print(f"WARNING: Atomic mass not found for nuclide {zaid}. Using mass number {mass_number} as an approximation.")
+            zaid = nuclide_obj.zaid
+            atomic_mass = ATOMIC_MASS.get(zaid, float(zaid % 1000) if zaid % 1000 > 0 else 1.0)
             avg_atomic_mass += fraction * atomic_mass
     
-    # --------------------------------------------------
-    # Convert between atomic density and mass density using avg_atomic_mass
-    # --------------------------------------------------
+    # Convert between density types
     abs_density = abs(density)
     if density < 0:
-        # Input density is in g/cm³ (mass density)
         mass_density = abs_density
-        # Convert to atomic density: (g/cm³) * (N_AVOGADRO / avg_atomic_mass) * 1e-24
         atomic_density = mass_density * N_AVOGADRO / avg_atomic_mass * 1e-24
     else:
-        # Input density is in atoms/barn-cm (atomic density)
         atomic_density = abs_density
-        # Convert to mass density: (atoms/barn-cm) * (avg_atomic_mass / N_AVOGADRO) * 1e24
         mass_density = atomic_density * avg_atomic_mass / N_AVOGADRO * 1e24
     
-    # Calculate new densities after perturbation
-    new_atomic_density = atomic_density * new_total  # because the nuclide fraction increased
+    # Calculate new densities
+    new_atomic_density = atomic_density * new_total
+    
     # Recalculate average atomic mass for perturbed material
     new_avg_atomic_mass = 0.0
-    # Use normalized fractions for the calculation
-    for zaid, nuclide_obj in perturbed_material.nuclide.items():
+    for symbol, nuclide_obj in perturbed_material.nuclide.items():
         fraction = nuclide_obj.fraction / new_total
-        if zaid in ATOMIC_MASS:
-            atomic_mass = ATOMIC_MASS[zaid]
-        else:
-            atomic_number = zaid // 1000
-            mass_number = zaid % 1000
-            atomic_mass = float(mass_number) if mass_number > 0 else 1.0
+        zaid = nuclide_obj.zaid
+        atomic_mass = ATOMIC_MASS.get(zaid, float(zaid % 1000) if zaid % 1000 > 0 else 1.0)
         new_avg_atomic_mass += fraction * atomic_mass
     
-    # Calculate new mass density based on perturbed composition
     new_mass_density = new_atomic_density * new_avg_atomic_mass / N_AVOGADRO * 1e24
     
-    # Re-normalize the perturbed material to maintain sum = 1.0
-    renormalization_factor = 1.0 / new_total
-    for zaid in perturbed_material.nuclide:
-        perturbed_material.nuclide[zaid].fraction *= renormalization_factor
+    # Store in metadata
+    perturbed_material.metadata['density_info'] = {
+        'original_mass_density': mass_density,
+        'original_atomic_density': atomic_density,
+        'perturbed_mass_density': new_mass_density,
+        'perturbed_atomic_density': new_atomic_density,
+    }
     
-    # Determine output format based on parameter or original material format
-    if format is None:
-        # Use the same format as the original material
-        if has_weight_fractions and getattr(perturbed_material, "is_atomic", False):
-            perturbed_material.to_weight_fraction()
-    elif format.lower() == 'weight':
-        # Convert to weight fractions if not already
-        if getattr(perturbed_material, "is_atomic", False):
-            perturbed_material.to_weight_fraction()
-    elif format.lower() == 'atomic':
-        # Already in atomic fractions
-        if getattr(perturbed_material, "is_weight", False):
-            perturbed_material.to_atomic_fraction()
-    else:
-        print(f"WARNING: Unrecognized format '{format}'. Using atomic fractions.")
+    # Set density on the original material if not already set
+    # This ensures the original material has density info for MCNP output
+    if original_material.density is None:
+        original_material.density = mass_density
+        original_material.density_unit = 'g/cc'
     
-    # Create the original material string using __str__
-    original_material_str = original_material.__str__()
+    # Always set the perturbed density on the perturbed material
+    perturbed_material.density = new_mass_density
+    perturbed_material.density_unit = 'g/cc'
     
-    # Generate comment and perturbed material string using __str__
-    comment = f"c Perturbed material with 100% increase in nuclide {nuclide}\n"
-    perturbed_material_str = perturbed_material.__str__()
-    
-    # Generate density information for comments
-    density_str = f"c Density: -{mass_density:.6e} g/cm³ | {atomic_density:.6e} atoms/barn-cm\n"
-    new_density_str = f"c Density: -{new_mass_density:.6e} g/cm³ | {new_atomic_density:.6e} atoms/barn-cm\n"
-    
-    # Generate separators and headers
-    header_orig = f"c Original material being perturbed - rewritten by KIKA\n{density_str}"
-    header_pert = f"c Perturbed material generated by KIKA (normalized)\n{new_density_str}"
-    
-    # Add format information to the header
-    if format is None:
-        format_str = "same as original"
-    else:
-        format_str = format.lower()
-    header_pert += f"c Output format: {format_str} fractions\n"
-    
-    # Determine output file path
-    if in_place:
-        # Read the original file content
-        with open(inputfile, 'r') as f:
-            lines = f.readlines()
-        
-        # Find the position of the original material definition
-        original_position = -1
-        for i, line in enumerate(lines):
-            if line.strip().startswith(f"m{material_number} ") or line.strip() == f"m{material_number}":
-                original_position = i
-                break
+    print(f"Density change: {mass_density:.4e} → {new_mass_density:.4e} g/cm³")
 
-        if original_position == -1:
-            raise ValueError(f"Could not locate material {material_number} in input file")
 
-        # Use _read_material to determine the end of the material block
-        _, next_position = read_material(lines, original_position)
-        
-        # Remove the original material lines from the file
-        del lines[original_position:next_position]
-        
-        # Insert the original material and perturbed material at the original position
-        lines.insert(original_position, MCNPY_HEADER)
-        lines.insert(original_position + 1, "c \n")  # Add blank comment line after header
-        lines.insert(original_position + 2, header_orig)
-        lines.insert(original_position + 3, original_material_str + "\n")
-        lines.insert(original_position + 4, "c \n")
-        lines.insert(original_position + 5, header_pert)
-        lines.insert(original_position + 6, comment)
-        lines.insert(original_position + 7, perturbed_material_str + "\n")
-        lines.insert(original_position + 8, "c \n")
-        lines.insert(original_position + 9, MCNPY_FOOTER)
-        
-        final_path = inputfile
-        
-        # Write the modified content to the file
-        with open(final_path, 'w') as f:
-            f.writelines(lines)
-    else:
-        # Create the perturbed material file in the same directory as the inputfile
-        input_dir = os.path.dirname(inputfile) or "."
-        base_name = os.path.basename(inputfile)
-        filename, ext = os.path.splitext(base_name)
-        new_filename = f"{filename}_perturbed_m{material_number}_n{nuclide}{ext}"
-        final_path = os.path.join(input_dir, new_filename)
-        
-        # Generate content for the new file (only the KIKA part)
-        content_to_write = []
-        
-        # Write header
-        content_to_write.append(MCNPY_HEADER)
-        content_to_write.append("c \n")  # Add blank comment line after header
-        
-        # Write original material info
-        content_to_write.append(header_orig)
-        content_to_write.append(original_material_str + "\n")
-        content_to_write.append("c \n")
-        
-        # Write perturbed material info
-        content_to_write.append(header_pert)
-        content_to_write.append(comment)
-        content_to_write.append(perturbed_material_str + "\n")
-        content_to_write.append("c \n")
-        
-        # Write footer
-        content_to_write.append(MCNPY_FOOTER)
-        
-        # Write the content to the new file
-        with open(final_path, 'w') as f:
-            f.writelines(content_to_write)
-    
-    # Print perturbation information before writing
-    print(f"Perturbation details:")
-    print(f"- Original material: {material_number}")
-    print(f"- Perturbed material ID: {new_material_id}")
-    print(f"- Perturbed nuclide: {nuclide}")
-    print(f"- Original density: -{mass_density:.6e} g/cm³ | {atomic_density:.6e} atoms/barn-cm")
-    print(f"- Perturbed density: -{new_mass_density:.6e} g/cm³ | {new_atomic_density:.6e} atoms/barn-cm")
-    
-    print(f"\nSuccess! Material written to: {final_path}")
-    
-    return
+def generate_PERTcards(inputfile, cell, reactions, material, energies=None, density=None, 
+                       order=2, errors=False, in_place=True):
+    """Generate PERT cards for MCNP sensitivity analysis.
 
-def generate_PERTcards(inputfile, cell, density, reactions, material, energies=None, order=2, errors=False, in_place=True):
-    """Generates PERT cards for MCNP input files.
+    Creates PERT cards based on the provided parameters for first and/or second order
+    perturbation calculations. The density (RHO) value is obtained from the material's
+    density attribute in the input file.
 
-    Generates PERT cards based on the provided parameters. Can generate both first and
-    second order perturbations, as well as cards for exact uncertainty calculations.
-    Note that exact uncertainties are usually negligible, so verify their necessity
-    before running long calculations.
-    
-    Can handle multiple materials by providing lists for cell, density, and material parameters.
-    When lists are provided, all list parameters must have the same length as the materials list.
-    The reactions and energies parameters are applied to all materials uniformly.
-    
-    :param inputfile: Path to the MCNP input file
-    :type inputfile: str
-    :param cell: Cell number(s) for PERT card application. Can be int, str, list[int], or list of these for multiple materials
-    :type cell: int or str or list[int] or list[int or str or list[int]]
-    :param density: Density value(s) for the perturbation. Can be single value or list for multiple materials
-    :type density: float or list[float]
-    :param reactions: Reaction identifier(s) applied to all materials. Can be single list
-    :type reactions: list[str]
-    :param material: Material identifier(s) for perturbation. Can be single value or list
-    :type material: str or int or list[str or int]
-    :param energies: Energy values in eV units. Must be in ascending order. Used in consecutive pairs for energy bins.
-                     If None, ERG is omitted from the PERT cards. Applied to all materials
-    :type energies: list[float] or None
-    :param order: Order(s) of PERT card method (1 or 2). Can be single value or list for multiple materials
-    :type order: int or list[int], optional
-    :param errors: Whether to include error methods (-2, -3, 1), defaults to False
-    :type errors: bool, optional
-    :param in_place: Whether to append PERT cards to original input file, defaults to True
-    :type in_place: bool, optional
-    
-    :returns: None
-    :raises ValueError: If energies are not in ascending order, if list parameters have inconsistent lengths,
-                       or if list-of-lists is provided for reactions/energies
-    
-    :note: Writes PERT cards with MCNPY header and footer to either the original file or a new file
+    Can handle multiple materials by providing lists for cell, density, and material 
+    parameters. When lists are provided, all list parameters must have the same length 
+    as the materials list. The reactions and energies parameters are applied uniformly
+    to all materials.
+
+    Parameters
+    ----------
+    inputfile : str or Path
+        Path to the MCNP input file. The file must contain the material definitions
+        with density information for the specified material(s).
+    cell : int, str, list[int], or list[list[int]]
+        Cell number(s) for PERT card application. Can be:
+        - Single cell: ``3`` or ``'3'``
+        - Multiple cells for one material: ``[3, 5, 7]``
+        - Multiple materials: ``[[3, 5], [7, 9]]`` (one list per material)
+    reactions : list[int]
+        Reaction MT numbers to perturb. Common values:
+        - 1: total cross-section
+        - 2: elastic scattering
+        - 4: inelastic scattering
+        - 18: fission
+        - 51-91: discrete inelastic levels
+        - 102: radiative capture (n,γ)
+    material : int, str, or list
+        Material identifier(s) for perturbation. Must exist in the input file.
+        Can be single value or list for multiple materials.
+    energies : array-like, optional
+        Energy bin boundaries in eV, must be in ascending order. Used in consecutive
+        pairs to define energy bins. If None, ERG keyword is omitted (energy-integrated).
+        Built-in grids available via ``kika.energy_grids`` (e.g., SCALE44, VITAMINJ175).
+    density : float or list[float], optional
+        Override density value(s) for RHO in PERT cards. If None (default), uses the
+        density from the material definition in the input file. Following MCNP convention:
+        - Negative value: mass density in g/cm³
+        - Positive value: atomic density in atoms/barn-cm
+    order : int or list[int], optional
+        Perturbation order (default: 2):
+        - 1: First-order only (METHOD=2)
+        - 2: First and second order (METHOD=2 and METHOD=3)
+    errors : bool, optional
+        If True, include exact error method cards (METHOD=-2, -3, 1). These are
+        typically negligible and computationally expensive. Default is False.
+    in_place : bool, optional
+        If True (default), append PERT cards to the original input file.
+        If False, create a new file with suffix ``_pert_cards``.
+
+    Returns
+    -------
+    None
+        PERT cards are written to the file.
+
+    Raises
+    ------
+    ValueError
+        If energies are not in ascending order, if list parameters have inconsistent
+        lengths, if list-of-lists is provided for reactions/energies, or if material
+        density is not available and not provided.
+
+    Notes
+    -----
+    The RHO parameter in MCNP PERT cards represents the material density, not a
+    perturbation magnitude. MCNP uses this density along with the perturbed material
+    composition to calculate sensitivity coefficients.
+
+    Examples
+    --------
+    >>> # Basic usage with single material
+    >>> kika.generate_PERTcards(
+    ...     inputfile='input.i',
+    ...     cell=[3, 5, 7],
+    ...     reactions=[1, 2, 102],
+    ...     material=100701,
+    ...     energies=kika.energy_grids.SCALE44
+    ... )
+
+    >>> # Multiple materials with different cells
+    >>> kika.generate_PERTcards(
+    ...     inputfile='input.i',
+    ...     cell=[[3, 5], [7, 9]],
+    ...     reactions=[1, 2, 102],
+    ...     material=[100701, 100801],
+    ...     energies=kika.energy_grids.SCALE44
+    ... )
+
+    See Also
+    --------
+    perturb_material : Create perturbed material compositions for sensitivity analysis.
+    compute_sensitivity : Compute sensitivity coefficients from MCNP output.
     """
     
     # Validate that reactions and energies are not list-of-lists
@@ -345,15 +352,19 @@ def generate_PERTcards(inputfile, cell, density, reactions, material, energies=N
         cell_list = [cell] * num_materials
     
     # Validate and prepare density parameter
+    # Density will be resolved from materials if not provided
     if isinstance(density, list):
         if num_materials == 1:
             raise ValueError("List of densities is only allowed when multiple materials are provided.")
         if len(density) != num_materials:
             raise ValueError(f"Density list length ({len(density)}) must match number of materials ({num_materials})")
         density_list = density
-    else:
+    elif density is not None:
         # Single value: replicate for all materials
         density_list = [density] * num_materials
+    else:
+        # None: will be resolved from materials later
+        density_list = [None] * num_materials
     
     # Validate and prepare order parameter
     if isinstance(order, list):
@@ -373,6 +384,61 @@ def generate_PERTcards(inputfile, cell, density, reactions, material, energies=N
         max_pert_num = max(existing_pert_ids) if existing_pert_ids else 0
     else:
         max_pert_num = 0
+
+    # --- Resolve densities from materials if not provided ---
+    resolved_density_list = []
+    for mat_idx, mat_id in enumerate(material_list):
+        user_density = density_list[mat_idx]
+        
+        # Get material from input file
+        if mat_id not in input_data.materials.by_id:
+            raise ValueError(f"Material {mat_id} not found in input file '{inputfile}'")
+        
+        mat_obj = input_data.materials.by_id[mat_id]
+        mat_density = mat_obj.density
+        mat_density_unit = mat_obj.density_unit
+        
+        if user_density is not None:
+            # User provided density - use it, but warn if different from material's density
+            if mat_density is not None:
+                # Compare densities properly (convert to same unit for comparison)
+                # User density: negative = g/cm³, positive = atoms/barn-cm
+                # Material density is stored as positive with unit info
+                
+                # Convert material density to MCNP convention for comparison
+                if mat_density_unit == 'g/cc':
+                    mat_density_mcnp = -abs(mat_density)  # Mass density is negative in MCNP
+                else:
+                    mat_density_mcnp = abs(mat_density)   # Atomic density is positive
+                
+                # Check if they're effectively the same (within 0.1% tolerance)
+                if abs(user_density) > 1e-10 and abs(mat_density_mcnp) > 1e-10:
+                    rel_diff = abs((user_density - mat_density_mcnp) / mat_density_mcnp)
+                    if rel_diff > 0.001:  # More than 0.1% difference
+                        print(f"WARNING: Material {mat_id} - User-provided density ({user_density:.6e}) "
+                              f"differs from material's density ({mat_density_mcnp:.6e}). "
+                              f"Using user-provided value.")
+            
+            resolved_density_list.append(user_density)
+        else:
+            # No user density - must get from material
+            if mat_density is None:
+                raise ValueError(
+                    f"Material {mat_id} has no density defined. "
+                    f"Please either:\n"
+                    f"  1. Set the material density: material.set_density(value, 'g/cc')\n"
+                    f"  2. Provide density via the 'density' parameter in generate_PERTcards()"
+                )
+            
+            # Convert to MCNP convention (negative for mass density)
+            if mat_density_unit == 'g/cc':
+                resolved_density_list.append(-abs(mat_density))
+            else:
+                # Assume atomic density if not g/cc
+                resolved_density_list.append(abs(mat_density))
+    
+    # Replace density_list with resolved values
+    density_list = resolved_density_list
 
     # Determine output file path
     if in_place:

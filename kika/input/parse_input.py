@@ -110,7 +110,7 @@ def read_mcnp(file_path):
         elif line.startswith("m"):
             material_obj, i = read_material(lines, i)
             if material_obj:
-                inst.materials.mat[material_obj.id] = material_obj
+                inst.materials.by_id[material_obj.id] = material_obj
         else:
             i += 1
             

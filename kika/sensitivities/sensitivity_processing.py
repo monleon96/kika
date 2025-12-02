@@ -220,17 +220,23 @@ def compute_sensitivity(inputfile: str, mctalfile: str, tally: int, zaid: int, l
 def plot_sens_comparison(sens_list: List[SensitivityData], 
                   energy: Union[str, List[str]] = None, 
                   reactions: Union[List[int], int] = None, 
-                  xlim: tuple = None):
+                  energy_range: tuple = None, xlog: bool = False, ylog: bool = False):
     """Plot comparison of multiple sensitivity datasets.
 
-    :param sens_list: List of sensitivity datasets to compare
-    :type sens_list: List[SensitivityData]
-    :param energy: Energy string(s) to plot. If None, uses first dataset's energies
-    :type energy: Union[str, List[str]], optional
-    :param reactions: Reaction number(s) to plot. If None, uses reactions from first dataset
-    :type reactions: Union[List[int], int], optional
-    :param xlim: Optional x-axis limits as (min, max)
-    :type xlim: tuple, optional
+    Parameters
+    ----------
+    sens_list : List[SensitivityData]
+        List of sensitivity datasets to compare.
+    energy : Union[str, List[str]], optional
+        Energy string(s) to plot. If None, uses first dataset's energies.
+    reactions : Union[List[int], int], optional
+        Reaction number(s) to plot. If None, uses reactions from first dataset.
+    energy_range : tuple, optional
+        Optional x-axis limits as (min, max).
+    xlog : bool, optional
+        Whether to use logarithmic scale for x-axis. Default is False.
+    ylog : bool, optional
+        Whether to use logarithmic scale for y-axis. Default is False.
     """
     # If no energy specified, use all energies
     if energy is None:
@@ -307,13 +313,21 @@ def plot_sens_comparison(sens_list: List[SensitivityData],
                 ax.set_title(f"MT = {rxn}")
                 ax.set_xlabel("Energy (MeV)")
                 ax.set_ylabel("Sensitivity per lethargy")
-                if xlim is not None:
-                    ax.set_xlim(xlim)
+                if energy_range is not None:
+                    ax.set_xlim(energy_range)
                 ax.legend()
 
         # Hide any extra subplots
         for j in range(n, len(axes)):
             axes[j].axis('off')
+        
+        # Apply logarithmic scales if requested
+        if xlog:
+            for ax in axes:
+                ax.set_xscale('log')
+        if ylog:
+            for ax in axes:
+                ax.set_yscale('log')
         
         plt.tight_layout()
         plt.show()
